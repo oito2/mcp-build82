@@ -1,0 +1,32 @@
+# Build artifacts
+/build82
+/release
+/dist/
+/bin/
+*.exe
+*.test
+*.prof
+*.trace
+coverage.out
+coverage.html
+
+# IDEs
+.vscode/
+.idea/
+.zed/
+.DS_Store
+
+# Go
+/vendor/
+
+# Release descriptor, generated into dist/ by scripts/release
+/server.json
+
+# Local tooling: personal agent settings, AI agent rules and AI exclusion lists
+/.claude/settings.local.json
+/.luminavault.json
+/AGENTS.md
+/CLAUDE.md
+/.instructions/
+/.aiexclude
+/.claudeignore

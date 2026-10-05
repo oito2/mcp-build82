@@ -1,0 +1,14 @@
+{
+  "before_http_headers": "\\core\\hook\\output\\before_http_headers",
+  "before_footer": "\\core\\hook\\output\\before_footer",
+  "before_standard_html_head": "\\core\\hook\\output\\before_standard_html_head",
+  "after_config": "\\core\\hook\\output\\after_config",
+  "after_require_login": "\\core\\hook\\output\\after_require_login",
+  "extend_navigation": "\\core\\hook\\navigation\\primary_extend",
+  "pre_signup_requests": "\\core\\hook\\auth\\signup_page_info",
+  "extend_signup_form": "\\core\\hook\\auth\\signup_page_info",
+  "validate_extend_signup_form": "\\core\\hook\\auth\\signup_page_info",
+  "course_module_viewed": "\\core\\hook\\coursemodule\\after_cm_page_view",
+  "extend_course_navigation": "\\core\\hook\\navigation\\primary_extend",
+  "cron": "\\core\\hook\\cron\\after_cron_task"
+}

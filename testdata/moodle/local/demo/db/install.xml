@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/demo/db" VERSION="20240101">
+  <TABLES>
+    <TABLE NAME="local_demo_records" COMMENT="Demo records">
+      <FIELDS>
+        <FIELD NAME="id"     TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="name"   TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="value"  TYPE="text" NOTNULL="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="name_idx" UNIQUE="false" FIELDS="name"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_demo_log" COMMENT="Demo log entries">
+      <FIELDS>
+        <FIELD NAME="id"        TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true"/>
+      </FIELDS>
+    </TABLE>
+  </TABLES>
+</XMLDB>
