@@ -30,3 +30,6 @@ coverage.html
 /.instructions/
 /.aiexclude
 /.claudeignore
+
+# Local scratch notes (not part of the project)
+/.dev/

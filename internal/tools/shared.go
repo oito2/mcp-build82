@@ -204,21 +204,11 @@ func requireConfig() (*config.Config, error) {
 	return config.Load()
 }
 
-// readGlobalFileTruncated reads a global generated file (relative to moodlePath, under
-// .build82/), truncated to maxChars. Returns "" if config is nil or the file doesn't exist —
-// callers treat that as "not available", not an error. Delegates to toolutil.ReadFileTruncated,
-// which reads at most maxChars bytes directly instead of buffering the whole file.
-func readGlobalFileTruncated(moodlePath, filename string, maxChars int) string {
-	return toolutil.ReadFileTruncated(generators.GlobalOutputPath(moodlePath, filename), maxChars)
-}
-
-// readPluginFileTruncated is the per-plugin equivalent of readGlobalFileTruncated.
+// readPluginFileTruncated reads a per-plugin generated file (under the plugin's .build82/),
+// truncated to maxChars. Returns "" if the file doesn't exist — callers treat that as "not
+// available", not an error.
 func readPluginFileTruncated(pluginPath, filename string, maxChars int) string {
 	return toolutil.ReadFileTruncated(generators.PluginOutputPath(pluginPath, filename), maxChars)
-}
-
-func trimAndLower(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func joinPath(parts ...string) string {

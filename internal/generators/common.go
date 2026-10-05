@@ -181,13 +181,6 @@ func capsOf(e *extractors.CapabilitiesExtraction) []extractors.Capability {
 	return e.Capabilities
 }
 
-func upgradeOf(e *extractors.UpgradeExtraction) []extractors.UpgradeStep {
-	if e == nil {
-		return nil
-	}
-	return e.Steps
-}
-
 // pluginInfoCache memoizes extractors.DetectPlugin across the several global generators that
 // each need a plugin's identity within one GenerateAll call. Mutex-guarded because wave 1's
 // generators access it concurrently.
