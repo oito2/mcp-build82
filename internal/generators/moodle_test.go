@@ -316,11 +316,13 @@ func TestGenerateAll_AiIndexRefreshesWhenPluginContextDisappears(t *testing.T) {
 		t.Fatalf("precondition: expected AI index to link %s, got:\n%s", rel, content)
 	}
 
-	past := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(index, past, past); err != nil {
+	if err := os.Remove(ctxFile); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(ctxFile); err != nil {
+	// Filesystem timestamps come from a coarse clock, so a deletion right after GenerateAll can
+	// carry an mtime that is not after the cache mark. Date the directory change clearly later.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(filepath.Dir(ctxFile), future, future); err != nil {
 		t.Fatal(err)
 	}
 	GenerateAll(moodlePath, "4.3")
