@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -43,6 +43,7 @@ $capabilities = [
     ],
 ];`
 
+// writeAccessPhp writes content to a temporary db/access.php and returns its path.
 func writeAccessPhp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -53,6 +54,7 @@ func writeAccessPhp(t *testing.T, content string) string {
 	return path
 }
 
+// TestParseAccessPhp_MatchesRegexBackendFixture verifies the parsed capabilities for a well-formed access file match the regex backend's output.
 func TestParseAccessPhp_MatchesRegexBackendFixture(t *testing.T) {
 	path := writeAccessPhp(t, capabilitiesFixtureWellFormed)
 	result := ParseAccessPhp(path)
@@ -74,6 +76,7 @@ func TestParseAccessPhp_MatchesRegexBackendFixture(t *testing.T) {
 	}
 }
 
+// TestParseAccessPhp_CapTypeDefaultsToRead verifies a capability without captype defaults to "read".
 func TestParseAccessPhp_CapTypeDefaultsToRead(t *testing.T) {
 	path := writeAccessPhp(t, `<?php
 $capabilities = [
@@ -125,6 +128,7 @@ $capabilities = [
 	}
 }
 
+// TestParseAccessPhp_EmptyArray verifies a file without a $capabilities array yields an empty, non-nil capability list.
 func TestParseAccessPhp_EmptyArray(t *testing.T) {
 	path := writeAccessPhp(t, "<?php\n$capabilities = [];\n")
 	result := ParseAccessPhp(path)
@@ -133,6 +137,7 @@ func TestParseAccessPhp_EmptyArray(t *testing.T) {
 	}
 }
 
+// TestParseAccessPhp_MissingFile verifies a nonexistent file yields nil.
 func TestParseAccessPhp_MissingFile(t *testing.T) {
 	if ParseAccessPhp("/nonexistent/db/access.php") != nil {
 		t.Error("expected nil for missing file")

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@ import (
 	"testing"
 )
 
+// TestExtractPluginSettings_SingleLineDeclaration verifies the type and name of a setting declared on one line.
 func TestExtractPluginSettings_SingleLineDeclaration(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "settings.php"), `<?php
@@ -37,8 +38,8 @@ if ($hassiteconfig) {
 	}
 }
 
-// TestExtractPluginSettings_MultiLineDeclaration confirms the common real-world formatting style
-// (constructor arguments each on their own line) is still parsed correctly.
+// TestExtractPluginSettings_MultiLineDeclaration verifies that a constructor call with each
+// argument on its own line is parsed.
 func TestExtractPluginSettings_MultiLineDeclaration(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "settings.php"), `<?php
@@ -61,6 +62,7 @@ if ($hassiteconfig) {
 	}
 }
 
+// TestExtractPluginSettings_MultipleEntries verifies that several settings are returned in source order.
 func TestExtractPluginSettings_MultipleEntries(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "settings.php"), `<?php
@@ -77,8 +79,26 @@ if ($hassiteconfig) {
 	}
 }
 
+// TestExtractPluginSettings_MissingFileReturnsNil verifies that a missing settings.php yields nil.
 func TestExtractPluginSettings_MissingFileReturnsNil(t *testing.T) {
 	if got := ExtractPluginSettings(t.TempDir()); got != nil {
 		t.Errorf("expected nil for a plugin with no settings.php, got %+v", got)
+	}
+}
+
+// TestExtractPluginSettings_IgnoresCommentedOut verifies that admin_setting_* declarations inside
+// line and block comments are not reported.
+func TestExtractPluginSettings_IgnoresCommentedOut(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "settings.php"), `<?php
+// $settings->add(new admin_setting_configtext('local_test/line', 'a', '', ''));
+# $settings->add(new admin_setting_configtext('local_test/hash', 'a', '', ''));
+/* $settings->add(new admin_setting_configtext('local_test/block', 'a', '', '')); */
+$settings->add(new admin_setting_configtext('local_test/real', 'a', '', ''));
+`)
+
+	got := ExtractPluginSettings(dir)
+	if got == nil || len(got.Settings) != 1 || got.Settings[0].Name != "local_test/real" {
+		t.Fatalf("expected only local_test/real, got %+v", got)
 	}
 }

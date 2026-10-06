@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,14 +32,17 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
+// BatchMode selects which plugins plugin_batch processes.
 type BatchMode string
 
+// Supported values of BatchMode.
 const (
 	BatchModeDev  BatchMode = "dev"
 	BatchModeAll  BatchMode = "all"
 	BatchModeList BatchMode = "list"
 )
 
+// BatchInput is the input of the plugin_batch tool.
 type BatchInput struct {
 	Mode      BatchMode `json:"mode,omitempty" jsonschema:"'dev' (default) — only .indevelopment plugins. 'all' — every plugin. 'list' — plugins in the plugins parameter."`
 	Plugins   []string  `json:"plugins,omitempty" jsonschema:"Required when mode is 'list'. Component (local_myplugin), relative path (local/myplugin), or absolute path per entry."`
@@ -49,14 +52,15 @@ type BatchInput struct {
 	Format    Format    `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// maxBatchParallel is the upper bound on the worker pool size of a parallel batch.
 const maxBatchParallel = 16
 
-// maxListPlugins caps mode="list"'s Plugins array — without a limit, a single request could force
-// thousands of DetectPlugin/GenerateAllForPlugin calls (PHP parsing + file generation each), a
-// resource-exhaustion vector independent of the path-traversal concern IsWithinMoodle guards
-// against above.
+// maxListPlugins caps the length of the Plugins array in mode "list", bounding the number of
+// plugin detection and generation runs a single request can trigger.
 const maxListPlugins = 500
 
+// BatchPluginResult is the outcome of processing one plugin: the counts of generated, cached
+// (skipped) and failed files, and the panic message when processing aborted.
 type BatchPluginResult struct {
 	Path      string
 	Component string
@@ -66,6 +70,7 @@ type BatchPluginResult struct {
 	Error     string
 }
 
+// RegisterBatchTool registers the plugin_batch tool on `server`.
 func RegisterBatchTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "plugin_batch",
@@ -75,6 +80,11 @@ func RegisterBatchTool(server *mcp.Server) {
 	}, withRecover(handleBatch))
 }
 
+// handleBatch regenerates context for the plugins selected by `in.Mode` (default "dev"),
+// sequentially or with `in.Parallel` workers, then persists the cache and refreshes the global AI
+// index. A failing plugin never aborts the batch. It returns an error result when the
+// configuration is missing or invalid or the plugin selection cannot be resolved; the error return
+// is always nil.
 func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -120,9 +130,10 @@ func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (
 	return textResult(false, renderBatchReport(in, modeDescription, results)), struct{}{}, nil
 }
 
-// processBatchParallel runs processPlugin across a bounded worker pool (the adopted improvement),
-// preserving the "never abort the batch on one bad plugin" guarantee — each worker's panic/error is
-// contained within processPlugin's own recover, exactly as in the sequential path.
+// processBatchParallel runs processPlugin for every path in `pluginPaths` on a worker pool whose
+// size is `requested`, clamped to between 1 and maxBatchParallel and to the number of plugins. The
+// returned results are in the same order as `pluginPaths`. A panic in one plugin is contained by
+// processPlugin and does not affect the others.
 func processBatchParallel(pluginPaths []string, moodlePath string, force, markAsDev bool, requested int) []BatchPluginResult {
 	n := requested
 	if n > maxBatchParallel {
@@ -155,6 +166,10 @@ func processBatchParallel(pluginPaths []string, moodlePath string, force, markAs
 	return results
 }
 
+// resolveBatchPlugins resolves the plugin directories selected by `in.Mode` within `moodlePath`,
+// and returns them with a short description of the selection. It returns a non-nil result instead
+// when nothing is selected, the "list" input is empty, too long or contains unresolvable
+// identifiers (an error), or no dev plugin exists (informational).
 func resolveBatchPlugins(in BatchInput, moodlePath string) ([]string, string, *mcp.CallToolResult) {
 	switch in.Mode {
 	case BatchModeAll:
@@ -174,11 +189,9 @@ func resolveBatchPlugins(in BatchInput, moodlePath string) ([]string, string, *m
 		var resolved []string
 		var unresolved []string
 		for _, id := range in.Plugins {
-			// The containment check is required here, not just resolution — this mode is the only
-			// batch entry point that accepts caller-supplied absolute/relative paths (dev/all modes
-			// only ever glob paths under moodlePath themselves), so it's the one place a crafted
-			// identifier (e.g. an absolute path, or one containing "..") could otherwise make
-			// GenerateAllForPlugin read/write outside the Moodle installation entirely.
+			// This is the only mode that accepts caller-supplied paths, so each identifier must be
+			// checked to lie within the Moodle root; otherwise an absolute path or one containing
+			// ".." could make generation read or write outside the installation.
 			path, ok := resolvePluginPathWithinMoodle(id, moodlePath)
 			if !ok {
 				unresolved = append(unresolved, id)
@@ -202,9 +215,13 @@ func resolveBatchPlugins(in BatchInput, moodlePath string) ([]string, string, *m
 	}
 }
 
+// processPlugin regenerates the context files of the plugin at `pluginPath`, invalidating the
+// cache first when `force` is set and marking it .indevelopment when `markAsDev` is set. It
+// returns the counts of generated, cached and failed files; a panic is recovered and recorded as a
+// failure with its message in Error.
 func processPlugin(pluginPath, moodlePath string, force, markAsDev bool) (result BatchPluginResult) {
 	result.Path = pluginPath
-	result.Component = filepath.Base(pluginPath) // fallback label, overwritten by DetectPlugin's component below on success
+	result.Component = filepath.Base(pluginPath) // fallback label until DetectPlugin supplies the component
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -237,6 +254,8 @@ func processPlugin(pluginPath, moodlePath string, force, markAsDev bool) (result
 	return result
 }
 
+// renderBatchReport renders the Markdown report of a batch run described by `in` and
+// `modeDescription`, grouping `results` into regenerated, cached and failed plugins.
 func renderBatchReport(in BatchInput, modeDescription string, results []BatchPluginResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Plugin Batch — %s\n\nTotal: %d, mode: %s, force: %v\n\n", modeDescription, len(results), in.Mode, in.Force)
@@ -281,7 +300,7 @@ func renderBatchReport(in BatchInput, modeDescription string, results []BatchPlu
 
 	if (in.Mode == BatchModeAll || in.Mode == BatchModeList) && len(regenerated)+len(cached) > 0 {
 		if in.MarkAsDev {
-			b.WriteString(fmt.Sprintf("\nMarked %d plugin(s) as .indevelopment.\n", len(regenerated)+len(cached)))
+			fmt.Fprintf(&b, "\nMarked %d plugin(s) as .indevelopment.\n", len(regenerated)+len(cached))
 		} else {
 			b.WriteString("\nTip: pass mark_as_dev: true to also mark these plugins for the watcher.\n")
 		}

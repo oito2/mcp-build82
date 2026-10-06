@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -41,6 +41,8 @@ function local_test_legacy_count($courseid) {
 }
 `
 
+// TestCheckDeprecatedApiUsage_FlagsCallInDevPlugin verifies a dev plugin calling a deprecated
+// core function produces a warning naming it.
 func TestCheckDeprecatedApiUsage_FlagsCallInDevPlugin(t *testing.T) {
 	moodlePath := t.TempDir()
 	mustMkdirAll(t, filepath.Join(moodlePath, "lib"))
@@ -70,6 +72,8 @@ function local_test_do_thing($id) {
 	}
 }
 
+// TestCheckDeprecatedApiUsage_CleanPluginReportsOK verifies a plugin calling no deprecated
+// function yields a single passing result.
 func TestCheckDeprecatedApiUsage_CleanPluginReportsOK(t *testing.T) {
 	moodlePath := t.TempDir()
 	mustMkdirAll(t, filepath.Join(moodlePath, "lib"))
@@ -93,13 +97,10 @@ function local_clean_do_thing($id) {
 	}
 }
 
-// TestCheckDeprecatedApiUsage_UsesCachedApiIndexInsteadOfLiveLibScan confirms this check reads the
-// cached MOODLE_API_INDEX.md rather than re-running extractors.ExtractMoodleApi (a full parse of
-// every file in lib/) on every doctor call. The test shows the cached index is actually consulted:
-// lib/moodlelib.php has zero @deprecated functions live — a live
-// extraction would find nothing — but a hand-written MOODLE_API_INDEX.md lists one deprecated
-// function that doesn't exist in the live source at all. Only reading the cached file, not
-// re-parsing lib/, can produce the result this test asserts.
+// TestCheckDeprecatedApiUsage_UsesCachedApiIndexInsteadOfLiveLibScan verifies the check reads the
+// generated MOODLE_API_INDEX.md rather than parsing lib/. lib/moodlelib.php declares no deprecated
+// function, but the hand-written index lists one, so only reading the index can produce the
+// expected warning.
 func TestCheckDeprecatedApiUsage_UsesCachedApiIndexInsteadOfLiveLibScan(t *testing.T) {
 	moodlePath := t.TempDir()
 	mustMkdirAll(t, filepath.Join(moodlePath, "lib"))
@@ -133,6 +134,8 @@ function local_test_do_thing($id) {
 	}
 }
 
+// TestCheckDeprecatedApiUsage_NoDevPlugins verifies nil is returned when there are no dev
+// plugins.
 func TestCheckDeprecatedApiUsage_NoDevPlugins(t *testing.T) {
 	moodlePath := t.TempDir()
 	if results := checkDeprecatedApiUsage(moodlePath, nil); results != nil {
@@ -177,6 +180,8 @@ func callDoctorOverMCP(t *testing.T, args map[string]any) (string, bool) {
 	return tc.Text, res.IsError
 }
 
+// TestDoctor_FormatJSONReturnsStructuredReport verifies the JSON format returns a DoctorOutput
+// with every section present.
 func TestDoctor_FormatJSONReturnsStructuredReport(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
@@ -231,7 +236,7 @@ func TestDoctor_FormatJSONReturnsStructuredReport(t *testing.T) {
 	if len(report.DevelopmentPlugins) == 1 && len(report.DevelopmentPlugins[0].Checks) != len(generators.PluginContextFiles) {
 		t.Errorf("expected one freshness check per plugin context file, got %+v", report.DevelopmentPlugins[0].Checks)
 	}
-	// The fixture is not a real Moodle root and has no generated indexes, so the verdict must fail.
+	// The fixture is not a real Moodle root and has no generated indexes, so the verdict fails.
 	if report.Verdict != statusFail {
 		t.Errorf("expected verdict %q, got %q", statusFail, report.Verdict)
 	}
@@ -240,6 +245,8 @@ func TestDoctor_FormatJSONReturnsStructuredReport(t *testing.T) {
 	}
 }
 
+// TestDoctor_FormatJSONNotInitializedReportsHint verifies the JSON format of an uninitialized
+// installation has a failing verdict and an init hint.
 func TestDoctor_FormatJSONNotInitializedReportsHint(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
@@ -261,6 +268,7 @@ func TestDoctor_FormatJSONNotInitializedReportsHint(t *testing.T) {
 	}
 }
 
+// TestDoctor_DefaultFormatStaysMarkdown verifies that without a format the report is Markdown.
 func TestDoctor_DefaultFormatStaysMarkdown(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())

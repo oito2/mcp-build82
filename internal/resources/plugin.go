@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,10 +34,13 @@ import (
 	"github.com/oito2/mcp-build82/internal/moodletype"
 )
 
+// pluginFileResource describes one per-plugin resource template: the URI suffix after
+// moodle://plugin/{component}, the generated file it serves, and its label and description.
 type pluginFileResource struct {
 	Suffix, Filename, Label, Description string
 }
 
+// pluginFileResources lists every per-plugin file resource template.
 var pluginFileResources = []pluginFileResource{
 	{"", "PLUGIN_AI_CONTEXT.md", "AI Context", "Complete AI context — start here."},
 	{"/context", "PLUGIN_CONTEXT.md", "Context", "Plugin metadata summary."},
@@ -53,13 +56,11 @@ var pluginFileResources = []pluginFileResource{
 	{"/flow", "PLUGIN_RUNTIME_FLOW.md", "Runtime Flow", "Entry points and execution flow."},
 }
 
-// RegisterPluginResources registers the static "plugins with context" aggregate and the 12
-// dynamic per-plugin-file resource templates.
+// RegisterPluginResources registers on `server` the static moodle://plugins/with-context aggregate
+// and one resource template per entry of pluginFileResources.
 //
-// SDK gap: the Go SDK's mcp.ResourceTemplate has no List field/callback, so template resources
-// cannot advertise a per-file-kind enumeration of their concrete URIs. This is an SDK-imposed
-// limitation, not a design choice: moodle://plugins/with-context (below) is the only enumeration
-// surface, covering just the AI-context file kind, not all 12.
+// The SDK's mcp.ResourceTemplate cannot enumerate its concrete URIs, so moodle://plugins/with-context
+// is the only listing, and it covers just the AI-context file kind.
 func RegisterPluginResources(server *mcp.Server) {
 	server.AddResource(&mcp.Resource{
 		URI:         "moodle://plugins/with-context",
@@ -79,6 +80,9 @@ func RegisterPluginResources(server *mcp.Server) {
 	}
 }
 
+// handlePluginsWithContext serves moodle://plugins/with-context: a Markdown table of the plugins
+// under the Moodle root that have a generated PLUGIN_AI_CONTEXT.md, followed by usage notes. It
+// returns a placeholder when no configuration exists, and an error only when config.Load fails.
 func handlePluginsWithContext(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	uri := req.Params.URI
 	cfg, err := config.Load()
@@ -107,28 +111,31 @@ func handlePluginsWithContext(ctx context.Context, req *mcp.ReadResourceRequest)
 	return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: uri, MIMEType: "text/markdown", Text: b.String()}}}, nil
 }
 
+// pluginContextRow is one row of the plugins-with-context listing: component, plugin type, and
+// the plugin directory relative to the Moodle root (slash-separated).
 type pluginContextRow struct{ component, typ, path string }
 
+// pluginsWithContextCacheEntry is a cached listing together with the time it stops being valid.
 type pluginsWithContextCacheEntry struct {
 	rows      []pluginContextRow
 	expiresAt time.Time
 }
 
-// pluginsWithContextTTL bounds how stale moodle://plugins/with-context's listing can be between a
-// plugin's context actually being (re)generated and this resource reflecting it — chosen as a
-// pragmatic ceiling on repeated-read cost for large installations, not because the underlying data
-// changes on any particular schedule.
+// pluginsWithContextTTL is how long a computed plugins-with-context listing is reused, bounding
+// the cost of repeated reads at the price of a listing that may lag newly generated context by up
+// to this duration.
 const pluginsWithContextTTL = 5 * time.Second
 
+// pluginsWithContextCache holds the listing for the current Moodle root, guarded by pluginsWithContextCacheMu.
 var (
 	pluginsWithContextCacheMu sync.Mutex
 	pluginsWithContextCache   = map[string]pluginsWithContextCacheEntry{}
 )
 
-// pluginsWithContextRows computes (or returns the cached) sorted list of plugins that have
-// PLUGIN_AI_CONTEXT.md generated, memoizing the full filepath.WalkDir + per-match
-// extractors.DetectPlugin (which reparses version.php) for pluginsWithContextTTL, instead of
-// redoing both on every read of the moodle://plugins/with-context resource.
+// pluginsWithContextRows returns, sorted by component, the plugins under `moodlePath` that have a
+// generated PLUGIN_AI_CONTEXT.md. Plugins whose metadata cannot be detected are skipped. The
+// result, which involves a full directory walk and a version.php parse per match, is cached for
+// pluginsWithContextTTL, keeping only the entry for the most recent `moodlePath`.
 func pluginsWithContextRows(moodlePath string) []pluginContextRow {
 	pluginsWithContextCacheMu.Lock()
 	if entry, ok := pluginsWithContextCache[moodlePath]; ok && time.Now().Before(entry.expiresAt) {
@@ -151,13 +158,15 @@ func pluginsWithContextRows(moodlePath string) []pluginContextRow {
 	sort.Slice(rows, func(i, j int) bool { return rows[i].component < rows[j].component })
 
 	pluginsWithContextCacheMu.Lock()
+	clear(pluginsWithContextCache)
 	pluginsWithContextCache[moodlePath] = pluginsWithContextCacheEntry{rows: rows, expiresAt: time.Now().Add(pluginsWithContextTTL)}
 	pluginsWithContextCacheMu.Unlock()
 
 	return rows
 }
 
-// globContextFiles globs **/.build82/{filename} under moodlePath, ignoring vendor/node_modules.
+// globContextFiles returns the paths of every `.build82/<filename>` file found under `moodlePath`,
+// skipping vendor and node_modules directories below the root and ignoring unreadable entries.
 func globContextFiles(moodlePath, filename string) []string {
 	var matches []string
 	_ = filepath.WalkDir(moodlePath, func(path string, d os.DirEntry, err error) error {
@@ -179,6 +188,9 @@ func globContextFiles(moodlePath, filename string) []string {
 	return matches
 }
 
+// makePluginFileHandler returns a resource-template handler for `def`: it extracts the component
+// from the requested URI by stripping the moodle://plugin/ prefix and def.Suffix, then serves the
+// matching generated file via readPluginFile, echoing the requested URI in the result.
 func makePluginFileHandler(def pluginFileResource) mcp.ResourceHandler {
 	return func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		uri := req.Params.URI
@@ -192,9 +204,10 @@ func makePluginFileHandler(def pluginFileResource) mcp.ResourceHandler {
 	}
 }
 
-// readPluginFile's error return is non-nil only for a genuine failure resolving config (see
-// config.Load); every other "can't produce real content" case (no config yet, plugin not
-// found, file not generated yet) still comes back as (placeholder text, nil).
+// readPluginFile returns the generated file `filename` of the plugin identified by `component`
+// (a component name or a path). When no configuration exists, the plugin cannot be resolved inside
+// the Moodle root, or the file has not been generated, it returns placeholder text and a nil error.
+// An error is returned only when config.Load fails.
 func readPluginFile(component, filename string) (string, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -203,10 +216,8 @@ func readPluginFile(component, filename string) (string, error) {
 	if cfg == nil {
 		return notInitializedText, nil
 	}
-	// IsWithinMoodle is required here, not just ResolvePluginPath — component comes straight from
-	// the client-controlled resource URI (moodle://plugin/{component}...), and nothing else in this
-	// handler checks containment. A component that resolves outside the Moodle root is rejected so
-	// its files are never read into the resource response.
+	// The component comes from the client-controlled resource URI, so a resolved path outside the
+	// Moodle root is treated as not found and its files are never read.
 	pluginPath, ok := moodletype.ResolvePluginPath(component, cfg.MoodlePath)
 	if ok && !moodletype.IsWithinMoodle(pluginPath, cfg.MoodlePath) {
 		ok = false

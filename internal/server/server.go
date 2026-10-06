@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,13 +27,13 @@ import (
 	"github.com/oito2/mcp-build82/internal/version"
 )
 
-// iconPNG is the 64x64 server icon reported in serverInfo.
+// iconPNG holds the embedded 64x64 PNG server icon reported in serverInfo.
 //
 //go:embed icon.png
 var iconPNG []byte
 
-// serverIcons returns the server icon as a base64 PNG data URI, so clients can display it
-// without fetching anything over the network (the stdio transport has no URL to serve it from).
+// serverIcons returns the server icon as a single base64 PNG data URI entry, so clients can
+// display it without a network fetch (the stdio transport has no URL to serve it from).
 func serverIcons() []mcp.Icon {
 	return []mcp.Icon{{
 		Source:   "data:image/png;base64," + base64.StdEncoding.EncodeToString(iconPNG),
@@ -42,8 +42,9 @@ func serverIcons() []mcp.Icon {
 	}}
 }
 
-// NewServer builds and returns a fully-wired build82 MCP server: all 13 tools, 13 global
-// resources + plugin resources, and 3 prompts.
+// NewServer builds a new build82 MCP server with every tool, global and plugin resource, and
+// prompt registered. Each call returns an independent server instance, so HTTP sessions can each
+// use their own.
 func NewServer() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "build82",

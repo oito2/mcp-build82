@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,6 +26,8 @@ import (
 	"time"
 )
 
+// touch writes a small file at `path` and sets its modification time to `mtime`, failing the test on
+// error.
 func touch(t *testing.T, path string, mtime time.Time) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
@@ -36,6 +38,7 @@ func touch(t *testing.T, path string, mtime time.Time) {
 	}
 }
 
+// TestIsStale_MissingOutput verifies that a missing output file is stale and counted as a miss.
 func TestIsStale_MissingOutput(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -49,6 +52,8 @@ func TestIsStale_MissingOutput(t *testing.T) {
 	}
 }
 
+// TestIsStale_SkipsWhenSourcesOlder verifies that an output newer than all sources is fresh and
+// counted as a skip.
 func TestIsStale_SkipsWhenSourcesOlder(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -67,6 +72,7 @@ func TestIsStale_SkipsWhenSourcesOlder(t *testing.T) {
 	}
 }
 
+// TestIsStale_MissWhenSourceNewer verifies that a source newer than the output makes it stale.
 func TestIsStale_MissWhenSourceNewer(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -85,6 +91,7 @@ func TestIsStale_MissWhenSourceNewer(t *testing.T) {
 	}
 }
 
+// TestIsStale_HitAfterMark verifies that a marked output with no later source change is a hit.
 func TestIsStale_HitAfterMark(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -105,6 +112,8 @@ func TestIsStale_HitAfterMark(t *testing.T) {
 	}
 }
 
+// TestIsStale_MarkInvalidatedBySourceChangeAfterMark verifies that a source modified after the mark
+// drops the mark and falls back to the output mtime comparison.
 func TestIsStale_MarkInvalidatedBySourceChangeAfterMark(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -117,9 +126,8 @@ func TestIsStale_MarkInvalidatedBySourceChangeAfterMark(t *testing.T) {
 
 	c.Mark(output)
 
-	// Source changes *after* the mark — must invalidate the mark and fall through
-	// to comparing against the output's own mtime (branch 3), not just report stale
-	// directly off the mark check.
+	// A source changed after the mark drops the mark, and the output mtime comparison then
+	// decides.
 	touch(t, src, now.Add(1*time.Hour))
 
 	if !c.IsStale(output, []string{src}) {
@@ -127,6 +135,8 @@ func TestIsStale_MarkInvalidatedBySourceChangeAfterMark(t *testing.T) {
 	}
 }
 
+// TestMarkInvalidateAndStats verifies Invalidate, InvalidateAll and Mark interplay, and the resulting
+// hit and miss counters.
 func TestMarkInvalidateAndStats(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -159,9 +169,9 @@ func TestMarkInvalidateAndStats(t *testing.T) {
 	}
 }
 
-// TestInvalidate_ForcesStaleDespiteOlderSources uses an output strictly newer than its source
-// and no recorded mark, the exact state a plain mtime comparison reports as fresh: an explicit
-// invalidation must still win until the output is regenerated.
+// TestInvalidate_ForcesStaleDespiteOlderSources verifies that an explicit invalidation keeps an
+// output stale, although it is newer than its source and has no mark (which a plain mtime
+// comparison reports as fresh), until the output is marked again.
 func TestInvalidate_ForcesStaleDespiteOlderSources(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -188,9 +198,9 @@ func TestInvalidate_ForcesStaleDespiteOlderSources(t *testing.T) {
 	}
 }
 
-// TestInvalidate_SurvivesEnsureLoaded invalidates an output before the cache is bound to its
-// root, then loads a persisted cache file that records the output as fresh. The load must not
-// cancel the invalidation.
+// TestInvalidate_SurvivesEnsureLoaded verifies that an invalidation made before the cache is bound
+// to a root is not cancelled by loading a persisted file that marks the output as fresh, and that
+// an invalidation also survives switching roots and reloading.
 func TestInvalidate_SurvivesEnsureLoaded(t *testing.T) {
 	dir := t.TempDir()
 	output := filepath.Join(dir, ContextDirName, "out.md")
@@ -213,7 +223,7 @@ func TestInvalidate_SurvivesEnsureLoaded(t *testing.T) {
 		t.Error("expected an invalidation issued before EnsureLoaded to survive loading persisted marks")
 	}
 
-	// And the opposite order: invalidating after loading must not be undone by a reload either.
+	// Invalidating after loading must not be undone by a reload either.
 	other := NewMtimeCache()
 	other.EnsureLoaded(dir)
 	other.Invalidate(output)
@@ -224,6 +234,7 @@ func TestInvalidate_SurvivesEnsureLoaded(t *testing.T) {
 	}
 }
 
+// TestEnsureLoaded_IdempotentOnSameRoot verifies that EnsureLoaded on the bound root keeps unsaved marks.
 func TestEnsureLoaded_IdempotentOnSameRoot(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -231,21 +242,22 @@ func TestEnsureLoaded_IdempotentOnSameRoot(t *testing.T) {
 	touch(t, output, time.Now())
 
 	c.EnsureLoaded(dir)
-	c.Mark(output)      // in-memory only, not yet saved
-	c.EnsureLoaded(dir) // same root again — must be a no-op, must not discard the unsaved mark
+	c.Mark(output)      // not saved yet
+	c.EnsureLoaded(dir) // same root: must keep the unsaved mark
 
 	if c.IsStale(output, nil) {
 		t.Error("EnsureLoaded on the same root discarded an unsaved in-memory mark")
 	}
 }
 
+// TestEnsureLoaded_DifferentRootResetsStats verifies that binding a different root resets the statistics.
 func TestEnsureLoaded_DifferentRootResetsStats(t *testing.T) {
 	c := NewMtimeCache()
 	dirA := t.TempDir()
 	dirB := t.TempDir()
 
 	c.EnsureLoaded(dirA)
-	c.IsStale(filepath.Join(dirA, "missing.md"), nil) // generates a Miss
+	c.IsStale(filepath.Join(dirA, "missing.md"), nil) // records a miss
 
 	if c.Stats().Misses == 0 {
 		t.Fatal("expected at least one miss before switching roots")
@@ -257,9 +269,10 @@ func TestEnsureLoaded_DifferentRootResetsStats(t *testing.T) {
 	}
 }
 
+// TestEnsureLoaded_MissingFileDegradesToEmpty verifies that a missing cache file yields an empty cache.
 func TestEnsureLoaded_MissingFileDegradesToEmpty(t *testing.T) {
 	c := NewMtimeCache()
-	dir := t.TempDir() // no .build82/.cache.json exists here at all
+	dir := t.TempDir() // contains no .build82/.cache.json
 
 	c.EnsureLoaded(dir)
 	output := filepath.Join(dir, "out.md")
@@ -270,6 +283,8 @@ func TestEnsureLoaded_MissingFileDegradesToEmpty(t *testing.T) {
 	}
 }
 
+// TestEnsureLoaded_CorruptFileDegradesToEmpty verifies that an invalid JSON cache file yields an
+// empty cache without failing.
 func TestEnsureLoaded_CorruptFileDegradesToEmpty(t *testing.T) {
 	dir := t.TempDir()
 	cacheDir := filepath.Join(dir, ContextDirName)
@@ -281,7 +296,7 @@ func TestEnsureLoaded_CorruptFileDegradesToEmpty(t *testing.T) {
 	}
 
 	c := NewMtimeCache()
-	c.EnsureLoaded(dir) // must not panic or error
+	c.EnsureLoaded(dir) // must not panic
 
 	output := filepath.Join(dir, "out.md")
 	touch(t, output, time.Now())
@@ -290,6 +305,8 @@ func TestEnsureLoaded_CorruptFileDegradesToEmpty(t *testing.T) {
 	}
 }
 
+// TestEnsureLoaded_VersionMismatchDegradesToEmpty verifies that a cache file with another format
+// version is ignored.
 func TestEnsureLoaded_VersionMismatchDegradesToEmpty(t *testing.T) {
 	dir := t.TempDir()
 	cacheDir := filepath.Join(dir, ContextDirName)
@@ -314,9 +331,9 @@ func TestEnsureLoaded_VersionMismatchDegradesToEmpty(t *testing.T) {
 	}
 }
 
-// TestEnsureLoaded_SavesPreviousRootBeforeSwitching verifies that EnsureLoaded persists unsaved
-// marks to the previous root's own .cache.json before switching to a different moodlePath, so an
-// unsaved Mark() on root A is not lost when another goroutine calls EnsureLoaded(B).
+// TestEnsureLoaded_SavesPreviousRootBeforeSwitching verifies that EnsureLoaded writes unsaved marks
+// to the previous root's own cache file before switching to another root, so a mark on root A is
+// not lost when EnsureLoaded is called for root B.
 func TestEnsureLoaded_SavesPreviousRootBeforeSwitching(t *testing.T) {
 	c := NewMtimeCache()
 	dirA := t.TempDir()
@@ -325,20 +342,20 @@ func TestEnsureLoaded_SavesPreviousRootBeforeSwitching(t *testing.T) {
 	touch(t, outputA, time.Now())
 
 	c.EnsureLoaded(dirA)
-	c.Mark(outputA) // dirty, unsaved — never called c.Save() for root A
+	c.Mark(outputA) // unsaved: Save is never called for root A
 
 	if _, err := os.Stat(cachePath(dirA)); err == nil {
 		t.Fatal("test setup invariant violated: root A's cache file must not exist before the switch")
 	}
 
-	// Switching roots must flush root A's pending mark to disk first.
+	// Switching roots must write root A's pending mark to disk first.
 	c.EnsureLoaded(dirB)
 
 	if _, err := os.Stat(cachePath(dirA)); err != nil {
 		t.Fatalf("expected root A's mark to be saved to %s before switching roots, got: %v", cachePath(dirA), err)
 	}
 
-	// Simulate a fresh process reloading root A afterwards — the mark must have survived.
+	// A new cache loading root A must see the saved mark.
 	c2 := NewMtimeCache()
 	c2.EnsureLoaded(dirA)
 	if c2.IsStale(outputA, nil) {
@@ -346,22 +363,18 @@ func TestEnsureLoaded_SavesPreviousRootBeforeSwitching(t *testing.T) {
 	}
 }
 
-// TestEnsureLoaded_ReadErrorWarnsOnStderr verifies that a genuine read failure on the cache file
-// (as opposed to it not existing) makes EnsureLoaded print a warning to stderr, while still
-// degrading to an empty, working cache instead of failing.
+// TestEnsureLoaded_ReadErrorWarnsOnStderr verifies that a read failure other than a missing file
+// makes EnsureLoaded print a warning to stderr while still yielding a usable empty cache.
 //
-// A directory is created at the cache file's path (instead of a regular file) to force os.ReadFile
-// to fail with a real error distinct from "not exist" (errors.Is(err, os.ErrNotExist) is false for
-// "is a directory"), without relying on permission bits that behave inconsistently when tests run as
-// root.
+// The failure is produced by creating a directory at the cache file's path, which avoids relying
+// on permission bits that behave differently when tests run as root.
 func TestEnsureLoaded_ReadErrorWarnsOnStderr(t *testing.T) {
 	dir := t.TempDir()
 	cacheDir := filepath.Join(dir, ContextDirName)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The cache file's own path is a directory, not a file — os.ReadFile must fail with EISDIR, not
-	// ENOENT.
+	// Reading a directory fails with an error other than "not exist".
 	if err := os.MkdirAll(filepath.Join(cacheDir, ".cache.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +387,7 @@ func TestEnsureLoaded_ReadErrorWarnsOnStderr(t *testing.T) {
 	os.Stderr = w
 
 	c := NewMtimeCache()
-	c.EnsureLoaded(dir) // must not panic despite the real read error
+	c.EnsureLoaded(dir) // must not panic on the read error
 
 	os.Stderr = origStderr
 	if err := w.Close(); err != nil {
@@ -390,7 +403,7 @@ func TestEnsureLoaded_ReadErrorWarnsOnStderr(t *testing.T) {
 		t.Errorf("expected a stderr warning about the unreadable cache file, got: %q", captured)
 	}
 
-	// Confirm the degrade-gracefully contract still holds: no fatal error, cache usable as empty.
+	// The cache must remain usable and empty.
 	output := filepath.Join(dir, "out.md")
 	touch(t, output, time.Now())
 	if c.IsStale(output, nil) {
@@ -398,6 +411,7 @@ func TestEnsureLoaded_ReadErrorWarnsOnStderr(t *testing.T) {
 	}
 }
 
+// TestSave_NoopWhenNotDirty verifies that Save writes no file when nothing was marked.
 func TestSave_NoopWhenNotDirty(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -411,6 +425,8 @@ func TestSave_NoopWhenNotDirty(t *testing.T) {
 	}
 }
 
+// TestSave_WritesAndRoundTrips verifies that a saved mark is loaded by a new cache for the same root
+// and counts as a hit.
 func TestSave_WritesAndRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	output := filepath.Join(dir, "out.md")
@@ -426,7 +442,7 @@ func TestSave_WritesAndRoundTrips(t *testing.T) {
 		t.Fatalf("expected cache file to exist after Save: %v", err)
 	}
 
-	// Simulate a process restart: a fresh MtimeCache, same root.
+	// A new cache for the same root simulates a restart.
 	src := filepath.Join(dir, "src.php")
 	touch(t, src, time.Now().Add(-1*time.Hour)) // older than the persisted mark
 
@@ -434,5 +450,30 @@ func TestSave_WritesAndRoundTrips(t *testing.T) {
 	c2.EnsureLoaded(dir)
 	if c2.IsStale(output, []string{src}) {
 		t.Error("expected the persisted mark to survive a simulated restart as a hit")
+	}
+}
+
+// TestEnsureLoaded_NullOrMissingEntriesIsEmpty verifies that a cache file with a valid version but
+// a null or absent "entries" value loads as an empty cache that accepts Mark without panicking.
+func TestEnsureLoaded_NullOrMissingEntriesIsEmpty(t *testing.T) {
+	for name, body := range map[string]string{
+		"null":    `{"version": 1, "entries": null}`,
+		"missing": `{"version": 1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := cachePath(root)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := NewMtimeCache()
+			c.EnsureLoaded(root)
+			out := filepath.Join(root, "out.md")
+			touch(t, out, time.Now())
+			c.Mark(out)
+		})
 	}
 }

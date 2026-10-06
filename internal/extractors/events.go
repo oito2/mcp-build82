@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,11 +24,13 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// EventObserver and EventsExtraction are aliases for phptypes' types.
+// EventObserver and EventsExtraction alias the phptypes types of the same name.
 type EventObserver = phptypes.EventObserver
 type EventsExtraction = phptypes.EventsExtraction
 
-// ParseEventsPhp parses a db/events.php file. Returns nil if the file can't be read.
+// ParseEventsPhp parses the $observers array of the db/events.php file at `filePath`. Entries
+// with neither an event name nor a callback are skipped. It returns nil when the file cannot be
+// read, and an empty extraction when the file has no $observers array.
 func ParseEventsPhp(filePath string) *EventsExtraction {
 	if useTreesitter() {
 		return tsbackend.ParseEventsPhp(filePath)
@@ -59,14 +61,14 @@ func ParseEventsPhp(filePath string) *EventsExtraction {
 	return &EventsExtraction{File: filePath, Observers: observers}
 }
 
-// ExtractPluginEvents parses pluginPath/db/events.php.
+// ExtractPluginEvents parses `pluginPath`/db/events.php. It returns nil when that file cannot be
+// read.
 func ExtractPluginEvents(pluginPath string) *EventsExtraction {
 	return ParseEventsPhp(filepath.Join(pluginPath, "db", "events.php"))
 }
 
-// GetEventNames returns the deduped, sorted set of event names observed. Safe to call with a nil
-// e (e.g. GetEventNames(ExtractPluginEvents(path)) when the plugin has no db/events.php, the
-// common case, not the exception) — returns nil rather than panicking.
+// GetEventNames returns the distinct event names observed in `e`, sorted. It returns nil when `e`
+// is nil, which is the case for a plugin without db/events.php.
 func GetEventNames(e *EventsExtraction) []string {
 	if e == nil {
 		return nil

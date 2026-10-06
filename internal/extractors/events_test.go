@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@ import (
 	"testing"
 )
 
+// eventsFixtureWellFormed is an events.php with two observers, the second relying on the default
+// priority and internal values.
 const eventsFixtureWellFormed = `<?php
 $observers = [
     [
@@ -35,6 +37,8 @@ $observers = [
     ],
 ];`
 
+// TestParseEventsPhp verifies the event name, callback, priority and internal flag parsed from a well-formed
+// file, including the defaults.
 func TestParseEventsPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -67,6 +71,7 @@ func TestParseEventsPhp(t *testing.T) {
 	}
 }
 
+// TestParseEventsPhp_EmptyArray verifies that an empty $observers array yields a non-nil extraction without observers.
 func TestParseEventsPhp_EmptyArray(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -78,14 +83,15 @@ func TestParseEventsPhp_EmptyArray(t *testing.T) {
 	}
 }
 
+// TestParseEventsPhp_MissingFile verifies that a missing file yields nil.
 func TestParseEventsPhp_MissingFile(t *testing.T) {
 	if ParseEventsPhp("/nonexistent/db/events.php") != nil {
 		t.Error("expected nil for missing file")
 	}
 }
 
-// TestParseEventsPhp_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for a normal, well-formed events.php.
+// TestParseEventsPhp_TreesitterBackendParity verifies that both backends return identical
+// observers for a well-formed events.php.
 func TestParseEventsPhp_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -108,8 +114,8 @@ func TestParseEventsPhp_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// TestParseEventsPhp_TreesitterBackendParity_RealFiles runs both backends against every real
-// db/events.php in a real Moodle installation and confirms they agree.
+// TestParseEventsPhp_TreesitterBackendParity_RealFiles verifies that both backends agree on every
+// db/events.php of a local Moodle installation. The test is skipped when none is found.
 func TestParseEventsPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	root := "/srv/workspace/www/html/mdle/dev-500"
 	if _, err := os.Stat(root); err != nil {
@@ -144,15 +150,14 @@ func TestParseEventsPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	}
 }
 
-// TestGetEventNames_NilInputDoesNotPanic verifies that GetEventNames handles a nil input without
-// panicking: ParseEventsPhp returns nil when the plugin has no db/events.php, so
-// GetEventNames(ExtractPluginEvents(path)) must be safe to call.
+// TestGetEventNames_NilInputDoesNotPanic verifies that a nil extraction yields nil.
 func TestGetEventNames_NilInputDoesNotPanic(t *testing.T) {
 	if got := GetEventNames(nil); got != nil {
 		t.Errorf("expected nil, got %v", got)
 	}
 }
 
+// TestGetEventNames_DedupedAndSorted verifies that duplicate event names are collapsed and the result is sorted.
 func TestGetEventNames_DedupedAndSorted(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))

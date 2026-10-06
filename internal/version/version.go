@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,7 +15,7 @@
 
 package version
 
-// Current is overridden at build time via:
+// Current is the build82 version string. It is overridden at build time via:
 //
 //	-ldflags "-X github.com/oito2/mcp-build82/internal/version.Current=vX.Y.Z"
 //

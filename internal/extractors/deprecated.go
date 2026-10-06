@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,19 +23,19 @@ import (
 	"github.com/oito2/mcp-build82/internal/phparray"
 )
 
-// DeprecatedCall is one call site found in a plugin's PHP source matching a core function name
-// marked @deprecated in the global API index (see ExtractMoodleApi).
+// DeprecatedCall is one call site in a plugin's PHP source of a core function that is marked
+// @deprecated (see ExtractMoodleApi).
 type DeprecatedCall struct {
 	Function string
 	File     string // relative to pluginPath, forward slashes
 	Line     int    // 1-based
 }
 
-// FindDeprecatedApiUsage walks pluginPath recursively for *.php files and flags bare calls to any
-// name in deprecated. Method calls (`->name(`) and static calls (`::name(`) are skipped, since
-// they can only be a same-named plugin method or class constant rather than the core global
-// function. This scan does not parse comments or string literals separately, so a deprecated name
-// mentioned only in a comment can still be flagged. Always uses the regex scan regardless of
+// FindDeprecatedApiUsage walks `pluginPath` recursively for *.php files and returns every bare
+// call to a function named in the `deprecated` set. Method calls (`->name(`) and static calls
+// (`::name(`) are skipped because they cannot be the core global function. Comments and string
+// literals are not parsed separately, so a call written inside one can still be reported. It
+// returns nil when `deprecated` is empty and always uses a regex scan regardless of
 // BUILD82_EXTRACTOR_BACKEND.
 func FindDeprecatedApiUsage(pluginPath string, deprecated map[string]struct{}) []DeprecatedCall {
 	if len(deprecated) == 0 {
@@ -48,10 +48,8 @@ func FindDeprecatedApiUsage(pluginPath string, deprecated map[string]struct{}) [
 	}
 	sort.Strings(names) // deterministic pattern string; match order is unaffected
 
-	// The alternation pattern is compiled once per distinct deprecated set: names is sorted before
-	// being joined, so the assembled pattern string is a stable cache key for phparray.CachedPattern
-	// (a sync.Map-backed cache), which compiles it once and reuses it afterwards. Safe for concurrent
-	// use.
+	// names is sorted, so the joined pattern string is a stable cache key and
+	// phparray.CachedPattern compiles each distinct set only once.
 	pattern := phparray.CachedPattern(`\b(` + strings.Join(names, "|") + `)\s*\(`)
 
 	var calls []DeprecatedCall
@@ -61,6 +59,9 @@ func FindDeprecatedApiUsage(pluginPath string, deprecated map[string]struct{}) [
 	return calls
 }
 
+// scanFileForDeprecatedCalls returns the calls matched by `pattern` in the file at `path`,
+// recording `relFile` as their file and skipping method and static calls. It returns nil when the
+// file cannot be read.
 func scanFileForDeprecatedCalls(path, relFile string, pattern *regexp.Regexp) []DeprecatedCall {
 	content, err := readFileCapped(path)
 	if err != nil {
@@ -68,10 +69,9 @@ func scanFileForDeprecatedCalls(path, relFile string, pattern *regexp.Regexp) []
 	}
 	s := string(content)
 
-	// Matched over the whole file content, not line-by-line, so a call like
-	// `get_context_instance\n    (CONTEXT_COURSE, 1);`, with the function name and its opening
-	// paren split across lines, is still matched. The line number is derived from the match's byte
-	// offset.
+	// The pattern runs over the whole file rather than line by line so a call whose name and
+	// opening parenthesis are on different lines still matches; the line number comes from the
+	// match's byte offset.
 	var calls []DeprecatedCall
 	for _, loc := range pattern.FindAllStringSubmatchIndex(s, -1) {
 		start := loc[2]

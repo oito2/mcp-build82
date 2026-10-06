@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@ import (
 	"testing"
 )
 
+// TestTargetByID verifies lookup of known and unknown target IDs.
 func TestTargetByID(t *testing.T) {
 	if _, ok, err := targetByID("claude"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -35,6 +36,7 @@ func TestTargetByID(t *testing.T) {
 	}
 }
 
+// TestTargets_Has9Entries verifies that the install table lists exactly the supported targets.
 func TestTargets_Has9Entries(t *testing.T) {
 	ts, err := targets()
 	if err != nil {
@@ -46,7 +48,7 @@ func TestTargets_Has9Entries(t *testing.T) {
 }
 
 // TestTargets_HomeDirUnresolvableReturnsError verifies that targets() returns an error when the
-// home directory can't be resolved (unset $HOME), instead of resolving ConfigPath relative to the
+// home directory can't be resolved (unset $HOME), instead of resolving paths relative to the
 // working directory.
 func TestTargets_HomeDirUnresolvableReturnsError(t *testing.T) {
 	t.Setenv("HOME", "")
@@ -57,6 +59,7 @@ func TestTargets_HomeDirUnresolvableReturnsError(t *testing.T) {
 	}
 }
 
+// TestMergeServerEntry_PreservesExistingKeys verifies that merging a build82 entry keeps other servers and top-level keys.
 func TestMergeServerEntry_PreservesExistingKeys(t *testing.T) {
 	m := map[string]any{
 		"mcpServers": map[string]any{
@@ -74,6 +77,7 @@ func TestMergeServerEntry_PreservesExistingKeys(t *testing.T) {
 	}
 }
 
+// TestWriteConfig_McpServersShape verifies the entry written for the mcpServers shape.
 func TestWriteConfig_McpServersShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
@@ -102,10 +106,11 @@ func TestWriteConfig_McpServersShape(t *testing.T) {
 	}
 }
 
+// TestWriteConfig_NeverOverwritesWholeFile verifies that writing an entry preserves the rest of an existing file.
 func TestWriteConfig_NeverOverwritesWholeFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
-	os.WriteFile(path, []byte(`{"mcpServers":{"existing":{"command":"/bin/existing"}},"unrelatedTopLevelKey":"keep-me"}`), 0o644)
+	mustWriteFile(t, path, []byte(`{"mcpServers":{"existing":{"command":"/bin/existing"}},"unrelatedTopLevelKey":"keep-me"}`), 0o644)
 
 	tg := target{ID: "cursor", InstallPaths: fixedPaths(path), Shape: shapeMcpServers}
 	if err := writeConfig(tg, path, "/usr/local/bin/build82", "/var/www/moodle"); err != nil {
@@ -113,8 +118,10 @@ func TestWriteConfig_NeverOverwritesWholeFile(t *testing.T) {
 	}
 
 	var parsed map[string]any
-	content, _ := os.ReadFile(path)
-	json.Unmarshal(content, &parsed)
+	content := mustReadFile(t, path)
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatal(err)
+	}
 
 	if parsed["unrelatedTopLevelKey"] != "keep-me" {
 		t.Error("expected unrelated top-level keys to survive")
@@ -128,6 +135,7 @@ func TestWriteConfig_NeverOverwritesWholeFile(t *testing.T) {
 	}
 }
 
+// TestWriteConfig_OpenCodeShape verifies the entry written for the OpenCode shape.
 func TestWriteConfig_OpenCodeShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -137,8 +145,10 @@ func TestWriteConfig_OpenCodeShape(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var parsed map[string]any
-	content, _ := os.ReadFile(path)
-	json.Unmarshal(content, &parsed)
+	content := mustReadFile(t, path)
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatal(err)
+	}
 	mcp := parsed["mcp"].(map[string]any)
 	entry := mcp["build82"].(map[string]any)
 	if entry["type"] != "local" {
@@ -146,6 +156,7 @@ func TestWriteConfig_OpenCodeShape(t *testing.T) {
 	}
 }
 
+// TestWriteConfig_ZedShape verifies the entry written for the Zed shape.
 func TestWriteConfig_ZedShape(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -155,8 +166,10 @@ func TestWriteConfig_ZedShape(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var parsed map[string]any
-	content, _ := os.ReadFile(path)
-	json.Unmarshal(content, &parsed)
+	content := mustReadFile(t, path)
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatal(err)
+	}
 	servers := parsed["context_servers"].(map[string]any)
 	entry := servers["build82"].(map[string]any)
 	if entry["command"] != "/usr/local/bin/build82" {
@@ -164,6 +177,7 @@ func TestWriteConfig_ZedShape(t *testing.T) {
 	}
 }
 
+// TestClineDir_LinuxDefaultBranch verifies the Cline extension directory on Linux.
 func TestClineDir_LinuxDefaultBranch(t *testing.T) {
 	// This test environment is Linux — confirm the "default" (non-darwin, non-windows) branch.
 	dir, err := clineDir()
@@ -189,6 +203,7 @@ func TestClineDir_HomeDirUnresolvableReturnsError(t *testing.T) {
 	}
 }
 
+// containsAll reports whether `s` contains every one of `parts`.
 func containsAll(s string, parts ...string) bool {
 	for _, p := range parts {
 		if !contains(s, p) {
@@ -198,6 +213,7 @@ func containsAll(s string, parts ...string) bool {
 	return true
 }
 
+// contains reports whether `s` contains `substr`.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (func() bool {
 		for i := 0; i+len(substr) <= len(s); i++ {

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@ import (
 	"testing"
 )
 
+// TestGlobalAndPluginOutputPath verifies both output-path helpers place files under the ContextDir subdirectory.
 func TestGlobalAndPluginOutputPath(t *testing.T) {
 	if got := GlobalOutputPath("/moodle", "AI_CONTEXT.md"); got != filepath.Join("/moodle", ".build82", "AI_CONTEXT.md") {
 		t.Errorf("got %q", got)
@@ -32,6 +33,7 @@ func TestGlobalAndPluginOutputPath(t *testing.T) {
 	}
 }
 
+// TestSafely_Success verifies a successful result is passed through unchanged.
 func TestSafely_Success(t *testing.T) {
 	r := Safely("out.md", func() (GeneratorResult, error) {
 		return GeneratorResult{File: "out.md", Success: true}, nil
@@ -41,6 +43,7 @@ func TestSafely_Success(t *testing.T) {
 	}
 }
 
+// TestSafely_Error verifies a returned error becomes a failed result carrying the message.
 func TestSafely_Error(t *testing.T) {
 	r := Safely("out.md", func() (GeneratorResult, error) {
 		return GeneratorResult{}, errors.New("boom")
@@ -50,6 +53,7 @@ func TestSafely_Error(t *testing.T) {
 	}
 }
 
+// TestSafely_RecoversPanic verifies a panic inside the function becomes a failed result.
 func TestSafely_RecoversPanic(t *testing.T) {
 	r := Safely("out.md", func() (GeneratorResult, error) {
 		panic("something went very wrong")
@@ -65,6 +69,7 @@ func TestSafely_RecoversPanic(t *testing.T) {
 	}
 }
 
+// TestWrite_CreatesParentDirAndMarksCache verifies Write creates missing parent directories and writes the content.
 func TestWrite_CreatesParentDirAndMarksCache(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, ".build82", "AI_CONTEXT.md")
@@ -82,8 +87,9 @@ func TestWrite_CreatesParentDirAndMarksCache(t *testing.T) {
 	}
 }
 
+// TestWrite_ErrorOnUnwritablePath verifies Write reports an error for an invalid path.
 func TestWrite_ErrorOnUnwritablePath(t *testing.T) {
-	// A path with a NUL byte is never a valid path on any OS — os.WriteFile/os.MkdirAll must fail.
+	// A path containing a NUL byte is invalid on every OS, so the file operations must fail.
 	r := Write(filepath.Join(t.TempDir(), "bad\x00name.md"), "x")
 	if r.Success {
 		t.Error("expected failure for an invalid path")
@@ -93,6 +99,7 @@ func TestWrite_ErrorOnUnwritablePath(t *testing.T) {
 	}
 }
 
+// TestHeader verifies the header contains the title, description and a timestamp line.
 func TestHeader(t *testing.T) {
 	h := Header("Title", "Description")
 	if !regexp.MustCompile(`(?m)^# Title$`).MatchString(h) {
@@ -106,6 +113,7 @@ func TestHeader(t *testing.T) {
 	}
 }
 
+// TestEscapeMdCell verifies pipes are escaped and line breaks are flattened.
 func TestEscapeMdCell(t *testing.T) {
 	cases := []struct {
 		name, in, want string
@@ -127,6 +135,7 @@ func TestEscapeMdCell(t *testing.T) {
 	}
 }
 
+// TestTimestamp_Format verifies the timestamp matches the expected layout.
 func TestTimestamp_Format(t *testing.T) {
 	if !regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$`).MatchString(Timestamp()) {
 		t.Errorf("unexpected timestamp format: %q", Timestamp())

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@ import (
 	"testing"
 )
 
+// mustMkdirAll creates `path` and any missing parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -29,6 +30,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes `content` to `path`, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -36,11 +38,9 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
-// TestReadPluginFile_PathTraversalIsRejected verifies that readPluginFile checks
-// moodletype.IsWithinMoodle on the client-controlled "component" (from the
-// moodle://plugin/{component}... resource URI): an absolute component pointing outside the Moodle
-// root, with a real PLUGIN_AI_CONTEXT.md sitting there, must not have its content read into the
-// resource response.
+// TestReadPluginFile_PathTraversalIsRejected verifies that an absolute component outside the Moodle
+// root, even with a real PLUGIN_AI_CONTEXT.md there, is reported as not found and its content is
+// not returned.
 func TestReadPluginFile_PathTraversalIsRejected(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -61,8 +61,8 @@ func TestReadPluginFile_PathTraversalIsRejected(t *testing.T) {
 	}
 }
 
-// TestReadPluginFile_WithinRootResolvesNormally confirms the IsWithinMoodle check still accepts the
-// legitimate case: a component that resolves within the Moodle root is readable.
+// TestReadPluginFile_WithinRootResolvesNormally verifies that a component resolving inside the
+// Moodle root has its generated file returned.
 func TestReadPluginFile_WithinRootResolvesNormally(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -77,5 +77,17 @@ func TestReadPluginFile_WithinRootResolvesNormally(t *testing.T) {
 	}
 	if text != "real content" {
 		t.Errorf("expected 'real content', got %q", text)
+	}
+}
+
+// TestPluginsWithContextRows_KeepsOnlyCurrentRoot verifies the cache holds one entry only.
+func TestPluginsWithContextRows_KeepsOnlyCurrentRoot(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	pluginsWithContextRows(a)
+	pluginsWithContextRows(b)
+	pluginsWithContextCacheMu.Lock()
+	defer pluginsWithContextCacheMu.Unlock()
+	if _, ok := pluginsWithContextCache[a]; ok || len(pluginsWithContextCache) != 1 {
+		t.Errorf("expected only the latest root cached, got %d entries", len(pluginsWithContextCache))
 	}
 }

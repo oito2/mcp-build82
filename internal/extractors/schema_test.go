@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// schemaFixtureWellFormed is an install.xml with one table that has fields, keys and indexes.
 const schemaFixtureWellFormed = `<?xml version="1.0" encoding="UTF-8" ?>
 <XMLDB PATH="local/test/db" VERSION="20240101">
   <TABLES>
@@ -40,8 +41,10 @@ const schemaFixtureWellFormed = `<?xml version="1.0" encoding="UTF-8" ?>
   </TABLES>
 </XMLDB>`
 
+// schemaFixtureMalformed is content that is not valid XML.
 const schemaFixtureMalformed = "this is not xml <<>>"
 
+// TestParseInstallXml verifies the tables, fields, keys and indexes parsed from a well-formed file.
 func TestParseInstallXml(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -65,6 +68,7 @@ func TestParseInstallXml(t *testing.T) {
 	}
 }
 
+// TestParseInstallXml_Malformed verifies that malformed XML yields a schema without tables.
 func TestParseInstallXml_Malformed(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -79,12 +83,14 @@ func TestParseInstallXml_Malformed(t *testing.T) {
 	}
 }
 
+// TestParseInstallXml_MissingFile verifies that a missing file yields nil.
 func TestParseInstallXml_MissingFile(t *testing.T) {
 	if ParseInstallXml("/nonexistent/db/install.xml") != nil {
 		t.Error("expected nil for a missing file")
 	}
 }
 
+// TestToBool_ExactStringTrueOnly verifies that only the exact string "true" is true.
 func TestToBool_ExactStringTrueOnly(t *testing.T) {
 	cases := map[string]bool{"true": true, "1": false, "TRUE": false, "": false, "false": false}
 	for in, want := range cases {
@@ -94,6 +100,7 @@ func TestToBool_ExactStringTrueOnly(t *testing.T) {
 	}
 }
 
+// TestTableToMarkdown verifies the Markdown rendering of a parsed table.
 func TestTableToMarkdown(t *testing.T) {
 	result := ParseInstallXml(mustWriteTempInstallXml(t))
 	md := TableToMarkdown(result.Tables[0])
@@ -105,6 +112,8 @@ func TestTableToMarkdown(t *testing.T) {
 	}
 }
 
+// mustWriteTempInstallXml writes schemaFixtureWellFormed to db/install.xml in a temporary
+// directory and returns the file path.
 func mustWriteTempInstallXml(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

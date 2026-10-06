@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,12 +27,14 @@ var knownLegacySuffixes = []string{
 	"validate_extend_signup_form", "course_module_viewed", "extend_course_navigation", "cron",
 }
 
+// TestMap_LoadsSuccessfully verifies the embedded map is loaded and non-empty.
 func TestMap_LoadsSuccessfully(t *testing.T) {
 	if len(Map) == 0 {
 		t.Fatal("expected Map to be non-empty — legacy_hooks.json failed to load or is empty")
 	}
 }
 
+// TestMap_ContainsAllKnownLegacySuffixes verifies every well-known legacy suffix is present in Map.
 func TestMap_ContainsAllKnownLegacySuffixes(t *testing.T) {
 	for _, suffix := range knownLegacySuffixes {
 		fqn, ok := Map[suffix]
@@ -46,6 +48,7 @@ func TestMap_ContainsAllKnownLegacySuffixes(t *testing.T) {
 	}
 }
 
+// TestMap_ValuesAreFullyQualifiedHookNames verifies every replacement value is a fully qualified hook class name.
 func TestMap_ValuesAreFullyQualifiedHookNames(t *testing.T) {
 	for suffix, fqn := range Map {
 		if !strings.HasPrefix(fqn, `\core\hook\`) {

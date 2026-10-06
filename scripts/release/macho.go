@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@ import (
 	"os"
 )
 
+// Constants of the universal ("fat") Mach-O file format: header magic and record sizes in bytes,
+// the 64-bit CPU type flag, and the log2 of the slice alignment.
 const (
 	fatMagic       = 0xcafebabe
 	fatHeaderSize  = 8
@@ -30,10 +32,12 @@ const (
 	pageAlignShift = 14 // 16 KiB: the arm64 page size, also a valid (larger) alignment for x86_64
 )
 
-// writeUniversalMachO combines thin Mach-O executables (one per CPU architecture) into a single
-// universal ("fat") binary at out, the same layout `lipo -create` produces: a big-endian
-// fat_header, one fat_arch record per slice, then each slice copied unmodified at a 16 KiB-aligned
-// offset. Slices are kept byte-for-byte, so any code signature embedded in them stays valid.
+// writeUniversalMachO combines the thin Mach-O executables at the `thin` paths (one per CPU
+// architecture) into a single universal ("fat") binary at `out`, with mode 0755. The layout matches
+// `lipo -create`: a big-endian fat_header, one fat_arch record per slice, then each slice copied
+// unmodified at a 16 KiB-aligned offset, so any code signature embedded in a slice stays valid.
+// It returns an error when fewer than two slices are given, when an input is not a thin 64-bit
+// Mach-O file, when two inputs share a CPU type, or when reading or writing fails.
 func writeUniversalMachO(out string, thin ...string) error {
 	if len(thin) < 2 {
 		return fmt.Errorf("universal binary needs at least 2 slices, got %d", len(thin))

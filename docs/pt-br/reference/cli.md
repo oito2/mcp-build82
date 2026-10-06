@@ -26,20 +26,20 @@ Resolução do primeiro argumento:
 | :--- | :--- |
 | Nenhum | Servidor stdio. |
 | `--http`, `install`, `uninstall`, `self-update`, `--help`, `-h`, `--version` | Conforme listado acima. |
-| Qualquer outro valor iniciado por `-` | Tratado como flags de servidor (veja abaixo). Sem `--http` entre os argumentos, o servidor stdio inicia e todas as flags de servidor são ignoradas silenciosamente. |
+| Qualquer outro valor iniciado por `-` | Tratado como flags de servidor (veja abaixo). Uma flag desconhecida, ou uma flag exclusiva do servidor sem `--http` entre os argumentos, é um erro de uso (código de saída 2). |
 | Qualquer outro valor | `Error: unknown command "<valor>"`, seguido do texto de ajuda, no stderr. Código de saída 1. |
 
 ## Flags do servidor
 
-Interpretadas por uma varredura manual dos argumentos, em qualquer ordem (`build82 --port 8080 --http` funciona). Argumentos não reconhecidos são ignorados. `--help`, `-h` e `--version` também são tratados nessa varredura (imprimem e saem com 0).
+Interpretadas por uma varredura manual dos argumentos, em qualquer ordem (`build82 --port 8080 --http` funciona). Um argumento não reconhecido, uma flag sem o seu valor ou uma flag exclusiva do servidor (`--port`, `--host`, `--token`, `--allowed-host`) sem `--http` é um erro de uso: `Error: <mensagem>` e `Run 'build82 --help' for usage.` no stderr, código de saída 2. `--help`, `-h` e `--version` também são tratados nessa varredura (imprimem e saem com 0).
 
 | Flag | Tipo | Padrão | Aplica-se a | Descrição |
 | :--- | :--- | :--- | :--- | :--- |
-| `--http` | bool | desligado | — | Seleciona o transporte HTTP. Sem ela, as demais flags de servidor não têm efeito. |
-| `--port <n>` | inteiro 1–65535 | `3000` | `--http` | Porta TCP. Valor inválido imprime `warning: invalid --port value "<v>", keeping <n>` no stderr e mantém o valor anterior. Valor ausente imprime `warning: --port requires a value, ignoring`. O argumento seguinte é sempre consumido como valor. |
-| `--host <host>` | string | `127.0.0.1` | `--http` | Endereço de bind. Também é adicionado à lista de Hosts permitidos. Valor ausente: aviso, ignorada. |
-| `--token <token>` | string | nenhum (autenticação desativada) | `--http` | Token Bearer exigido em `/mcp` e `/sse`. A última ocorrência prevalece. Valor ausente: aviso, ignorada. |
-| `--allowed-host <host>` | string, repetível | nenhum | `--http` | Valor extra aceito no cabeçalho `Host`. Valor ausente: aviso, ignorada. |
+| `--http` | bool | desligado | — | Seleciona o transporte HTTP. Exigida por todas as demais flags de servidor. |
+| `--port <n>` | inteiro 1–65535 | `3000` | `--http` | Porta TCP. Valor inválido imprime `warning: invalid --port value "<v>", keeping <n>` no stderr e mantém o valor anterior. Valor ausente é um erro de uso. O argumento seguinte é sempre consumido como valor. |
+| `--host <host>` | string | `127.0.0.1` | `--http` | Endereço de bind. Também é adicionado à lista de Hosts permitidos. Valor ausente: erro de uso. |
+| `--token <token>` | string | nenhum (autenticação desativada) | `--http` | Token Bearer exigido em `/mcp` e `/sse`. A última ocorrência prevalece. Valor ausente: erro de uso. |
+| `--allowed-host <host>` | string, repetível | nenhum | `--http` | Valor extra aceito no cabeçalho `Host`. Valor ausente: erro de uso. |
 
 ### Resolução do token
 
@@ -64,12 +64,12 @@ build82 install [alvo]
 
 | Item | Valor |
 | :--- | :--- |
-| Flags | Nenhuma. `argv[2]` é tomado como alvo, seja qual for o valor. |
+| Flags | Nenhuma. No máximo um alvo posicional; qualquer flag ou segundo argumento é um erro de uso (saída 2). |
 | `alvo` | `claude` (Claude Code), `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`. Omitido: todas as ferramentas detectadas. |
 | Prompts | Caminho da raiz do Moodle (oferece o diretório atual quando ele é uma raiz do Moodle; validado como raiz do Moodle) e `Install build82 into all N detected tool(s)? [y/N]` quando nenhum alvo é informado. |
 | Grava | A entrada `build82` na configuração de cada ferramenta, com `BUILD82_MOODLE_PATH` no ambiente e o caminho absoluto resolvido do binário em execução como comando. `claude` executa `claude mcp add --scope user build82 -e BUILD82_MOODLE_PATH=<caminho> -- <binário>`; `codex` executa `codex mcp add build82 --env BUILD82_MOODLE_PATH=<caminho> -- <binário>`. Nos dois casos, um registro existente informado por `<ferramenta> mcp get build82` é removido antes (no `claude`: todo registro `user` e `local`; um registro `project` no `.mcp.json` é mantido inalterado e informado com um aviso, veja [Claude Code](../guides/clients/claude-code.md)). Os demais alvos mesclam a entrada no seu arquivo JSON (veja os [guias de cliente](../guides/clients/claude-code.md)); `cline` escreve em todo arquivo de configurações do Cline que existir (o da CLI sob `CLINE_DATA_DIR`, quando definida), e um arquivo com comentários ou vírgulas finais nunca é reescrito (o comando imprime o trecho para colar manualmente e falha). |
 | Saída | `<ferramenta>... configured.` para um registro novo, `<ferramenta>... updated.` quando um existente foi substituído, `<ferramenta>... failed: <erro>` em caso de erro; cada aviso vem em sua própria linha como `  Warning: <texto>`. |
-| Código de saída | 0 ao terminar, inclusive em "No supported AI tools detected", `Skipped: <ferramenta> not detected.` e `Skipped: <ferramenta> (<motivo>).` para uma ferramenta indisponível no sistema operacional atual; 1 em alvo desconhecido ou erro ao instalar em um alvo explícito. Sem alvo, uma falha por ferramenta é impressa (`<ferramenta>... failed: <erro>`) e o código de saída permanece 0. |
+| Código de saída | 0 ao terminar, inclusive em "No supported AI tools detected", `Skipped: <ferramenta> not detected.` e `Skipped: <ferramenta> (<motivo>).` para uma ferramenta indisponível no sistema operacional atual; 1 em alvo desconhecido, erro ao instalar em um alvo explícito, ou quando o stdin termina antes de uma raiz do Moodle válida ser informada (`no Moodle path provided (stdin closed)`). Sem alvo, uma falha por ferramenta é impressa (`<ferramenta>... failed: <erro>`) e o código de saída permanece 0. |
 
 ## `uninstall`
 
@@ -95,7 +95,7 @@ build82 self-update [--check] [--channel <nome>] [--yes | -y] [--rollback]
 | Flag | Tipo | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
 | `--check` | bool | desligado | Informa se existe release mais nova; não instala nada. Código de saída 0 nos dois casos. |
-| `--channel <nome>` | string | `stable` | Somente `stable` é aceito; qualquer outro valor falha com `unsupported channel "<nome>": only "stable" is currently supported` (saída 1). Valor ausente é ignorado silenciosamente. |
+| `--channel <nome>` | string | `stable` | Somente `stable` é aceito; qualquer outro valor falha com `unsupported channel "<nome>": only "stable" is currently supported` (saída 1). Valor ausente é um erro de uso (saída 2). |
 | `--yes`, `-y` | bool | desligado | Pula o prompt `Replace the running binary with <tag>? [y/N]`. Somente `y` (qualquer caixa) confirma. |
 | `--rollback` | bool | desligado | Renomeia `<binário>.bak` sobre o binário e executa `--version` nele como diagnóstico. Se aparecer em qualquer posição, todas as outras flags do self-update são ignoradas. Falha com `no backup found at <caminho> — nothing to roll back` se o backup não existir. Em caso de sucesso imprime `Rolled back to previous version at <caminho>.` |
 
@@ -104,11 +104,11 @@ Sequência da atualização:
 | Etapa | Detalhe |
 | :--- | :--- |
 | 1 | Consulta `https://api.github.com/repos/oito2/mcp-build82/releases/latest` (timeout de 30 s). Um 404 imprime `No releases found.` e sai com 0. |
-| 2 | Compara a tag com a versão atual como `X.Y.Z` (o `v` inicial e qualquer sufixo `-`/`+` são ignorados). Um build `dev` é sempre considerado desatualizado; uma tag não interpretável nunca dispara atualização. Se não for mais nova: imprime `Already on the latest version (<tag>).`, saída 0. |
+| 2 | Compara a tag com a versão atual como `X.Y.Z` (precedência semver: uma versão final supera a mesma versão com sufixo de pré-lançamento, como `-rc1`; metadados de build após `+` são ignorados). Um build `dev` é sempre considerado desatualizado; uma tag não interpretável nunca dispara atualização. Se não for mais nova: imprime `Already on the latest version (<tag>).`, saída 0. |
 | 3 | Confirmação (exceto com `--yes`), ou parada após o relatório com `--check`. |
 | 4 | Baixa `checksums.txt` e o asset `build82_<GOOS>_<GOARCH>` (`.exe` no Windows) para o diretório do binário. As URLs devem ser `https` em `github.com` ou `*.githubusercontent.com`; redirecionamentos para não-https são recusados; cada download é limitado a 200 MiB e 5 minutos. |
 | 5 | Verifica o SHA-256 contra `checksums.txt`; divergência aborta antes de qualquer substituição. |
-| 6 | Aplica modo `0755`, executa `<novo binário> --version` (timeout de 10 s), renomeia o binário atual para `<binário>.bak` e move o novo para o lugar. |
+| 6 | Aplica modo `0755`, executa `<novo binário> --version` (timeout de 10 s; a saída deve ser igual à tag da release, caso contrário nada é substituído), renomeia o binário atual para `<binário>.bak` e move o novo para o lugar. |
 | Código de saída | 0 em sucesso, cancelamento, já na última versão; 1 em qualquer erro. |
 
 O caminho do binário é resolvido a partir do executável em execução, seguindo links simbólicos.
@@ -118,6 +118,7 @@ O caminho do binário é resolvido a partir do executável em execução, seguin
 | Código | Situação |
 | :--- | :--- |
 | 0 | Conclusão normal, `--help`, `--version`, prompts cancelados, encerramento gracioso do HTTP (inclusive quando o timeout de 10 s de encerramento é excedido). |
+| 2 | Erro de uso: flag ou argumento desconhecido, flag sem o seu valor, flag exclusiva do servidor sem `--http`, ou argumento extra para `install`, `uninstall` ou `self-update`. Reportado como `Error: <mensagem>` seguido de `Run 'build82 --help' for usage.` no stderr. |
 | 1 | Comando desconhecido; qualquer erro impresso como `Error: <mensagem>` por `install`, `uninstall`, `self-update`; erros de configuração do token; `Fatal error: <mensagem>` do servidor stdio, ou do servidor HTTP ao falhar no bind (`listen on <host>:<porta>: <causa>`). |
 
 ## Transportes

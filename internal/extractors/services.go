@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,13 +25,17 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// WebServiceFunction and ServicesExtraction are aliases for phptypes' types.
+// WebServiceFunction and ServicesExtraction alias the phptypes types of the same name.
 type WebServiceFunction = phptypes.WebServiceFunction
 type ServicesExtraction = phptypes.ServicesExtraction
 
+// functionKeyPattern matches a quoted function name followed by the opening of its array.
 var functionKeyPattern = regexp.MustCompile(`['"]([a-zA-Z0-9_]+)['"]\s*=>\s*(\[|array\s*\()`)
 
-// ParseServicesPhp parses a db/services.php file. Returns nil if the file can't be read.
+// ParseServicesPhp parses the $functions array of the db/services.php file at `filePath`. Entries
+// with neither a classname nor a description are skipped; methodname defaults to "execute", type
+// to "read" and loginrequired to true. It returns nil when the file cannot be read, and an empty
+// extraction when the file has no $functions array.
 func ParseServicesPhp(filePath string) *ServicesExtraction {
 	if useTreesitter() {
 		return tsbackend.ParseServicesPhp(filePath)
@@ -66,13 +70,14 @@ func ParseServicesPhp(filePath string) *ServicesExtraction {
 	return &ServicesExtraction{File: filePath, Functions: functions}
 }
 
-// ExtractPluginServices parses pluginPath/db/services.php.
+// ExtractPluginServices parses `pluginPath`/db/services.php. It returns nil when that file cannot
+// be read.
 func ExtractPluginServices(pluginPath string) *ServicesExtraction {
 	return ParseServicesPhp(filepath.Join(pluginPath, "db", "services.php"))
 }
 
-// GetFunctionNames returns the sorted list of web service function names. Safe to call with a nil
-// e (the plugin has no db/services.php, the common case) — returns nil rather than panicking.
+// GetFunctionNames returns the web service function names of `e`, sorted. It returns nil when `e`
+// is nil, which is the case for a plugin without db/services.php.
 func GetFunctionNames(e *ServicesExtraction) []string {
 	if e == nil {
 		return nil

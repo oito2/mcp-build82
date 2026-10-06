@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,11 +25,13 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// ScheduledTask and TasksExtraction are aliases for phptypes' types.
+// ScheduledTask and TasksExtraction alias the phptypes types of the same name.
 type ScheduledTask = phptypes.ScheduledTask
 type TasksExtraction = phptypes.TasksExtraction
 
-// ParseTasksPhp parses a db/tasks.php file. Returns nil if the file can't be read.
+// ParseTasksPhp parses the $tasks array of the db/tasks.php file at `filePath`. Entries without a
+// classname are skipped, and omitted cron fields default to "*". It returns nil when the file
+// cannot be read, and an empty extraction when the file has no $tasks array.
 func ParseTasksPhp(filePath string) *TasksExtraction {
 	if useTreesitter() {
 		return tsbackend.ParseTasksPhp(filePath)
@@ -63,18 +65,20 @@ func ParseTasksPhp(filePath string) *TasksExtraction {
 	return &TasksExtraction{File: filePath, Tasks: tasks}
 }
 
-// ExtractPluginTasks parses pluginPath/db/tasks.php.
+// ExtractPluginTasks parses `pluginPath`/db/tasks.php. It returns nil when that file cannot be
+// read.
 func ExtractPluginTasks(pluginPath string) *TasksExtraction {
 	return ParseTasksPhp(filepath.Join(pluginPath, "db", "tasks.php"))
 }
 
-// FormatCronSchedule renders a task's cron fields as a standard 5-field cron expression.
+// FormatCronSchedule renders the cron fields of `t` as a space-separated five-field cron
+// expression (minute, hour, day, month, day of week).
 func FormatCronSchedule(t ScheduledTask) string {
 	return strings.Join([]string{t.Minute, t.Hour, t.Day, t.Month, t.DayOfWeek}, " ")
 }
 
-// GetTaskClassnames returns the sorted (not deduped) list of task classnames. Safe to call with a
-// nil e (the plugin has no db/tasks.php, the common case) — returns nil rather than panicking.
+// GetTaskClassnames returns the task class names of `e`, sorted and not deduplicated. It returns
+// nil when `e` is nil, which is the case for a plugin without db/tasks.php.
 func GetTaskClassnames(e *TasksExtraction) []string {
 	if e == nil {
 		return nil

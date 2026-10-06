@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,6 +34,7 @@ func withHome(t *testing.T) string {
 	return dir
 }
 
+// clearEnv empties the BUILD82_MOODLE_* environment variables for the duration of the test.
 func clearEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("BUILD82_MOODLE_PATH", "")
@@ -41,6 +42,7 @@ func clearEnv(t *testing.T) {
 	t.Setenv("BUILD82_MOODLE_FULLVERSION", "")
 }
 
+// TestLoadConfig_FromEnv verifies that Load reads the environment variables and trims their values.
 func TestLoadConfig_FromEnv(t *testing.T) {
 	withHome(t)
 	t.Setenv("BUILD82_MOODLE_PATH", "/tmp/test-moodle")
@@ -58,6 +60,7 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_FromFile verifies that Load reads ~/.build82 when the environment is empty.
 func TestLoadConfig_FromFile(t *testing.T) {
 	home := withHome(t)
 	clearEnv(t)
@@ -79,6 +82,7 @@ func TestLoadConfig_FromFile(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_EnvWinsOverFile verifies that the environment takes precedence over the file.
 func TestLoadConfig_EnvWinsOverFile(t *testing.T) {
 	home := withHome(t)
 	content := "MOODLE_PATH=/from/file\n"
@@ -96,6 +100,7 @@ func TestLoadConfig_EnvWinsOverFile(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_MalformedLinesAndCommentsIgnored verifies that comment lines and lines without "=" are skipped.
 func TestLoadConfig_MalformedLinesAndCommentsIgnored(t *testing.T) {
 	home := withHome(t)
 	clearEnv(t)
@@ -114,6 +119,7 @@ func TestLoadConfig_MalformedLinesAndCommentsIgnored(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_NoConfigAtAll verifies that Load returns (nil, nil) when no config exists.
 func TestLoadConfig_NoConfigAtAll(t *testing.T) {
 	withHome(t)
 	clearEnv(t)
@@ -193,6 +199,7 @@ func TestLoadConfig_ReadErrorWarnsOnStderrButDegradesGracefully(t *testing.T) {
 	}
 }
 
+// TestSave_WritesExpectedFormat verifies the file content written by Save and that Load reads it back.
 func TestSave_WritesExpectedFormat(t *testing.T) {
 	home := withHome(t)
 
@@ -259,6 +266,7 @@ func TestSave_HomeDirUnresolvableReturnsError(t *testing.T) {
 	}
 }
 
+// TestExists verifies Exists for the environment variable, the file, and neither.
 func TestExists(t *testing.T) {
 	home := withHome(t)
 	clearEnv(t)
@@ -303,6 +311,7 @@ func TestExists_HomeDirUnresolvableReturnsError(t *testing.T) {
 	}
 }
 
+// TestFilePath verifies that FilePath returns ~/.build82.
 func TestFilePath(t *testing.T) {
 	home := withHome(t)
 	got, err := FilePath()
@@ -321,5 +330,17 @@ func TestFilePath_HomeDirUnresolvableReturnsError(t *testing.T) {
 
 	if _, err := FilePath(); err == nil {
 		t.Fatal("expected an error when the home directory cannot be resolved")
+	}
+}
+
+// TestExists_BlankEnvVarIsNotSet verifies that a whitespace-only BUILD82_MOODLE_PATH does not
+// count as configured, matching how Load treats it.
+func TestExists_BlankEnvVarIsNotSet(t *testing.T) {
+	withHome(t)
+	clearEnv(t)
+	t.Setenv("BUILD82_MOODLE_PATH", "   ")
+
+	if exists, err := Exists(); err != nil || exists {
+		t.Errorf("Exists() = %v, %v; want false, nil", exists, err)
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,20 +21,21 @@ import (
 )
 
 // CapabilityCall is one has_capability()/require_capability() call site found in a plugin's PHP
-// source, naming a capability whose prefix matches the plugin's own capability namespace — not a
-// core or a different plugin's capability, which a plugin legitimately checks all the time.
+// source that names a capability under the plugin's own capability namespace.
 type CapabilityCall struct {
 	Capability string
 	File       string // relative to pluginPath, forward slashes
 	Line       int    // 1-based
 }
 
+// capabilityCallPattern matches a has_capability()/require_capability() call whose first argument
+// is a string literal, capturing the capability name. `\s*` lets the literal sit on a later line.
 var capabilityCallPattern = regexp.MustCompile(`\b(?:has_capability|require_capability)\s*\(\s*['"]([^'"]+)['"]`)
 
-// CapabilityPrefix returns the capability-name prefix a plugin's own capabilities are declared
-// under in db/access.php. For every plugin type except mod/block, this is the plugin's own
-// frankenstyle component (e.g. "local_test", "tool_test"); mod/block capabilities use a
-// legacy slash form instead ("mod/forum:...", "block/html:...", not "mod_forum:"/"block_html:").
+// CapabilityPrefix returns the prefix under which a plugin declares its own capabilities in
+// db/access.php, given its `pluginType`, `name` and frankenstyle `component`. For mod and block
+// plugins it is the slash form "type/name" (e.g. "mod/forum"); for every other type it is
+// `component` (e.g. "local_test").
 func CapabilityPrefix(pluginType, name, component string) string {
 	switch pluginType {
 	case "mod", "block":
@@ -44,10 +45,10 @@ func CapabilityPrefix(pluginType, name, component string) string {
 	}
 }
 
-// FindOwnCapabilityChecks walks pluginPath recursively for *.php files and returns every
+// FindOwnCapabilityChecks walks `pluginPath` recursively for *.php files and returns every
 // has_capability()/require_capability() call whose string-literal capability name starts with
-// ownPrefix+":" — checks that claim to name one of this plugin's own capabilities. Like
-// FindDeprecatedApiUsage, this always uses a regex scan regardless of BUILD82_EXTRACTOR_BACKEND.
+// `ownPrefix` followed by ":". Like FindDeprecatedApiUsage, it always uses a regex scan regardless
+// of BUILD82_EXTRACTOR_BACKEND.
 func FindOwnCapabilityChecks(pluginPath, ownPrefix string) []CapabilityCall {
 	prefix := ownPrefix + ":"
 
@@ -58,6 +59,9 @@ func FindOwnCapabilityChecks(pluginPath, ownPrefix string) []CapabilityCall {
 	return calls
 }
 
+// scanFileForOwnCapabilityChecks returns the capability calls in the file at `path` whose name
+// starts with `prefix`, recording `relFile` as their file. It returns nil when the file cannot be
+// read.
 func scanFileForOwnCapabilityChecks(path, relFile, prefix string) []CapabilityCall {
 	content, err := readFileCapped(path)
 	if err != nil {
@@ -65,10 +69,8 @@ func scanFileForOwnCapabilityChecks(path, relFile, prefix string) []CapabilityCa
 	}
 	s := string(content)
 
-	// Matched over the whole file content, not line-by-line, so a call like
-	// `has_capability(\n    'local/test:view',\n    $context\n);` is matched even when the capability
-	// string literal is on a different line than `has_capability(`. capabilityCallPattern's `\s*`
-	// spans newlines; the line number is derived from the match's byte offset.
+	// The pattern runs over the whole file rather than line by line so a literal on a different
+	// line than `has_capability(` still matches; the line number comes from the match's byte offset.
 	var calls []CapabilityCall
 	for _, m := range capabilityCallPattern.FindAllStringSubmatchIndex(s, -1) {
 		capability := s[m[2]:m[3]]

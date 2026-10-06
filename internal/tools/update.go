@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,12 +34,14 @@ import (
 
 // --- update_indexes -----------------------------------------------------------
 
+// UpdateIndexesInput is the input of the update_indexes tool.
 type UpdateIndexesInput struct {
 	IncludePlugins bool   `json:"include_plugins,omitempty" jsonschema:"Also regenerate context for all .indevelopment plugins"`
 	Force          bool   `json:"force,omitempty" jsonschema:"Bypass the cache entirely"`
 	Format         Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// RegisterUpdateTool registers the update_indexes and watch_plugins tools on `server`.
 func RegisterUpdateTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "update_indexes",
@@ -55,6 +57,10 @@ func RegisterUpdateTool(server *mcp.Server) {
 	}, withRecover(makeHandleWatch(server)))
 }
 
+// handleUpdateIndexes re-detects the Moodle version (persisting it when it changed) and
+// regenerates the global indexes, and the .indevelopment plugins when `in.IncludePlugins` is set.
+// `in.Force` bypasses the cache. It returns an error result when the configuration is missing or
+// invalid; the error return is always nil.
 func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in UpdateIndexesInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -70,8 +76,7 @@ func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in Updat
 		moodleVersion, moodleFullVersion = installInfo.Version, installInfo.Build
 	}
 	if moodleVersion != cfg.MoodleVersion || moodleFullVersion != cfg.MoodleFullVersion {
-		// A failed config.Save is logged as a warning; ~/.build82 then keeps reporting the old
-		// version.
+		// A failed save is only logged, so the stored configuration keeps the old version.
 		if err := config.Save(config.Config{MoodlePath: cfg.MoodlePath, MoodleVersion: moodleVersion, MoodleFullVersion: moodleFullVersion}); err != nil {
 			fmt.Fprintln(os.Stderr, "[build82] warning: failed to persist updated Moodle version:", err)
 		}
@@ -94,9 +99,9 @@ func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in Updat
 	return textResult(false, renderUpdateIndexesReport(cfg.MoodlePath, moodleVersion, globalResults, in.IncludePlugins, pluginLines)), struct{}{}, nil
 }
 
-// forceGlobalRegeneration invalidates every output GenerateAll produces, so each one is rebuilt
-// regardless of mtimes. The cache is bound to moodlePath first so the invalidation is applied to
-// the same state GenerateAll will use; Invalidate itself also survives a later EnsureLoaded.
+// forceGlobalRegeneration invalidates the cache entries of every output GenerateAll produces for
+// `moodlePath`, so each one is rebuilt regardless of modification times. The cache is bound to
+// `moodlePath` first so the invalidation applies to the state GenerateAll will use.
 func forceGlobalRegeneration(moodlePath string) {
 	cache.Global.EnsureLoaded(moodlePath)
 	for _, f := range generators.GlobalContextFilenames {
@@ -106,6 +111,15 @@ func forceGlobalRegeneration(moodlePath string) {
 	cache.Global.Invalidate(generators.GlobalOutputPath(moodlePath, "tags"))
 }
 
+// pluginPanicLine formats the summary line for a plugin whose processing panicked with `r`,
+// naming the plugin directory relative to `moodlePath`.
+func pluginPanicLine(moodlePath, dir string, r any) string {
+	return fmt.Sprintf("✖ %s: %v", relativeToMoodle(moodlePath, dir), r)
+}
+
+// updatePlugins regenerates the context of every .indevelopment plugin under `moodlePath`
+// (bypassing the cache when `force` is set), persists the cache, and returns one summary line per
+// plugin. A panic while processing a plugin is recovered and reported in that plugin's line.
 func updatePlugins(moodlePath string, force bool) []string {
 	devDirs := generators.FindDevPlugins(moodlePath)
 	lines := make([]string, 0, len(devDirs))
@@ -121,7 +135,7 @@ func updatePlugins(moodlePath string, force bool) []string {
 		lines = append(lines, func() (line string) {
 			defer func() {
 				if r := recover(); r != nil {
-					line = fmt.Sprintf("✖ %s: %v", dir, r)
+					line = pluginPanicLine(moodlePath, dir, r)
 				}
 			}()
 			if force {
@@ -149,6 +163,7 @@ func updatePlugins(moodlePath string, force bool) []string {
 	return lines
 }
 
+// UpdateIndexesOutput is the JSON-format response of update_indexes.
 type UpdateIndexesOutput struct {
 	Regenerated []string     `json:"regenerated,omitempty"`
 	Skipped     []string     `json:"skipped,omitempty"`
@@ -156,11 +171,15 @@ type UpdateIndexesOutput struct {
 	Plugins     []string     `json:"plugins,omitempty"`
 }
 
+// buildUpdateIndexesOutput builds the JSON response from the global generator `results` (file
+// names relative to `moodlePath`) and the per-plugin summary `pluginLines`.
 func buildUpdateIndexesOutput(moodlePath string, results []generators.GeneratorResult, pluginLines []string) UpdateIndexesOutput {
 	regenerated, skipped, failed := classifyResults(results, moodlePath)
 	return UpdateIndexesOutput{Regenerated: regenerated, Skipped: skipped, Failed: failed, Plugins: pluginLines}
 }
 
+// renderUpdateIndexesReport renders the Markdown report: global index counts, the dev plugin
+// summary lines when `includePlugins` is set, and cache statistics.
 func renderUpdateIndexesReport(moodlePath, moodleVersion string, results []generators.GeneratorResult, includePlugins bool, pluginLines []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Update Indexes\n\nMoodle version: %s\n\n", moodleVersion)
@@ -187,31 +206,37 @@ func renderUpdateIndexesReport(moodlePath, moodleVersion string, results []gener
 
 // --- watch_plugins --------------------------------------------------------------
 
+// activeWatcher is the process-wide file watcher started by watch_plugins, guarded by
+// activeWatcherMu.
 var (
 	activeWatcher   *watcher.MoodleWatcher
 	activeWatcherMu sync.Mutex
 )
 
+// startWatcher starts `w` and returns the number of watched files. Tests replace it to act on
+// the watcher before the watch_plugins handler continues.
+var startWatcher = (*watcher.MoodleWatcher).Start
+
+// WatchAction is the operation requested from the watch_plugins tool.
 type WatchAction string
 
+// Supported values of WatchAction.
 const (
 	WatchStart  WatchAction = "start"
 	WatchStop   WatchAction = "stop"
 	WatchStatus WatchAction = "status"
 )
 
+// WatchInput is the input of the watch_plugins tool.
 type WatchInput struct {
 	Action WatchAction `json:"action,omitempty" jsonschema:"'start' (default) to begin watching, 'stop' to stop, 'status' to check."`
 }
 
-// makeHandleWatch binds the handler to server so its OnChange callback can fan a regeneration
-// notification out to every currently connected session, instead of only the one that called
-// action=start — in --http mode, every other client working
-// against the same Moodle installation is also told when a plugin's context changed.
-// server.Sessions() returns a live snapshot (the SDK itself adds/removes sessions on
-// connect/disconnect), so a session that connects after the watcher started, or one that
-// disconnects before a later change, is picked up or dropped automatically — no manual subscriber
-// bookkeeping needed here.
+// makeHandleWatch returns the watch_plugins handler bound to `server`. The handler starts, stops
+// or reports the status of the single process-wide watcher. When the watcher regenerates a
+// plugin's context, a log notification is sent to every session connected at that moment, not only
+// the one that started it. Starting returns an informational result when no watchable files exist;
+// a missing or invalid configuration yields an error result. The error return is always nil.
 func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequest, WatchInput) (*mcp.CallToolResult, struct{}, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, in WatchInput) (*mcp.CallToolResult, struct{}, error) {
 		if in.Action == "" {
@@ -253,7 +278,19 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 				activeWatcher = nil
 			}
 			w := watcher.NewMoodleWatcher(cfg.MoodlePath, cfg.MoodleVersion)
-			count := w.Start()
+			w.OnChange(func(ev watcher.WatchEvent) {
+				// The callback fires asynchronously, possibly long after this tool call returned and
+				// its request context was cancelled, so it uses a fresh background context.
+				logCtx := context.Background()
+				for session := range server.Sessions() {
+					_ = session.Log(logCtx, &mcp.LoggingMessageParams{ // best-effort; ignore error (e.g. transport closed)
+						Level:  "info",
+						Logger: "build82/watcher",
+						Data:   fmt.Sprintf("[watcher] %s — context regenerated (%s)", ev.Component, ev.File),
+					})
+				}
+			})
+			count := startWatcher(w)
 			if count == 0 {
 				// Nothing is being watched, so nothing runs: release whatever Start allocated and
 				// leave no active watcher behind, so status/stop report the real state.
@@ -265,22 +302,6 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 						"then start the watcher again."), struct{}{}, nil
 			}
 			activeWatcher = w
-
-			activeWatcher.OnChange(func(ev watcher.WatchEvent) {
-				// context.Background(), not the "start" call's own ctx: this callback fires later,
-				// asynchronously, whenever a future filesystem event happens — potentially long
-				// after the tool call that registered it has already returned and its request
-				// context been cancelled. Using that stale ctx would make every session.Log call
-				// fail, so no session would receive the notification.
-				logCtx := context.Background()
-				for session := range server.Sessions() {
-					_ = session.Log(logCtx, &mcp.LoggingMessageParams{ // best-effort; ignore error (e.g. transport closed)
-						Level:  "info",
-						Logger: "build82/watcher",
-						Data:   fmt.Sprintf("[watcher] %s — context regenerated (%s)", ev.Component, ev.File),
-					})
-				}
-			})
 
 			return textResult(false, fmt.Sprintf(
 				"✅ Watcher started — monitoring %d files across dev plugins.\n\n"+

@@ -361,6 +361,8 @@ Excluded from the archive:
 ```
 The first line names the component read from `version.php`. `Source` is relative to the Moodle root. `Output` is relative to the Moodle root when the ZIP is written inside it; otherwise it is the bare file name (the ZIP is in `output_dir`, or the working directory). The "Excluded" list contains only names actually found in the plugin.
 
+**Symbolic links:** symbolic links (to files or directories) are never added to the ZIP, so a link pointing outside the plugin cannot pull its target into the archive. Each skipped link is listed after the "Excluded" list under `⚠️ Symbolic links skipped (never added to the archive):`, as a path relative to the plugin (never absolute).
+
 **Example:**
 ```
 Package the local_caedauth plugin for distribution.

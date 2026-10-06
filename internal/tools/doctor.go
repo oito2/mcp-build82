@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,20 +34,24 @@ import (
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
+// checkStatus is the outcome of one doctor check.
 type checkStatus string
 
+// Possible values of checkStatus, from best to worst.
 const (
 	statusOK   checkStatus = "ok"
 	statusWarn checkStatus = "warn"
 	statusFail checkStatus = "fail"
 )
 
+// checkResult is one doctor check: a label, its status, and an optional human-readable detail.
 type checkResult struct {
 	Label  string      `json:"label"`
 	Status checkStatus `json:"status"`
 	Detail string      `json:"detail,omitempty"`
 }
 
+// formatCheck renders `c` as one indented report line: status icon, label and optional detail.
 func formatCheck(c checkResult) string {
 	icon := map[checkStatus]string{statusOK: "✔", statusWarn: "⚠", statusFail: "✖"}[c.Status]
 	detail := ""
@@ -57,10 +61,13 @@ func formatCheck(c checkResult) string {
 	return fmt.Sprintf("  %s %s%s", icon, c.Label, detail)
 }
 
+// staleThresholdDays is the age in days beyond which a generated file is reported as stale.
 const staleThresholdDays = 7
 
+// expectedGlobalFiles lists the global index files the doctor expects to exist.
 var expectedGlobalFiles = generators.GlobalContextFilenames
 
+// DoctorInput is the input of the doctor tool.
 type DoctorInput struct {
 	Format Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
@@ -99,6 +106,7 @@ type DoctorOutput struct {
 	Hint                   string               `json:"hint,omitempty"`
 }
 
+// RegisterDoctorTool registers the doctor tool on `server`.
 func RegisterDoctorTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "doctor",
@@ -109,6 +117,11 @@ func RegisterDoctorTool(server *mcp.Server) {
 	}, withRecover(handleDoctor))
 }
 
+// handleDoctor runs the diagnostic sections (system dependencies, configuration, Moodle
+// installation, index freshness, dev plugins and their consistency checks, cache) and renders them
+// as Markdown or, with `in.Format` set to JSON, as a DoctorOutput. It stops early when the
+// configuration cannot be resolved (error result) or does not exist (reported as a failed check
+// with a hint). The overall verdict is the worst status found. The error return is always nil.
 func handleDoctor(ctx context.Context, req *mcp.CallToolRequest, in DoctorInput) (*mcp.CallToolResult, struct{}, error) {
 	var b strings.Builder
 	out := DoctorOutput{}
@@ -242,8 +255,8 @@ func handleDoctor(ctx context.Context, req *mcp.CallToolRequest, in DoctorInput)
 		b.WriteString("\n")
 	}
 
-	// Deprecated core API usage: cross-references the global @deprecated function set against
-	// every dev plugin's own PHP source.
+	// Deprecated core API usage: the global @deprecated function set against every dev plugin's
+	// PHP source.
 	deprecatedChecks := checkDeprecatedApiUsage(cfg.MoodlePath, devDirs)
 	out.DeprecatedApiUsage = deprecatedChecks
 	b.WriteString("## Deprecated Core API Usage\n\n")
@@ -256,8 +269,8 @@ func handleDoctor(ctx context.Context, req *mcp.CallToolRequest, in DoctorInput)
 		b.WriteString("\n")
 	}
 
-	// Capability usage: cross-references each dev plugin's own db/access.php declarations against
-	// has_capability()/require_capability() calls naming one of its own capabilities.
+	// Capability usage: each dev plugin's db/access.php declarations against its own
+	// has_capability()/require_capability() calls.
 	capabilityUsageChecks := checkCapabilityUsage(devDirs)
 	out.CapabilityUsage = capabilityUsageChecks
 	b.WriteString("## Capability Usage\n\n")
@@ -270,8 +283,7 @@ func handleDoctor(ctx context.Context, req *mcp.CallToolRequest, in DoctorInput)
 		b.WriteString("\n")
 	}
 
-	// Lang string usage: cross-references each dev plugin's own get_string() calls naming one of
-	// its own lang strings against what lang/en/{component}.php actually declares.
+	// Lang string usage: each dev plugin's own get_string() calls against lang/en/{component}.php.
 	langStringUsageChecks := checkLangStringUsage(devDirs)
 	out.LangStringUsage = langStringUsageChecks
 	b.WriteString("## Lang String Usage\n\n")
@@ -322,6 +334,8 @@ func (o *DoctorOutput) normalize() {
 	}
 }
 
+// checkSystemDependencies reports whether the optional external tools php, ctags and git are on
+// PATH, looking them up concurrently. A missing tool is a warning, never a failure.
 func checkSystemDependencies() []checkResult {
 	tools := []string{"php", "ctags", "git"}
 	results := make([]checkResult, len(tools))
@@ -341,6 +355,9 @@ func checkSystemDependencies() []checkResult {
 	return results
 }
 
+// checkFreshness checks that each of `files` exists at the path returned by `pathFor` and reports
+// its age: missing files fail, files older than staleThresholdDays warn, others pass. The results
+// are in the same order as `files`.
 func checkFreshness(pathFor func(string) string, files []string) []checkResult {
 	results := make([]checkResult, len(files))
 	for i, f := range files {
@@ -407,11 +424,11 @@ func checkCrossPluginConsistency(devDirs []string) []checkResult {
 	return results
 }
 
-// checkCapabilityUsage cross-references each dev plugin's own has_capability()/require_capability()
-// calls (naming one of its own capabilities, by prefix) against what it actually declares in
-// db/access.php — catches a typo in the checked capability name, which would otherwise only
-// surface at runtime as an "access denied" (a check for an undeclared capability behaves like "no
-// permission", not like an error).
+// checkCapabilityUsage compares, for each plugin directory in `devDirs`, the has_capability() and
+// require_capability() calls that name one of the plugin's own capabilities (by prefix) with the
+// capabilities declared in db/access.php. A call naming an undeclared capability is reported as a
+// warning, since it likely contains a typo and would silently behave as "no permission". It
+// returns nil when `devDirs` is empty and a single passing result when nothing is wrong.
 func checkCapabilityUsage(devDirs []string) []checkResult {
 	if len(devDirs) == 0 {
 		return nil
@@ -455,10 +472,11 @@ func checkCapabilityUsage(devDirs []string) []checkResult {
 	return results
 }
 
-// checkLangStringUsage cross-references each dev plugin's own get_string() calls (naming one of
-// its own lang strings, by component) against what's actually declared in
-// lang/en/{component}.php — catches a lang string used in code but never defined, which fails at
-// runtime with a "string not found" / [[missingstring]] placeholder.
+// checkLangStringUsage compares, for each plugin directory in `devDirs`, the get_string() calls
+// naming one of the plugin's own strings (by component) with the strings declared in
+// lang/en/{component}.php. A string used but not declared is reported as a warning, since it
+// would render as a missing-string placeholder. It returns nil when `devDirs` is empty and a
+// single passing result when nothing is wrong.
 func checkLangStringUsage(devDirs []string) []checkResult {
 	if len(devDirs) == 0 {
 		return nil
@@ -496,9 +514,9 @@ func checkLangStringUsage(devDirs []string) []checkResult {
 	return results
 }
 
-// checkDeprecatedApiUsage cross-references core functions marked @deprecated in the global API
-// index against calls made by each dev plugin's own PHP source, so plugin authors catch
-// compatibility drift before it surfaces as a runtime deprecation notice in Moodle itself.
+// checkDeprecatedApiUsage reports, as warnings, the calls that the PHP source of each plugin
+// directory in `devDirs` makes to core functions marked @deprecated under `moodlePath`. It returns
+// nil when `devDirs` is empty and a single passing result when no deprecated call is found.
 func checkDeprecatedApiUsage(moodlePath string, devDirs []string) []checkResult {
 	if len(devDirs) == 0 {
 		return nil
@@ -535,20 +553,15 @@ func checkDeprecatedApiUsage(moodlePath string, devDirs []string) []checkResult 
 	return results
 }
 
-// apiIndexFunctionLinePattern matches one apiFunctionLine-rendered line's leading "- `name()`" —
-// the exact format apiFunctionLine produces, which search_api's substring matching also relies on.
+// apiIndexFunctionLinePattern matches the leading "- `name()`" of a function line of the API index
+// and captures the function name.
 var apiIndexFunctionLinePattern = regexp.MustCompile("^- `([a-zA-Z_][a-zA-Z0-9_]*)\\(\\)`")
 
-// deprecatedFunctionNames prefers the already-generated, already-cached MOODLE_API_INDEX.md
-// (produced by init_moodle_context/update_indexes) over a full live re-parse of every file in
-// {moodlePath}/lib — doctor is meant to be a fast diagnostic, and re-running
-// extractors.ExtractMoodleApi on every doctor call would duplicate that same expensive work on
-// every single invocation, dozens of files each time (per this project's own benchmark, a single
-// ~10k-line core file alone costs ~377ms with the tree-sitter backend). Falls back to the live
-// extraction when the index doesn't exist yet, matching every
-// other cache-aware read in this codebase's "never fatal, just slower" degradation contract — a
-// stale index (the Moodle core was upgraded since the last update_indexes run) is caught
-// separately by doctor's own "Global Index Files" freshness check above, not silently masked here.
+// deprecatedFunctionNames returns the set of core function names marked @deprecated for the Moodle
+// installation at `moodlePath`. It reads the generated MOODLE_API_INDEX.md when it exists, which is
+// much cheaper than parsing every file under lib/, and otherwise falls back to
+// extractors.ExtractMoodleApi. A stale index is reported separately by the "Global Index Files"
+// freshness check.
 func deprecatedFunctionNames(moodlePath string) map[string]struct{} {
 	if content, err := os.ReadFile(generators.GlobalOutputPath(moodlePath, "MOODLE_API_INDEX.md")); err == nil {
 		return parseDeprecatedNamesFromIndex(string(content))
@@ -562,6 +575,8 @@ func deprecatedFunctionNames(moodlePath string) map[string]struct{} {
 	return deprecated
 }
 
+// parseDeprecatedNamesFromIndex returns the names of the functions whose line in the API index
+// `content` carries an @deprecated marker.
 func parseDeprecatedNamesFromIndex(content string) map[string]struct{} {
 	deprecated := map[string]struct{}{}
 	for _, line := range strings.Split(content, "\n") {
@@ -594,6 +609,7 @@ func verdictStatus(groups ...[]checkResult) checkStatus {
 	return statusOK
 }
 
+// computeVerdict renders the overall verdict line for `groups` based on verdictStatus.
 func computeVerdict(groups ...[]checkResult) string {
 	switch verdictStatus(groups...) {
 	case statusFail:

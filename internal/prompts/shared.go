@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,30 +32,33 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
-// maxPromptArgLen caps any free-text prompt argument (e.g. debug_plugin's "error"/"context",
-// review_plugin's "files", scaffold_plugin's "description"/"features") before it's interpolated
-// into the final prompt string. Without a cap, a potentially untrusted client could force an
-// arbitrarily large prompt from a single request; 20,000 characters comfortably fits a sizeable
-// stack trace or feature list while bounding the worst case.
+// maxPromptArgLen is the maximum length, in bytes, of a free-text prompt argument (e.g.
+// debug_plugin's "error"/"context", review_plugin's "files", scaffold_plugin's
+// "description"/"features") before it is interpolated into the rendered prompt. The cap bounds the
+// prompt size an untrusted client can force with one request while still fitting a sizeable stack
+// trace or feature list.
 const maxPromptArgLen = 20_000
 
-// truncateArg caps a free-text prompt argument at maxPromptArgLen, appending a visible marker so
-// the truncation is never silent to whoever reads the rendered prompt. Fields with an already
-// restrictive format (an enum like review_plugin's "focus", or a short identifier like
-// scaffold_plugin's "type"/"name") don't need this — only genuinely free-text, potentially large
-// fields do.
+// truncateArg returns `s` unchanged when it is at most maxPromptArgLen bytes long; otherwise it
+// returns the longest rune-aligned prefix of at most maxPromptArgLen bytes followed by a "...(truncated)" marker, so truncation is
+// visible in the rendered prompt. It is meant for free-text arguments only; enum-like or
+// identifier-like arguments (e.g. "focus", "type", "name") do not need it.
 func truncateArg(s string) string {
 	if len(s) > maxPromptArgLen {
-		return s[:maxPromptArgLen] + "\n...(truncated)"
+		cut := maxPromptArgLen
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		return s[:cut] + "\n...(truncated)"
 	}
 	return s
 }
 
-// withRecoverPrompt wraps a prompt handler so a panic anywhere inside it (most likely deep in
-// resolvePluginForPrompt/extractors.DetectPlugin, triggered by a malformed or adversarial plugin
-// directory) becomes a normal error return instead of an unrecovered panic. The SDK's prompt
-// dispatch does not recover from a panicking PromptHandler, so an unrecovered panic would kill the
-// whole server process for every connected client/session, not just the request that triggered it.
+// withRecoverPrompt wraps the prompt handler `fn` so that a panic inside it (most likely in
+// resolvePluginForPrompt/extractors.DetectPlugin on a malformed or adversarial plugin directory)
+// is returned as an error with a nil result instead of propagating. The SDK does not recover from
+// a panicking PromptHandler, so an unrecovered panic would terminate the whole server process for
+// every connected session. Results and errors from a non-panicking `fn` pass through unchanged.
 func withRecoverPrompt(fn mcp.PromptHandler) mcp.PromptHandler {
 	return func(ctx context.Context, req *mcp.GetPromptRequest) (result *mcp.GetPromptResult, err error) {
 		defer func() {
@@ -67,12 +71,10 @@ func withRecoverPrompt(fn mcp.PromptHandler) mcp.PromptHandler {
 	}
 }
 
-// requireArgs checks that every name in required has a non-empty value in args, returning a
-// jsonrpc.Error (mcp.GetPromptHandler's SDK-native way to signal a bad request) naming every
-// missing one at once. The SDK's prompt dispatch does not validate a Prompt's Required argument
-// declarations before invoking the handler, so this check turns an omitted required argument (e.g.
-// "type"/"name"/"description" for scaffold_plugin, "plugin" for review_plugin, "plugin"/"error"
-// for debug_plugin) into a clear error instead of a prompt rendered from empty strings.
+// requireArgs checks that every name in `required` has a non-blank (after trimming whitespace)
+// value in `args`. It returns nil when all are present, or a jsonrpc invalid-params error naming
+// every missing argument at once. The SDK does not enforce a Prompt's Required declarations before
+// invoking the handler, so this check prevents a prompt from being rendered from empty values.
 func requireArgs(args map[string]string, required ...string) error {
 	var missing []string
 	for _, name := range required {
@@ -89,16 +91,16 @@ func requireArgs(args map[string]string, required ...string) error {
 	}
 }
 
-// readFileTruncated reads at most maxChars bytes from path, avoiding buffering an entire large
-// file (real lib.php files can run hundreds of KB) just to discard everything past the truncation
-// point. Thin wrapper over toolutil.ReadFileTruncated.
+// readFileTruncated returns at most `maxChars` bytes of the file at `path` without buffering the
+// whole file. It is a thin wrapper over toolutil.ReadFileTruncated and follows its behavior for
+// unreadable files.
 func readFileTruncated(path string, maxChars int) string {
 	return toolutil.ReadFileTruncated(path, maxChars)
 }
 
-// resolvedPluginContext is the outcome of resolvePluginForPrompt — unlike tools, prompts never
-// hard-require config: if resolution fails (or config is unset), the raw plugin argument is used
-// as a literal path so the prompt still renders something useful.
+// resolvedPluginContext is the outcome of resolvePluginForPrompt. Unlike tools, prompts never
+// require a configuration: Path is empty when the plugin could not be safely resolved, and
+// Component then falls back to the raw plugin argument for display only.
 type resolvedPluginContext struct {
 	Path            string
 	Component       string
@@ -109,16 +111,15 @@ type resolvedPluginContext struct {
 	ConfigAvailable bool
 }
 
-// resolvePluginForPrompt mirrors review_plugin/debug_plugin's shared resolution logic: resolve via
-// moodletype.ResolvePluginPath, falling back to the raw string as a literal path if resolution
-// fails and config is unset. Live-detects metadata, silently ignoring detection failure (keeps
-// defaults empty).
+// resolvePluginForPrompt resolves the client-supplied `plugin` argument (a component, a path
+// relative to the Moodle root, or an absolute path) into a resolvedPluginContext shared by
+// review_plugin and debug_plugin. When no configuration is available the argument is used as a
+// literal path; otherwise it is resolved through moodletype.ResolvePluginPath against the
+// configured Moodle root. Plugin metadata is then detected from disk, and a detection failure
+// leaves the metadata fields empty. It never returns an error or panics on its own.
 //
-// A config.Load error (e.g. os.UserHomeDir() failing) is deliberately folded into the same
-// "no config available" branch as cfg == nil, not surfaced as a hard failure: prompts never
-// hard-require config, and config.Load returns an explicit error rather than building a wrong path
-// from an empty home directory, so this is the same graceful fallback used when no config file
-// exists yet.
+// A config.Load error is treated the same as a missing configuration (cfg == nil) instead of
+// failing, because prompts must still render without one.
 func resolvePluginForPrompt(plugin string) resolvedPluginContext {
 	var rc resolvedPluginContext
 
@@ -133,15 +134,11 @@ func resolvePluginForPrompt(plugin string) resolvedPluginContext {
 		if !ok {
 			candidate = filepath.Join(cfg.MoodlePath, plugin)
 		}
-		// A resolved/fallback path outside the Moodle root must never be treated as a real
-		// filesystem path — plugin is client-controlled (review_plugin/debug_plugin arguments),
-		// and reading an arbitrary external file's content/metadata into a prompt response is
-		// exactly the leak IsWithinMoodle exists to prevent.
-		// rc.Path is deliberately left "" in that case: falling back to the *raw* plugin argument
-		// as a path is NOT safe, since the raw argument is itself the escaping value in the
-		// realistic attack (an absolute path outside the root).
-		// DetectPlugin is skipped below when rc.Path is empty; rc.Component still falls back to the
-		// raw string afterward, for display purposes only, never as a filesystem path.
+		// The plugin argument is client-controlled, so a path outside the Moodle root must not
+		// be read: its metadata and file content would leak into the prompt. In that case
+		// rc.Path stays empty (the raw argument is not a safe fallback, since it is the escaping
+		// value itself), DetectPlugin is skipped, and rc.Component falls back to the raw string
+		// for display only.
 		if moodletype.IsWithinMoodle(candidate, cfg.MoodlePath) {
 			rc.Path = candidate
 		}
@@ -159,6 +156,9 @@ func resolvePluginForPrompt(plugin string) resolvedPluginContext {
 	return rc
 }
 
+// readPluginFileTruncated returns at most `maxChars` bytes of the generated plugin file named
+// `filename` under the plugin's output directory, or an empty string when rc.Path is empty or the
+// file cannot be read.
 func (rc resolvedPluginContext) readPluginFileTruncated(filename string, maxChars int) string {
 	return readFileTruncated(generators.PluginOutputPath(rc.Path, filename), maxChars)
 }

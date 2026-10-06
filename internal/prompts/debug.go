@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -36,11 +36,14 @@ func RegisterDebugPrompt(server *mcp.Server) {
 	}, withRecoverPrompt(handleDebugPrompt))
 }
 
+// debugHintCategory associates a set of lowercase error-text keywords with the debugging hints to
+// show when any of them appears in the reported error.
 type debugHintCategory struct {
 	keywords []string
 	hints    []string
 }
 
+// debugHintCategories lists the keyword-matched hint groups consulted by getDebuggingTips.
 var debugHintCategories = []debugHintCategory{
 	{
 		keywords: []string{"capability", "access denied"},
@@ -90,12 +93,15 @@ var debugHintCategories = []debugHintCategory{
 	},
 }
 
+// genericDebugHints are the hints returned when no category keyword matches the error text.
 var genericDebugHints = []string{
 	"Enable DEVELOPER-level debugging (Site admin > Development > Debugging) to see full error details.",
 	"Check the PHP error log and Moodle's own error log for the full stack trace.",
 	"Run `admin/cli/purge_caches.php` — many \"phantom\" errors after a code change are actually stale caches.",
 }
 
+// getDebuggingTips returns the hints of every debugHintCategory with at least one keyword
+// contained (case-insensitively) in `errorText`, or genericDebugHints when none matches.
 func getDebuggingTips(errorText string) []string {
 	lower := strings.ToLower(errorText)
 	var tips []string
@@ -113,6 +119,8 @@ func getDebuggingTips(errorText string) []string {
 	return tips
 }
 
+// debugFewShotUser and debugFewShotAssistant form the few-shot example exchange that precedes the
+// real debug request, showing the expected four-section answer format.
 const debugFewShotUser = "Debug local_demo: error 'Call to a member function get_name() on null' happening " +
 	"when the scheduled task runs via cron."
 
@@ -131,6 +139,11 @@ const debugFewShotAssistant = "## Root Cause\n\nThe cron runner is calling `get_
 	"instance of `\\core\\task\\scheduled_task`, so a future class-signature regression fails in CI instead " +
 	"of surfacing only in production cron logs."
 
+// handleDebugPrompt renders the debug_plugin prompt from the "plugin" and "error" arguments
+// (required) and the optional "context" argument. The result holds the few-shot exchange followed
+// by a request containing plugin metadata, the error, keyword-matched hints, and any generated
+// runtime-flow, database and plugin-context files found for the plugin. It returns an
+// invalid-params error when a required argument is missing.
 func handleDebugPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	args := req.Params.Arguments
 	if err := requireArgs(args, "plugin", "error"); err != nil {

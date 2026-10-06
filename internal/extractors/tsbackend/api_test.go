@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -62,6 +62,7 @@ function local_test_no_doc_at_all($x) {
 }
 `
 
+// TestExtractFunctionsFromPhpFile_MatchesRegexBackendFixture verifies the extracted functions, lines and visibilities for a well-formed lib file match the regex backend's output.
 func TestExtractFunctionsFromPhpFile_MatchesRegexBackendFixture(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -107,12 +108,14 @@ func TestExtractFunctionsFromPhpFile_LineIgnoresPrecedingPhp8Attribute(t *testin
 	}
 }
 
+// TestExtractFunctionsFromPhpFile_MissingFile verifies a nonexistent file yields no functions.
 func TestExtractFunctionsFromPhpFile_MissingFile(t *testing.T) {
 	if got := ExtractFunctionsFromPhpFile("/nonexistent/lib.php"); got != nil {
 		t.Errorf("expected nil for a missing file, got %+v", got)
 	}
 }
 
+// TestExtractFunctionsFromPhpFile_SkipsMagicMethods verifies functions whose names start with "__" are skipped.
 func TestExtractFunctionsFromPhpFile_SkipsMagicMethods(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -142,6 +145,7 @@ func TestExtractFunctionsFromPhpFile_IndentedFunctionsNotMatched(t *testing.T) {
 	}
 }
 
+// TestExtractFunctionsFromPhpFile_CommentGapToleranceAndBlockCommentOnly verifies a docblock separated by up to three blank lines is still attached, and that a `//` comment never counts as a docblock.
 func TestExtractFunctionsFromPhpFile_CommentGapToleranceAndBlockCommentOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -159,11 +163,7 @@ func TestExtractFunctionsFromPhpFile_CommentGapToleranceAndBlockCommentOnly(t *t
 	for _, fn := range fns {
 		byName[fn.Name] = fn
 	}
-	// Note: a summary-only docblock (no @ tags at all) has a quirk in the shared
-	// phpdoc.ParseDocBlock logic — the closing "*/" line's leftover "/" (after stripping the "* "
-	// prefix) gets appended to the summary when no @-tag line has flipped inSummary off yet. This
-	// test only cares that a Doc was found at all across the 3-blank-line gap, not the exact summary
-	// text.
+	// Only the presence of a Doc across the 3-blank-line gap matters here, not its summary text.
 	if byName["gapped_fn"].Doc == nil {
 		t.Errorf("expected gapped_fn to still pick up its doc block across 3 blank lines, got %+v", byName["gapped_fn"])
 	}

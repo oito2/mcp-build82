@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,7 +15,8 @@
 
 // Command release builds every cross-compiled build82 binary for a tagged release, packages the
 // MCPB bundle (build82.mcpb), produces checksums.txt, and writes the MCP Registry server.json
-// descriptor, all into dist/. Usage:
+// descriptor, all into dist/ at the repository root (which is deleted and recreated on each run).
+// Usage:
 //
 //	go run ./scripts/release v1.0.0
 //
@@ -37,6 +38,7 @@ import (
 	"strings"
 )
 
+// Identity of the project used in build flags, asset names and release URLs.
 const (
 	module   = "github.com/oito2/mcp-build82"
 	binary   = "build82"
@@ -55,6 +57,8 @@ var platforms = [][2]string{
 	{"windows", "amd64"},
 }
 
+// assetName returns the release asset file name for the given `goos` and `goarch`, in the form
+// build82_<goos>_<goarch>, with a .exe suffix on windows.
 func assetName(goos, goarch string) string {
 	ext := ""
 	if goos == "windows" {
@@ -63,11 +67,14 @@ func assetName(goos, goarch string) string {
 	return fmt.Sprintf("%s_%s_%s%s", binary, goos, goarch, ext)
 }
 
-// semverTagPattern validates the version argument strictly, not just a "v" prefix: the string is
-// interpolated verbatim into a -ldflags value passed to `go build`, and a value containing
-// spaces/quotes would be tokenized into additional linker flags.
+// semverTagPattern matches exactly "vMAJOR.MINOR.PATCH". The version argument is interpolated
+// verbatim into a -ldflags value passed to `go build`, so anything looser (spaces, quotes) could
+// inject extra linker flags.
 var semverTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 
+// main builds the release artifacts for the version given as the only argument (a strict "vX.Y.Z"
+// tag) into dist/: one binary per entry of platforms, the MCPB bundle, checksums.txt and
+// server.json. It exits with status 1 and a message on stderr on a usage error or any failure.
 func main() {
 	if len(os.Args) != 2 || !semverTagPattern.MatchString(os.Args[1]) {
 		fmt.Fprintln(os.Stderr, "usage: go run ./scripts/release vX.Y.Z")
@@ -120,8 +127,8 @@ func main() {
 	}
 	fmt.Printf("Wrote %s\n", checksumsPath)
 
-	// server.json embeds the bundle's SHA-256, so the only trustworthy copy is the one generated
-	// next to the bundle it describes; it ships as a release asset and is not versioned.
+	// server.json embeds the bundle's SHA-256, so it is generated next to the bundle it describes
+	// and published as a release asset.
 	serverJSONPath := filepath.Join(dist, "server.json")
 	if err := writeServerJSON(serverJSONPath, version, bundleSum); err != nil {
 		fatal(err)
@@ -129,10 +136,11 @@ func main() {
 	fmt.Printf("Wrote %s\n", serverJSONPath)
 }
 
-// buildBundle packages the MCPB bundle at out from the binaries already built in dist. MCPB selects
-// a binary per OS, not per CPU architecture: the two darwin binaries are merged into one universal
-// binary, both linux binaries ship behind a launcher script that picks one by `uname -m`, and
-// windows/amd64 ships as-is.
+// buildBundle writes the MCPB bundle to `out` for `version`, using the binaries already built in
+// `dist` and the icons under `repoRoot`. MCPB selects a binary per OS, not per CPU architecture:
+// the two darwin binaries are merged into one universal binary, both linux binaries ship behind a
+// launcher script that picks one by `uname -m`, and windows/amd64 ships as-is. The manifest tool
+// list is read from the in-process server. It returns the first error encountered.
 func buildBundle(repoRoot, dist, version, out string) error {
 	tmp, err := os.MkdirTemp("", "build82-mcpb-")
 	if err != nil {
@@ -160,6 +168,8 @@ func buildBundle(repoRoot, dist, version, out string) error {
 	})
 }
 
+// repoRootDir returns the directory containing the go.mod of the current module, as reported by
+// `go env GOMOD`. It fails when the working directory is outside a Go module.
 func repoRootDir() (string, error) {
 	out, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {
@@ -179,6 +189,9 @@ func releaseLDFlags(version string) string {
 	return fmt.Sprintf("-s -w -X %s/internal/version.Current=%s", module, version)
 }
 
+// buildOne cross-compiles ./cmd/build82 for `goos`/`goarch` into the file `out` (CGO disabled),
+// stamping `version` into the binary, and streams the build output to the console. It returns the
+// error of the failed `go build`, if any.
 func buildOne(repoRoot, goos, goarch, version, out string) error {
 	cmd := exec.Command("go", "build",
 		"-ldflags", releaseLDFlags(version),
@@ -190,6 +203,7 @@ func buildOne(repoRoot, goos, goarch, version, out string) error {
 	return cmd.Run()
 }
 
+// sha256File returns the hex-encoded SHA-256 digest of the file at `path`.
 func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -203,8 +217,9 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// writeChecksumsFile writes standard `sha256sum` output format ("<hex digest>  <filename>" per
-// line, sorted by filename), the format internal/selfupdate.VerifyChecksum parses.
+// writeChecksumsFile writes `checksums` (file name to hex digest) to `path` in `sha256sum` output
+// format, one "<hex digest>  <filename>" line per entry sorted by file name, which is the format
+// internal/selfupdate.VerifyChecksum parses.
 func writeChecksumsFile(path string, checksums map[string]string) error {
 	names := make([]string, 0, len(checksums))
 	for name := range checksums {
@@ -220,7 +235,8 @@ func writeChecksumsFile(path string, checksums map[string]string) error {
 }
 
 // serverJSON mirrors the subset of the MCP Registry's server.json schema (2025-12-11) that
-// build82 needs.
+// build82 publishes. The nested types below describe its repository, icon, package and transport
+// entries.
 type serverJSON struct {
 	Schema      string           `json:"$schema"`
 	Name        string           `json:"name"`
@@ -256,12 +272,13 @@ type serverJSONTransport struct {
 	Type string `json:"type"`
 }
 
-// serverJSONIconSizes are the icon sizes advertised in server.json. The registry only accepts
-// HTTPS icon URLs, so they point at the repository's icon PNGs, pinned to the release tag.
+// serverJSONIconSizes are the square icon sizes, in pixels, advertised in server.json. The registry
+// only accepts HTTPS icon URLs, so each points at the repository's icon PNG at the release tag.
 var serverJSONIconSizes = []int{64, 128, 256, 512}
 
-// buildServerJSON assembles the MCP Registry descriptor for version (a "vX.Y.Z" tag), describing
-// the MCPB bundle whose SHA-256 is bundleSHA256.
+// buildServerJSON assembles the MCP Registry descriptor for `version` (a "vX.Y.Z" tag). Its single
+// package is the MCPB bundle release asset, identified by its download URL and the hex SHA-256
+// `bundleSHA256`.
 func buildServerJSON(version, bundleSHA256 string) serverJSON {
 	repoURL := fmt.Sprintf("https://github.com/%s/%s", repoOrg, repoName)
 	semver := strings.TrimPrefix(version, "v")
@@ -295,8 +312,8 @@ func buildServerJSON(version, bundleSHA256 string) serverJSON {
 	}
 }
 
-// writeServerJSON writes the MCP Registry descriptor to path. It is regenerated on every tagged
-// release from the bundle's freshly computed checksum.
+// writeServerJSON writes the indented JSON descriptor from buildServerJSON(`version`,
+// `bundleSHA256`) to `path`, followed by a newline.
 func writeServerJSON(path, version, bundleSHA256 string) error {
 	b, err := json.MarshalIndent(buildServerJSON(version, bundleSHA256), "", "  ")
 	if err != nil {
@@ -305,6 +322,7 @@ func writeServerJSON(path, version, bundleSHA256 string) error {
 	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
+// fatal prints `err` to stderr and exits the process with status 1.
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "Error:", err)
 	os.Exit(1)

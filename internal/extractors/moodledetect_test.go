@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// mustMkdirAll creates the directory `path` and its parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -28,6 +29,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes `content` to the file `path`, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -35,6 +37,7 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// moodleVersionPhpFixture is a version.php of a Moodle 4.3 installation.
 const moodleVersionPhpFixture = `<?php
 defined('MOODLE_INTERNAL') || die();
 
@@ -44,6 +47,7 @@ $branch   = '403';
 $maturity = MATURITY_STABLE;
 `
 
+// TestDetectMoodleInstall verifies the version, build, branch and release read from version.php.
 func TestDetectMoodleInstall(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), moodleVersionPhpFixture)
@@ -66,6 +70,7 @@ func TestDetectMoodleInstall(t *testing.T) {
 	}
 }
 
+// TestDetectMoodleInstall_FallsBackToBuildWhenReleaseAbsent verifies that Version falls back to the build number when $release is absent.
 func TestDetectMoodleInstall_FallsBackToBuildWhenReleaseAbsent(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$version = 2023110900.00;\n$branch = '403';\n")
@@ -79,12 +84,14 @@ func TestDetectMoodleInstall_FallsBackToBuildWhenReleaseAbsent(t *testing.T) {
 	}
 }
 
+// TestDetectMoodleInstall_MissingFile verifies that a directory without version.php yields nil.
 func TestDetectMoodleInstall_MissingFile(t *testing.T) {
 	if DetectMoodleInstall(t.TempDir()) != nil {
 		t.Error("expected nil for a directory with no version.php")
 	}
 }
 
+// TestIsMoodleRoot verifies that a directory with version.php, lib and config.php is a Moodle root.
 func TestIsMoodleRoot(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), moodleVersionPhpFixture)
@@ -96,6 +103,7 @@ func TestIsMoodleRoot(t *testing.T) {
 	}
 }
 
+// TestIsMoodleRoot_ConfigDistFallback verifies that config-dist.php can replace config.php.
 func TestIsMoodleRoot_ConfigDistFallback(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), moodleVersionPhpFixture)
@@ -107,6 +115,7 @@ func TestIsMoodleRoot_ConfigDistFallback(t *testing.T) {
 	}
 }
 
+// TestIsMoodleRoot_MissingLibDir verifies that a directory without lib is not a Moodle root.
 func TestIsMoodleRoot_MissingLibDir(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), moodleVersionPhpFixture)
@@ -117,6 +126,7 @@ func TestIsMoodleRoot_MissingLibDir(t *testing.T) {
 	}
 }
 
+// TestIsMoodleRoot_MissingConfig verifies that a directory without config.php or config-dist.php is not a Moodle root.
 func TestIsMoodleRoot_MissingConfig(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), moodleVersionPhpFixture)

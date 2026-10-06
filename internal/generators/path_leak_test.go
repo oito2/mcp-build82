@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,10 +22,11 @@ import (
 	"testing"
 )
 
-// This file verifies that generated Markdown never embeds absolute filesystem paths (host
-// directory structure, often an OS username), since those files travel with the plugin repo and
-// may be committed, shared, or pasted into a third-party AI chat.
+// This file verifies that generated Markdown never embeds absolute filesystem paths, which would
+// expose host directory structure and usernames in files meant to travel with the repository.
 
+// TestGeneratePluginContext_PathIsRelativeNotAbsolute verifies PLUGIN_CONTEXT.md shows the plugin
+// path relative to the Moodle root.
 func TestGeneratePluginContext_PathIsRelativeNotAbsolute(t *testing.T) {
 	moodlePath := t.TempDir()
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
@@ -50,6 +51,8 @@ func TestGeneratePluginContext_PathIsRelativeNotAbsolute(t *testing.T) {
 	}
 }
 
+// TestGenerateAiContext_PathDoesNotLeakAbsoluteHostPath verifies AI_CONTEXT.md shows only the
+// installation directory name, not its absolute path.
 func TestGenerateAiContext_PathDoesNotLeakAbsoluteHostPath(t *testing.T) {
 	moodlePath := t.TempDir()
 

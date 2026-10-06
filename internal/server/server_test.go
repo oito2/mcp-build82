@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -31,8 +31,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// copyFixtureMoodleTree copies the shared testdata/moodle fixture into a fresh temp dir, since
-// the tools under test write files (config, generated context).
+// copyFixtureMoodleTree copies the shared testdata/moodle fixture into a fresh temp directory and
+// returns its path, because the tools under test write files (configuration, generated context).
 func copyFixtureMoodleTree(t *testing.T) string {
 	t.Helper()
 	src := filepath.Join("..", "..", "testdata", "moodle")
@@ -69,8 +69,8 @@ func copyFixtureMoodleTree(t *testing.T) string {
 	return dst
 }
 
-// withIsolatedHome points HOME at a fresh temp dir so config.Save/Load never touch the real
-// user's actual ~/.build82.
+// withIsolatedHome points HOME at a fresh temp dir and clears BUILD82_MOODLE_PATH, so configuration
+// reads and writes never touch the real user's ~/.build82.
 func withIsolatedHome(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
@@ -79,6 +79,8 @@ func withIsolatedHome(t *testing.T) {
 	t.Setenv("BUILD82_MOODLE_PATH", "")
 }
 
+// connectInMemory connects a new in-memory client to a fresh NewServer instance and returns the
+// client, its session and a cleanup function that closes the session and cancels the context.
 func connectInMemory(t *testing.T) (*mcp.Client, *mcp.ClientSession, func()) {
 	t.Helper()
 	s := NewServer()
@@ -107,6 +109,8 @@ func connectInMemory(t *testing.T) (*mcp.Client, *mcp.ClientSession, func()) {
 	return client, session, cleanup
 }
 
+// TestServer_ReportsIconInServerInfo verifies that serverInfo carries one valid 64x64 PNG data URI
+// icon identical to the published icon asset.
 func TestServer_ReportsIconInServerInfo(t *testing.T) {
 	_, session, cleanup := connectInMemory(t)
 	defer cleanup()
@@ -136,7 +140,7 @@ func TestServer_ReportsIconInServerInfo(t *testing.T) {
 		t.Errorf("expected a 64x64 icon, got %dx%d", cfg.Width, cfg.Height)
 	}
 
-	// The embedded copy must stay identical to the published icon asset.
+	// The embedded icon must be byte-identical to the published icon asset.
 	asset, err := os.ReadFile(filepath.Join("..", "..", "docs", "img", "icons", "icon-build82-cropped-64.png"))
 	if err != nil {
 		t.Fatalf("reading icon asset: %v", err)
@@ -146,6 +150,8 @@ func TestServer_ReportsIconInServerInfo(t *testing.T) {
 	}
 }
 
+// TestServer_ListsAllToolsResourcesPrompts verifies the number of registered tools, resources,
+// resource templates and prompts.
 func TestServer_ListsAllToolsResourcesPrompts(t *testing.T) {
 	_, session, cleanup := connectInMemory(t)
 	defer cleanup()
@@ -189,6 +195,8 @@ func TestServer_ListsAllToolsResourcesPrompts(t *testing.T) {
 	}
 }
 
+// TestServer_CallInitMoodleContext_EndToEnd verifies that calling init_moodle_context on the fixture
+// succeeds and generates AI_CONTEXT.md.
 func TestServer_CallInitMoodleContext_EndToEnd(t *testing.T) {
 	withIsolatedHome(t)
 	moodlePath := copyFixtureMoodleTree(t)
@@ -223,6 +231,8 @@ func TestServer_CallInitMoodleContext_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestServer_CallInitMoodleContext_JSONFormat verifies that format "json" returns a JSON document
+// with success set to true.
 func TestServer_CallInitMoodleContext_JSONFormat(t *testing.T) {
 	withIsolatedHome(t)
 	moodlePath := copyFixtureMoodleTree(t)
@@ -251,6 +261,8 @@ func TestServer_CallInitMoodleContext_JSONFormat(t *testing.T) {
 	}
 }
 
+// TestServer_ReadGlobalResource_NotInitializedPlaceholder verifies that reading a global resource
+// before initialization returns a placeholder text.
 func TestServer_ReadGlobalResource_NotInitializedPlaceholder(t *testing.T) {
 	withIsolatedHome(t)
 
@@ -267,6 +279,8 @@ func TestServer_ReadGlobalResource_NotInitializedPlaceholder(t *testing.T) {
 	}
 }
 
+// TestServer_GetScaffoldPrompt verifies that the scaffold_plugin prompt returns the expected
+// user/assistant/user message sequence.
 func TestServer_GetScaffoldPrompt(t *testing.T) {
 	withIsolatedHome(t)
 

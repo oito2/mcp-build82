@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,5 +13,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package toolutil provides shared canned MCP tool responses.
+// Package toolutil provides helpers shared by the MCP tool handlers: the canned
+// "not initialized" response and bounded file reading.
 package toolutil

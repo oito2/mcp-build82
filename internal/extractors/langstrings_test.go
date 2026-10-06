@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@ import (
 	"testing"
 )
 
+// TestFindOwnGetStringCalls_Basic verifies that a call for the plugin's own component is reported with its identifier,
+// file and line.
 func TestFindOwnGetStringCalls_Basic(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php
@@ -35,6 +37,7 @@ echo get_string('pluginname', 'local_test');
 	}
 }
 
+// TestFindOwnGetStringCalls_IgnoresOtherComponents verifies that calls for another component are not reported.
 func TestFindOwnGetStringCalls_IgnoresOtherComponents(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php
@@ -46,9 +49,8 @@ echo get_string('save', 'core');
 	}
 }
 
-// TestFindOwnGetStringCalls_MultilineArgumentsDetected verifies that a get_string() call whose
-// arguments span multiple lines (identifier and component literals on different lines than the
-// function name) is matched, with the line number derived from the match's byte offset.
+// TestFindOwnGetStringCalls_MultilineArgumentsDetected verifies that a call whose arguments span
+// several lines is matched and reported at the line of the function name.
 func TestFindOwnGetStringCalls_MultilineArgumentsDetected(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php

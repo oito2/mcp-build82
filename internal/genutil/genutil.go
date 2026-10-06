@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,25 +27,23 @@ import (
 )
 
 // ContextDir is the subdirectory every build82-generated file lives under, relative to a
-// Moodle or plugin root — never written directly at the root itself.
+// Moodle or plugin root.
 const ContextDir = ".build82"
 
-// GlobalOutputPath returns the path for a global (Moodle-root-level) generated file.
+// GlobalOutputPath returns the path of the generated file `filename` inside `moodlePath`'s ContextDir.
 func GlobalOutputPath(moodlePath, filename string) string {
 	return filepath.Join(moodlePath, ContextDir, filename)
 }
 
-// PluginOutputPath returns the path for a per-plugin generated file.
+// PluginOutputPath returns the path of the generated file `filename` inside `pluginPath`'s ContextDir.
 func PluginOutputPath(pluginPath, filename string) string {
 	return filepath.Join(pluginPath, ContextDir, filename)
 }
 
-// RelativeOrOriginal returns absPath relative to root (slash-separated), falling back to absPath
-// unchanged if it can't be made relative (e.g. different volumes on Windows). Used wherever a
-// generated Markdown file or a resource error message would otherwise embed an absolute
-// filesystem path — which leaks the host's directory structure (and often the OS username baked
-// into it) into files meant to travel with the plugin repo and potentially be committed, shared,
-// or pasted into a third-party AI chat.
+// RelativeOrOriginal returns `absPath` relative to `root` (slash-separated), or `absPath`
+// unchanged if it cannot be made relative (e.g. different volumes on Windows). It keeps absolute
+// host paths, which can expose directory structure and usernames, out of generated Markdown files
+// and resource error messages.
 func RelativeOrOriginal(root, absPath string) string {
 	if rel, err := filepath.Rel(root, absPath); err == nil {
 		return filepath.ToSlash(rel)
@@ -53,9 +51,9 @@ func RelativeOrOriginal(root, absPath string) string {
 	return absPath
 }
 
-// GeneratorResult is returned by every generator function — never a panic or a propagated error,
-// so orchestrators can run generators in parallel and still produce a complete,
-// partial-failure-tolerant report.
+// GeneratorResult is the outcome of a single generator. Generators report failures through it
+// instead of panicking or returning an error, so orchestrators can run them in parallel and still
+// produce a complete report.
 type GeneratorResult struct {
 	File    string
 	Success bool
@@ -63,8 +61,9 @@ type GeneratorResult struct {
 	Skipped bool   // true when the mtime cache determined regeneration was unnecessary
 }
 
-// Safely runs fn, converting any panic into a failed GeneratorResult instead of propagating it —
-// this is what lets one broken generator never abort an entire batch.
+// Safely runs `fn` and returns its result. If `fn` panics or returns an error, the panic or error
+// is converted into a failed GeneratorResult for `outputFile`, so one broken generator cannot abort
+// a batch.
 func Safely(outputFile string, fn func() (GeneratorResult, error)) GeneratorResult {
 	result, err := func() (r GeneratorResult, e error) {
 		defer func() {
@@ -80,8 +79,9 @@ func Safely(outputFile string, fn func() (GeneratorResult, error)) GeneratorResu
 	return result
 }
 
-// Write writes content to filePath (creating parent directories as needed) and marks it fresh in
-// the mtime cache on success.
+// Write writes `content` to `filePath` (mode 0644), creating parent directories as needed, and
+// marks the file fresh in the mtime cache on success. Directory or write errors are reported in
+// the returned result's Error field.
 func Write(filePath, content string) GeneratorResult {
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return GeneratorResult{File: filePath, Success: false, Error: err.Error()}
@@ -93,20 +93,17 @@ func Write(filePath, content string) GeneratorResult {
 	return GeneratorResult{File: filePath, Success: true}
 }
 
-// EscapeMdCell neutralizes Markdown-structure-breaking characters in a value that originates from
-// arbitrary plugin PHP (event names, callbacks, DisplayName, ...) before it's interpolated into a
-// generated table cell or heading — otherwise an unescaped `|` silently corrupts a table's column
-// count, and an embedded newline lets attacker-controlled text open a new Markdown
-// section/heading that an AI assistant reading the file as trusted context could mistake for a
-// legitimate part of it.
+// EscapeMdCell returns `s` safe for interpolation into a Markdown table cell or heading: `|` is
+// backslash-escaped and line breaks are replaced with spaces. This stops values taken from plugin
+// PHP from breaking a table's column count or opening a new Markdown section.
 func EscapeMdCell(s string) string {
 	s = strings.ReplaceAll(s, "|", "\\|")
 	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 	return s
 }
 
-// Header renders the standard title/description/timestamp header block every generated Markdown
-// file starts with.
+// Header renders the title/description/timestamp header block that starts every generated
+// Markdown file, using `title` as the H1 and `description` as the blockquote.
 func Header(title, description string) string {
 	return strings.Join([]string{
 		"# " + title, "",
@@ -116,20 +113,17 @@ func Header(title, description string) string {
 	}, "\n")
 }
 
-// Timestamp returns the current UTC time in "2006-01-02 15:04:05" format — always UTC, never
-// local time, so generated files are reproducible/diffable across machines in different timezones.
+// Timestamp returns the current time in UTC formatted as "2006-01-02 15:04:05", so generated
+// files do not differ by the machine's timezone.
 func Timestamp() string {
 	return time.Now().UTC().Format("2006-01-02 15:04:05")
 }
 
-// PreloadOr generalizes the "if preloaded != nil { x = preloaded.Field } else { x = extract() }"
-// pattern.
+// PreloadOr returns `get(preloaded)` when `preloaded` is non-nil, otherwise `extract()`.
 //
-// The nil check is on preloaded itself (the container, e.g. *PreloadedPluginData), never on the
-// field get returns — a preloaded field can legitimately be a nil pointer or a zero value
-// (e.g. a plugin with no db/tasks.php yields a nil *TasksExtraction from the extractor), and that
-// must be trusted as-is rather than triggering a redundant re-extraction. extract is only called
-// when preloaded is nil, i.e. when no preload pass happened at all.
+// Only the container `preloaded` is nil-checked, never the field `get` returns: a preloaded field
+// can legitimately be a nil pointer or zero value (e.g. a plugin with no db/tasks.php yields a nil
+// *TasksExtraction) and is trusted as-is without re-extraction.
 func PreloadOr[P, T any](preloaded *P, get func(*P) T, extract func() T) T {
 	if preloaded != nil {
 		return get(preloaded)
@@ -137,10 +131,10 @@ func PreloadOr[P, T any](preloaded *P, get func(*P) T, extract func() T) T {
 	return extract()
 }
 
-// RunCached returns a job function that, when invoked, checks the mtime cache for outputFile
-// against sources; if not stale, it appends a Skipped success result to *results, otherwise it
-// runs fn and appends fn's actual result. Every append is done under mu, so job functions
-// returned by this helper are safe to invoke concurrently against the same *results/mu pair.
+// RunCached returns a job function that checks the mtime cache for `outputFile` against
+// `sources`. If the output is not stale it appends a Skipped success result to `results`;
+// otherwise it runs `fn` and appends fn's result. Appends are guarded by `mu`, so the returned
+// jobs can run concurrently against the same `results`/`mu` pair.
 func RunCached(results *[]GeneratorResult, mu *sync.Mutex, outputFile string, sources []string, fn func() GeneratorResult) func() {
 	return func() {
 		if !cache.Global.IsStale(outputFile, sources) {
@@ -156,11 +150,11 @@ func RunCached(results *[]GeneratorResult, mu *sync.Mutex, outputFile string, so
 	}
 }
 
-// WriteTableOrPlaceholder writes header followed by every entry in rows verbatim (each row is
-// expected to already include its own trailing newline), or — when rows is empty — a single
-// "_(placeholder)_" line instead of a table left with a header and no body rows. header may be
-// empty (e.g. GeneratePluginDbTables, where each row already renders its own full table including
-// header), in which case only the rows (or the placeholder) are written.
+// WriteTableOrPlaceholder writes `header` followed by every entry of `rows` verbatim to `b`
+// (each row must carry its own trailing newline). When `rows` is empty it writes a single
+// "_(placeholder)_" line instead of a header-only table. `header` may be empty (e.g.
+// GeneratePluginDbTables, whose rows each render a full table), in which case only the rows or
+// the placeholder are written.
 func WriteTableOrPlaceholder(b *strings.Builder, header string, rows []string, placeholder string) {
 	if len(rows) == 0 {
 		fmt.Fprintf(b, "_(%s)_\n", placeholder)

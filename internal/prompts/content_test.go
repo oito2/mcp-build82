@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,9 +24,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// This file tests the actual rendered content of a successful scaffold_plugin/review_plugin/
-// debug_plugin call, so that a swapped field or dropped section is detected.
+// This file tests the rendered content of successful scaffold_plugin, review_plugin and
+// debug_plugin calls, so that a swapped field or dropped section is detected.
 
+// setupPromptPlugin creates a temporary Moodle root containing local/demo with a version.php and a
+// generated PLUGIN_AI_CONTEXT.md, points BUILD82_MOODLE_PATH at it, and returns the root and the
+// plugin's absolute path.
 func setupPromptPlugin(t *testing.T) (root, pluginPath string) {
 	t.Helper()
 	root = t.TempDir()
@@ -41,6 +44,7 @@ func setupPromptPlugin(t *testing.T) (root, pluginPath string) {
 	return root, pluginPath
 }
 
+// textContentOf returns the text of a prompt message, failing the test if it is not text content.
 func textContentOf(t *testing.T, msg *mcp.PromptMessage) string {
 	t.Helper()
 	tc, ok := msg.Content.(*mcp.TextContent)
@@ -50,6 +54,7 @@ func textContentOf(t *testing.T, msg *mcp.PromptMessage) string {
 	return tc.Text
 }
 
+// TestHandleReviewPrompt_ContentReflectsPluginAndFocus verifies review_plugin output reflects the plugin metadata, the chosen focus and the plugin context.
 func TestHandleReviewPrompt_ContentReflectsPluginAndFocus(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -80,6 +85,7 @@ func TestHandleReviewPrompt_ContentReflectsPluginAndFocus(t *testing.T) {
 	}
 }
 
+// TestHandleReviewPrompt_DefaultFocusIncludesAllSections verifies review_plugin without a focus includes every criteria section.
 func TestHandleReviewPrompt_DefaultFocusIncludesAllSections(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -95,6 +101,7 @@ func TestHandleReviewPrompt_DefaultFocusIncludesAllSections(t *testing.T) {
 	}
 }
 
+// TestHandleDebugPrompt_KeywordMatchedHints verifies debug_plugin includes only the hints matching keywords in the error text.
 func TestHandleDebugPrompt_KeywordMatchedHints(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -113,6 +120,7 @@ func TestHandleDebugPrompt_KeywordMatchedHints(t *testing.T) {
 	}
 }
 
+// TestHandleDebugPrompt_GenericHintsWhenNoKeywordMatches verifies debug_plugin falls back to the generic hints when no keyword matches.
 func TestHandleDebugPrompt_GenericHintsWhenNoKeywordMatches(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -128,10 +136,8 @@ func TestHandleDebugPrompt_GenericHintsWhenNoKeywordMatches(t *testing.T) {
 	}
 }
 
-// TestHandleDebugPrompt_LongArgsAreTruncated verifies that debug_plugin's "error"/"context"
-// arguments, free text supplied by a potentially untrusted MCP client, are capped by truncateArg
-// in handleDebugPrompt: an oversized value must not appear in full in the rendered text, and the
-// "...(truncated)" marker must.
+// TestHandleDebugPrompt_LongArgsAreTruncated verifies that oversized "error" and "context"
+// arguments are cut at maxPromptArgLen and marked with "...(truncated)".
 func TestHandleDebugPrompt_LongArgsAreTruncated(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -157,8 +163,8 @@ func TestHandleDebugPrompt_LongArgsAreTruncated(t *testing.T) {
 	}
 }
 
-// TestHandleDebugPrompt_NormalArgsAreUnchanged confirms truncateArg doesn't alter a value under the
-// limit, so realistic-sized error text/context is unchanged.
+// TestHandleDebugPrompt_NormalArgsAreUnchanged verifies that arguments under the limit appear
+// unchanged and unmarked.
 func TestHandleDebugPrompt_NormalArgsAreUnchanged(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -180,8 +186,8 @@ func TestHandleDebugPrompt_NormalArgsAreUnchanged(t *testing.T) {
 	}
 }
 
-// TestHandleReviewPrompt_LongFilesArgIsTruncated verifies the same argument-size cap on
-// review_plugin's "files" argument, applied by truncateArg in handleReviewPrompt.
+// TestHandleReviewPrompt_LongFilesArgIsTruncated verifies that an oversized "files" argument is
+// truncated and marked.
 func TestHandleReviewPrompt_LongFilesArgIsTruncated(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -201,8 +207,8 @@ func TestHandleReviewPrompt_LongFilesArgIsTruncated(t *testing.T) {
 	}
 }
 
-// TestHandleReviewPrompt_NormalFilesArgIsUnchanged confirms a realistic "files" value (a short
-// comma-separated list) passes through unaltered.
+// TestHandleReviewPrompt_NormalFilesArgIsUnchanged verifies that a short "files" list passes
+// through unaltered.
 func TestHandleReviewPrompt_NormalFilesArgIsUnchanged(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 
@@ -221,9 +227,8 @@ func TestHandleReviewPrompt_NormalFilesArgIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestHandleScaffoldPrompt_LongArgsAreTruncated verifies the same argument-size cap on
-// scaffold_plugin's "description"/"features" arguments, applied by truncateArg in
-// handleScaffoldPrompt.
+// TestHandleScaffoldPrompt_LongArgsAreTruncated verifies that oversized "description" and
+// "features" arguments are truncated; only the description is echoed into the output.
 func TestHandleScaffoldPrompt_LongArgsAreTruncated(t *testing.T) {
 	longDescription := strings.Repeat("d", maxPromptArgLen+500)
 	longFeatures := "database," + strings.Repeat("x", maxPromptArgLen+500)
@@ -246,7 +251,7 @@ func TestHandleScaffoldPrompt_LongArgsAreTruncated(t *testing.T) {
 	}
 }
 
-// TestHandleScaffoldPrompt_NormalArgsAreUnchanged confirms realistic-sized description/features
+// TestHandleScaffoldPrompt_NormalArgsAreUnchanged verifies that short description and features
 // values pass through unaltered.
 func TestHandleScaffoldPrompt_NormalArgsAreUnchanged(t *testing.T) {
 	result, err := handleScaffoldPrompt(context.Background(), promptReq(map[string]string{
@@ -264,6 +269,7 @@ func TestHandleScaffoldPrompt_NormalArgsAreUnchanged(t *testing.T) {
 	}
 }
 
+// TestHandleScaffoldPrompt_ContentReflectsTypeAndFeatures verifies scaffold_plugin output reflects the plugin type and requested features.
 func TestHandleScaffoldPrompt_ContentReflectsTypeAndFeatures(t *testing.T) {
 	result, err := handleScaffoldPrompt(context.Background(), promptReq(map[string]string{
 		"type": "mod", "name": "widget", "description": "A widget activity", "features": "database, scheduled tasks",

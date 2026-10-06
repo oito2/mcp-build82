@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,8 +27,10 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
+// ExplainSection selects which part of a plugin explain_plugin returns.
 type ExplainSection string
 
+// Supported values of ExplainSection.
 const (
 	SectionAll      ExplainSection = "all"
 	SectionOverview ExplainSection = "overview"
@@ -39,11 +41,13 @@ const (
 	SectionFlow     ExplainSection = "flow"
 )
 
+// ExplainPluginInput is the input of the explain_plugin tool.
 type ExplainPluginInput struct {
 	Plugin  string         `json:"plugin" jsonschema:"Component, relative path, or absolute path"`
 	Section ExplainSection `json:"section,omitempty" jsonschema:"'all' (default), 'overview', 'database', 'events', 'classes', 'services', or 'flow'"`
 }
 
+// RegisterExplainTool registers the explain_plugin tool on `server`.
 func RegisterExplainTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "explain_plugin",
@@ -53,10 +57,9 @@ func RegisterExplainTool(server *mcp.Server) {
 	}, withRecover(handleExplainPlugin))
 }
 
-// validExplainSections is the set of ExplainSection values handleExplainPlugin recognizes.
-// Anything else (most often a typo, e.g. "overiew") is rejected up front rather than silently
-// falling through every `if in.Section == SectionXxx` check below and producing a response
-// truncated to just "Overview" + "Key Files Present" with no indication anything was wrong.
+// validExplainSections is the set of ExplainSection values handleExplainPlugin accepts. Any other
+// value (most often a typo) is rejected up front, since it would otherwise match none of the
+// section checks and silently produce a truncated response.
 var validExplainSections = map[ExplainSection]bool{
 	SectionAll:      true,
 	SectionOverview: true,
@@ -67,6 +70,10 @@ var validExplainSections = map[ExplainSection]bool{
 	SectionFlow:     true,
 }
 
+// handleExplainPlugin returns a compact explanation of the plugin `in.Plugin`, limited to
+// `in.Section` (default "all"). For "all" it returns the cached PLUGIN_AI_CONTEXT.md when present
+// and otherwise builds the sections from the plugin source. It returns an error result for an
+// unknown section, a missing configuration, or an invalid plugin; the error return is always nil.
 func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in ExplainPluginInput) (*mcp.CallToolResult, struct{}, error) {
 	if in.Section == "" {
 		in.Section = SectionAll
@@ -90,7 +97,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 		return errResult, struct{}{}, nil
 	}
 
-	// Fast path: section=all + cached PLUGIN_AI_CONTEXT.md exists.
+	// Fast path: for section "all", reuse the cached PLUGIN_AI_CONTEXT.md when it exists.
 	if in.Section == SectionAll {
 		if content := readPluginFileTruncated(rp.Path, "PLUGIN_AI_CONTEXT.md", 1<<20); content != "" {
 			return textResult(false, content), struct{}{}, nil
@@ -99,7 +106,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 
 	var b strings.Builder
 
-	// Overview (metadata + key files).
+	// Overview: metadata table and key files.
 	fmt.Fprintf(&b, "# %s\n\n| Field | Value |\n|---|---|\n| Type | %s |\n| Version | %s |\n"+
 		"| Requires | %s |\n| Display name | %s |\n| Path | %s |\n\n",
 		rp.Info.Component, rp.Info.Type, rp.Info.Version, rp.Info.Requires, rp.Info.DisplayName,

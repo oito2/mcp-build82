@@ -170,7 +170,11 @@ O resultado é uma regeneração real: as saídas forçadas são reescritas mesm
 
 ## Interação com o modo watch
 
-O `internal/watcher` usa `fsnotify` para monitorar os arquivos-fonte de plugin listados acima (os que existem) em todo plugin marcado `.indevelopment`, até 20 plugins. Quando um arquivo correspondente é salvo:
+O `internal/watcher` usa `fsnotify` para monitorar os arquivos-fonte de plugin listados acima (os que existem) em todo plugin marcado `.indevelopment`, até 20 plugins.
+
+O watcher registra no `fsnotify` os diretórios pais desses arquivos e filtra os eventos para os arquivos monitorados, de modo que editores que salvam via arquivo temporário e renomeação continuam sendo observados. Uma mudança que chega enquanto o mesmo plugin está sendo regenerado dispara mais uma regeneração depois.
+
+Quando um arquivo correspondente é salvo:
 
 1. O timer de debounce de 500 ms do watcher dispara depois que a mudança se assenta
 2. Ele chama `cache.Global.Invalidate(...)` para cada um dos 12 arquivos de saída do plugin, o que força a regeneração independentemente dos mtimes

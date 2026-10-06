@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,9 +25,8 @@ import (
 	"testing"
 )
 
-// findDeprecatedApiUsageUncached reproduces FindDeprecatedApiUsage with a fresh
-// regexp.MustCompile of the whole alternation on every call, as a benchmark baseline.
-// FindDeprecatedApiUsage itself resolves the pattern via phparray.CachedPattern.
+// findDeprecatedApiUsageUncached behaves like FindDeprecatedApiUsage but compiles the whole
+// alternation pattern on every call; it is the baseline for the cached variant's benchmark.
 func findDeprecatedApiUsageUncached(pluginPath string, deprecated map[string]struct{}) []DeprecatedCall {
 	if len(deprecated) == 0 {
 		return nil
@@ -47,9 +46,8 @@ func findDeprecatedApiUsageUncached(pluginPath string, deprecated map[string]str
 	return calls
 }
 
-// benchDeprecatedNames stands in for the core deprecated-API index, which runs into the
-// hundreds of function names — the case where recompiling the alternation on every call is most
-// expensive.
+// benchDeprecatedNames returns a set of about 300 deprecated function names, the size at which
+// recompiling the alternation pattern is most costly.
 func benchDeprecatedNames() map[string]struct{} {
 	deprecated := make(map[string]struct{}, 300)
 	for i := 0; i < 300; i++ {
@@ -59,6 +57,8 @@ func benchDeprecatedNames() map[string]struct{} {
 	return deprecated
 }
 
+// benchDeprecatedPluginDir creates a temporary plugin directory containing one lib.php with a bare
+// and a method call of a deprecated function, and returns its path.
 func benchDeprecatedPluginDir(b *testing.B) string {
 	b.Helper()
 	dir := b.TempDir()
@@ -74,9 +74,8 @@ function local_bench_helper() {
 	return dir
 }
 
-// BenchmarkFindDeprecatedApiUsage_Uncached is the baseline: recompiling the ~300-name alternation
-// from scratch on every call, as auditing an installation with many plugins would do once per
-// plugin against the same core deprecated-API set.
+// BenchmarkFindDeprecatedApiUsage_Uncached measures the scan when the pattern is recompiled on
+// every call.
 func BenchmarkFindDeprecatedApiUsage_Uncached(b *testing.B) {
 	dir := benchDeprecatedPluginDir(b)
 	deprecated := benchDeprecatedNames()
@@ -86,10 +85,8 @@ func BenchmarkFindDeprecatedApiUsage_Uncached(b *testing.B) {
 	}
 }
 
-// BenchmarkFindDeprecatedApiUsage_Cached measures FindDeprecatedApiUsage, which resolves the
-// alternation pattern through phparray.CachedPattern, keyed by the assembled pattern string, so
-// repeated calls with the same deprecated set reuse the cached *regexp.Regexp instead of
-// recompiling it.
+// BenchmarkFindDeprecatedApiUsage_Cached measures FindDeprecatedApiUsage, which reuses the cached
+// compiled pattern across calls with the same deprecated set.
 func BenchmarkFindDeprecatedApiUsage_Cached(b *testing.B) {
 	dir := benchDeprecatedPluginDir(b)
 	deprecated := benchDeprecatedNames()

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,7 +30,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// HTTPServerOptions configures StartHTTPServer.
+// HTTPServerOptions configures StartHTTPServer. Port and Host give the TCP bind address. Token
+// is the required Bearer token, and an empty value disables authentication. AllowedHosts lists
+// extra Host header values to accept beyond the loopback names and Host. ServerFactory builds the
+// MCP server for each new session.
 type HTTPServerOptions struct {
 	Port          int
 	Host          string
@@ -39,13 +42,18 @@ type HTTPServerOptions struct {
 	ServerFactory func() (*mcp.Server, error)
 }
 
-// StartHTTPServer wires the Streamable HTTP and SSE MCP transports behind host-validation and
-// Bearer-auth middleware, plus an unauthenticated /health endpoint, and starts listening. Returns
-// a shutdown function.
+// StartHTTPServer serves the Streamable HTTP transport at /mcp and the SSE transport at /sse
+// (both behind Bearer-auth middleware when `opts.Token` is set), plus an unauthenticated /health
+// endpoint, with Host header validation applied in front of the routes. The listener is bound
+// before the function returns, and requests are served in a background goroutine whose lifetime
+// is tied to `ctx` through the request base context.
 //
-// The Go SDK's mcp.NewStreamableHTTPHandler/mcp.NewSSEHandler both implement http.Handler and
-// manage sessions internally, so no session-map bookkeeping is needed here. NewSSEHandler also
-// handles requests to the message endpoints, so no separate /messages route is registered.
+// It returns a shutdown function that gracefully stops the server, bounded by the context passed
+// to it. It returns an error when the address cannot be bound. A warning is printed to stderr
+// when authentication is disabled.
+//
+// The SDK handlers manage sessions internally, and the SSE handler also serves its message
+// endpoint, so no session bookkeeping or separate /messages route is needed here.
 func StartHTTPServer(ctx context.Context, opts HTTPServerOptions) (func(context.Context) error, error) {
 	warnIfInsecure(os.Stderr, opts.Token, opts.Host)
 
@@ -70,9 +78,8 @@ func StartHTTPServer(ctx context.Context, opts HTTPServerOptions) (func(context.
 
 	handler := withHostValidation(opts.AllowedHosts, opts.Host, mux)
 
-	// The bind (net.Listen) happens synchronously, before this function returns, so a port
-	// already in use or a permission error is reported to the caller as a real error
-	// instead of only surfacing inside the background goroutine below.
+	// Binding synchronously reports a port in use or a permission error to the caller instead of
+	// only logging it from the background goroutine.
 	addr := fmt.Sprintf("%s:%d", opts.Host, opts.Port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -93,40 +100,31 @@ func StartHTTPServer(ctx context.Context, opts HTTPServerOptions) (func(context.
 	return srv.Shutdown, nil
 }
 
-// newHTTPServer builds the *http.Server used by StartHTTPServer, without binding a socket.
+// newHTTPServer builds the http.Server used by StartHTTPServer for `addr` and `handler`, without
+// binding a socket. Request contexts derive from `ctx`.
 //
-// ReadHeaderTimeout and IdleTimeout are set to defend against Slowloris-style attacks, where
-// a client opens a connection and trickles bytes slowly enough to tie up a goroutine/file descriptor
-// indefinitely:
-//   - ReadHeaderTimeout bounds how long the server will wait for a client to finish sending request
-//     headers. 10s is generous for any legitimate client (including the SSE/Streamable HTTP clients
-//     this server also serves) but rules out an indefinite trickle.
-//   - IdleTimeout bounds how long a keep-alive connection may sit between requests before it's
-//     closed. 120s comfortably covers normal client reuse without holding sockets open forever.
+// ReadHeaderTimeout and IdleTimeout guard against slow-client attacks that hold connections open:
+//   - ReadHeaderTimeout (10s) bounds how long a client may take to send the request headers.
+//   - IdleTimeout (120s) bounds how long a keep-alive connection may wait between requests.
 //
-// WriteTimeout is deliberately NOT set. net/http applies WriteTimeout as a deadline covering the
-// entire connection lifetime starting at the first byte read (it's reset per-connection, not
-// per-request), and this server's /sse and /mcp (Streamable HTTP) endpoints intentionally hold
-// connections open far longer than any reasonable fixed value. A fixed WriteTimeout would
-// eventually sever those streams. Graceful shutdown (srv.Shutdown) plus the caller's own
-// shutdown-timeout context bounds how long any connection can be kept.
+// WriteTimeout is deliberately not set. It is a deadline on the whole response, and the /sse and
+// /mcp endpoints keep streams open for long periods, so a fixed value would sever them. Graceful
+// shutdown with a caller-supplied timeout bounds connection lifetime instead.
 func newHTTPServer(ctx context.Context, addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:    addr,
 		Handler: handler,
-		// Ties request contexts to the caller's ctx (typically cancelled on SIGINT/SIGTERM via
-		// signal.NotifyContext) so handlers that watch ctx.Done() can unwind promptly, helping the
-		// graceful Shutdown below actually make progress against long-lived SSE/Streamable
-		// HTTP connections instead of only relying on the shutdown timeout to force them closed.
+		// Request contexts derive from the caller's ctx, so cancelling it lets handlers that watch
+		// ctx.Done() unwind and long-lived streams end during graceful shutdown.
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 }
 
-// isLoopbackHost reports whether host is a loopback address that only accepts connections from the
-// local machine — used by warnIfInsecure to decide whether running --http without a token
-// is a purely local convenience or an actual network exposure.
+// isLoopbackHost reports whether `host` is one of the literal loopback names ("127.0.0.1",
+// "localhost" or "::1", case-insensitive) that only accept local connections. warnIfInsecure
+// uses it to tell a local-only setup from network exposure.
 func isLoopbackHost(host string) bool {
 	switch strings.ToLower(host) {
 	case "127.0.0.1", "localhost", "::1":
@@ -135,10 +133,9 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// warnIfInsecure prints an operator-facing warning to w when --http would run with authentication
-// disabled: the registered MCP tools include operations that write to the Moodle disk and run
-// builds/zips, so an unauthenticated /mcp and /sse is an attack surface, especially when host
-// isn't loopback-only.
+// warnIfInsecure writes a warning to `w` when `token` is empty, meaning /mcp and /sse are
+// unauthenticated. An additional warning is written when `host` is not loopback, since the
+// exposed tools can write to disk and run builds. It writes nothing when a token is set.
 func warnIfInsecure(w io.Writer, token, host string) {
 	if token != "" {
 		return
@@ -149,19 +146,21 @@ func warnIfInsecure(w io.Writer, token, host string) {
 	}
 }
 
-// writeJSON writes body as a JSON response with the given status code, setting the
-// Content-Type header first. Used by every handler/middleware in this file that produces a JSON
-// body: healthHandler, notFoundHandler, withAuth, and withHostValidation.
+// writeJSON writes `body` as a JSON response with HTTP status `status` and a JSON Content-Type.
+// Encoding errors are ignored. Every handler and middleware in this file uses it for its
+// responses.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// healthHandler answers with 200 and {"status":"ok"}.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// notFoundHandler answers unmatched routes with 404 and a JSON body listing the valid endpoints.
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]any{
 		"error":     "Not Found",
@@ -169,7 +168,9 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// withAuth requires a Bearer token, timing-safe compared, unless token is empty (auth disabled).
+// withAuth wraps `next` so that requests must carry an "Authorization: Bearer <token>" header
+// matching `token`, compared in constant time. Other requests receive a 401 JSON response. When
+// `token` is empty, authentication is disabled and `next` is returned unchanged.
 func withAuth(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next
@@ -192,9 +193,10 @@ func withAuth(token string, next http.Handler) http.Handler {
 	})
 }
 
-// withHostValidation is DNS-rebinding protection: allow-lists localhost, 127.0.0.1, ::1, the bind
-// host, and any --allowed-host values. StartHTTPServer wraps every route, including /health, with
-// it.
+// withHostValidation wraps `next` with DNS-rebinding protection. It accepts requests whose Host
+// header (port ignored, case-insensitive) is localhost, 127.0.0.1, ::1, `bindHost` or one of
+// `allowedHosts`, and answers others with a 403 JSON response. The /health path is exempt from
+// the check.
 func withHostValidation(allowedHosts []string, bindHost string, next http.Handler) http.Handler {
 	allowed := map[string]struct{}{
 		"localhost": {}, "127.0.0.1": {}, "::1": {},
@@ -223,12 +225,13 @@ func withHostValidation(allowedHosts []string, bindHost string, next http.Handle
 	})
 }
 
-// hostWithoutPort strips a trailing ":port" from an HTTP Host header, correctly handling bracketed
-// IPv6 literals (e.g. "[::1]:8080" -> "::1"), whose addresses contain colons themselves.
+// hostWithoutPort returns `host`, an HTTP Host header value, without its ":port" suffix. Bracketed
+// IPv6 literals are handled (for example "[::1]:8080" becomes "::1"), and surrounding brackets
+// are removed when no port is present.
 func hostWithoutPort(host string) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
 	}
-	// No port present (SplitHostPort failed) — the host header had no ":port" suffix at all.
+	// SplitHostPort fails when there is no port suffix.
 	return strings.Trim(host, "[]")
 }

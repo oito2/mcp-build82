@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@ import (
 // aliases it as ApiVisibility.
 type Visibility string
 
+// Visibility values, from most to least trusted API surface.
 const (
 	Public     Visibility = "public"
 	Deprecated Visibility = "deprecated"
@@ -51,10 +52,14 @@ type PhpDocBlock struct {
 	Internal      bool
 }
 
+// docLineStripPattern matches the leading whitespace and `*` (plus one optional space) of a
+// PHPDoc body line.
 var docLineStripPattern = regexp.MustCompile(`^\s*\*\s?`)
 
 // ParseDocBlock parses a raw PHPDoc block (including the /** and */ marker lines) into structured
-// fields.
+// fields. The summary is the leading prose joined into one line; @param, @return, @since,
+// @deprecated, @throws, @access and @internal tags populate the other fields, and Raw keeps the
+// unmodified input. It never fails: unrecognized content is ignored.
 func ParseDocBlock(raw string) PhpDocBlock {
 	rawLines := strings.Split(raw, "\n")
 	lines := make([]string, 0, len(rawLines))
@@ -64,6 +69,13 @@ func ParseDocBlock(raw string) PhpDocBlock {
 		// "*/" line's own "*" too, leaving a stray "/" that would be treated as summary/tag content.
 		if strings.TrimSpace(raw) == "/**" || strings.TrimSpace(raw) == "*/" {
 			continue
+		}
+		// Inline delimiters, as in a single-line "/** text */" block, are removed from the line itself.
+		if t := strings.TrimSpace(raw); strings.HasPrefix(t, "/**") {
+			raw = strings.TrimPrefix(t, "/**")
+		}
+		if t := strings.TrimSpace(raw); strings.HasSuffix(t, "*/") {
+			raw = strings.TrimSuffix(t, "*/")
 		}
 		l := strings.TrimSpace(docLineStripPattern.ReplaceAllString(raw, ""))
 		lines = append(lines, l)

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -80,6 +80,7 @@ func stubCommands(t *testing.T, respond func(c recordedCall) error) *[]recordedC
 	return &calls
 }
 
+// mustTarget returns the target with the given ID, failing the test when it is missing.
 func mustTarget(t *testing.T, id string) target {
 	t.Helper()
 	tg, ok, err := targetByID(id)
@@ -89,6 +90,25 @@ func mustTarget(t *testing.T, id string) target {
 	return tg
 }
 
+// mustWriteFile writes `data` to `path` with mode `perm`, failing the test on error.
+func mustWriteFile(t *testing.T, path string, data []byte, perm os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, data, perm); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mustReadFile returns the content of `path`, failing the test on error.
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+// mustMkdir creates `dir` and its parents, failing the test on error.
 func mustMkdir(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -96,6 +116,7 @@ func mustMkdir(t *testing.T, dir string) {
 	}
 }
 
+// readEntry returns the build82 entry stored under `topKey` in the JSON file at `path`, failing the test when it cannot be read.
 func readEntry(t *testing.T, path, topKey string) map[string]any {
 	t.Helper()
 	content, err := os.ReadFile(path)
@@ -132,6 +153,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 // --- claude -------------------------------------------------------------------------------------
 
+// TestClaude_InstallUsesUserScope verifies the `claude mcp add` command registers build82 in user scope.
 func TestClaude_InstallUsesUserScope(t *testing.T) {
 	fakeHome(t, "linux")
 	calls := fakeClaude(t, nil)
@@ -153,6 +175,7 @@ func TestClaude_InstallUsesUserScope(t *testing.T) {
 	}
 }
 
+// TestClaude_UninstallRemovesFromUserScope verifies that uninstall removes the user-scope registration.
 func TestClaude_UninstallRemovesFromUserScope(t *testing.T) {
 	fakeHome(t, "linux")
 	calls := fakeClaude(t, map[string]bool{scopeUser: true})
@@ -168,6 +191,7 @@ func TestClaude_UninstallRemovesFromUserScope(t *testing.T) {
 
 // --- claude-desktop -----------------------------------------------------------------------------
 
+// TestClaudeDesktop_PathsPerOS verifies the Claude Desktop config path for each operating system.
 func TestClaudeDesktop_PathsPerOS(t *testing.T) {
 	home := fakeHome(t, "darwin")
 	tg := mustTarget(t, "claude-desktop")
@@ -200,6 +224,7 @@ func TestClaudeDesktop_PathsPerOS(t *testing.T) {
 	}
 }
 
+// TestClaudeDesktop_LinuxDetectInstallUninstall verifies detection, install and uninstall for Claude Desktop on Linux, preserving existing settings and file mode.
 func TestClaudeDesktop_LinuxDetectInstallUninstall(t *testing.T) {
 	home := fakeHome(t, "linux")
 	noCLIsOnPath(t)
@@ -215,7 +240,7 @@ func TestClaudeDesktop_LinuxDetectInstallUninstall(t *testing.T) {
 	path := filepath.Join(dir, "claude_desktop_config.json")
 	// Shape written by Claude Desktop on Linux before any MCP server is configured: only
 	// top-level preferences, no mcpServers object, mode 0600.
-	os.WriteFile(path, []byte(`{"preferences":{"sidebarMode":"chat"},"coworkUserFilesPath":"/tmp/x"}`), 0o600)
+	mustWriteFile(t, path, []byte(`{"preferences":{"sidebarMode":"chat"},"coworkUserFilesPath":"/tmp/x"}`), 0o600)
 	if !detectTarget(tg) {
 		t.Fatal("expected detection once ~/.config/Claude exists")
 	}
@@ -226,7 +251,7 @@ func TestClaudeDesktop_LinuxDetectInstallUninstall(t *testing.T) {
 	if entry["command"] != testBin || entry["env"].(map[string]any)["BUILD82_MOODLE_PATH"] != testMoodle {
 		t.Errorf("unexpected entry: %+v", entry)
 	}
-	content, _ := os.ReadFile(path)
+	content := mustReadFile(t, path)
 	if !strings.Contains(string(content), `"sidebarMode"`) || !strings.Contains(string(content), `"coworkUserFilesPath"`) {
 		t.Errorf("existing top-level keys must be preserved, got %s", content)
 	}
@@ -236,12 +261,13 @@ func TestClaudeDesktop_LinuxDetectInstallUninstall(t *testing.T) {
 	if removed, _, err := uninstallTarget(tg); err != nil || !removed {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
-	content, _ = os.ReadFile(path)
+	content = mustReadFile(t, path)
 	if strings.Contains(string(content), "build82") || !strings.Contains(string(content), "preferences") {
 		t.Errorf("expected only the build82 entry removed, got %s", content)
 	}
 }
 
+// TestClaudeDesktop_UnsupportedOnOtherOS verifies that Claude Desktop is reported as unsupported on other operating systems.
 func TestClaudeDesktop_UnsupportedOnOtherOS(t *testing.T) {
 	home := fakeHome(t, "freebsd")
 	mustMkdir(t, filepath.Join(home, ".config", "Claude"))
@@ -262,6 +288,7 @@ func TestClaudeDesktop_UnsupportedOnOtherOS(t *testing.T) {
 	}
 }
 
+// TestClaudeDesktop_DetectInstallUninstall verifies detection, install and uninstall for Claude Desktop.
 func TestClaudeDesktop_DetectInstallUninstall(t *testing.T) {
 	home := fakeHome(t, "darwin")
 	noCLIsOnPath(t)
@@ -272,7 +299,7 @@ func TestClaudeDesktop_DetectInstallUninstall(t *testing.T) {
 	dir := filepath.Join(home, "Library", "Application Support", "Claude")
 	mustMkdir(t, dir)
 	path := filepath.Join(dir, "claude_desktop_config.json")
-	os.WriteFile(path, []byte(`{"mcpServers":{"other":{"command":"/bin/other"}},"preferences":{"x":1}}`), 0o600)
+	mustWriteFile(t, path, []byte(`{"mcpServers":{"other":{"command":"/bin/other"}},"preferences":{"x":1}}`), 0o600)
 	if !detectTarget(tg) {
 		t.Fatal("expected detection once the config directory exists")
 	}
@@ -286,7 +313,7 @@ func TestClaudeDesktop_DetectInstallUninstall(t *testing.T) {
 	if removed, _, err := uninstallTarget(tg); err != nil || !removed {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
-	content, _ := os.ReadFile(path)
+	content := mustReadFile(t, path)
 	if strings.Contains(string(content), "build82") || !strings.Contains(string(content), "preferences") {
 		t.Errorf("expected only the build82 entry removed, got %s", content)
 	}
@@ -294,6 +321,7 @@ func TestClaudeDesktop_DetectInstallUninstall(t *testing.T) {
 
 // --- codex --------------------------------------------------------------------------------------
 
+// TestCodex_DelegatesToCLIAndWritesNoJSON verifies that Codex is configured through its CLI and no JSON file is written.
 func TestCodex_DelegatesToCLIAndWritesNoJSON(t *testing.T) {
 	home := fakeHome(t, "linux")
 	calls := fakeCodex(t, false)
@@ -325,6 +353,7 @@ func TestCodex_DelegatesToCLIAndWritesNoJSON(t *testing.T) {
 
 // --- antigravity --------------------------------------------------------------------------------
 
+// TestAntigravity_OfficialGlobalPathAndIDEDetection verifies the Antigravity config path and its detection by directory.
 func TestAntigravity_OfficialGlobalPathAndIDEDetection(t *testing.T) {
 	home := fakeHome(t, "linux")
 	noCLIsOnPath(t)
@@ -347,6 +376,7 @@ func TestAntigravity_OfficialGlobalPathAndIDEDetection(t *testing.T) {
 
 // --- opencode -----------------------------------------------------------------------------------
 
+// TestOpenCode_OfficialFileAndShape verifies the OpenCode config file and entry shape.
 func TestOpenCode_OfficialFileAndShape(t *testing.T) {
 	home := fakeHome(t, "linux")
 	tg := mustTarget(t, "opencode")
@@ -372,23 +402,25 @@ func TestOpenCode_OfficialFileAndShape(t *testing.T) {
 	}
 }
 
+// TestOpenCode_ReusesExistingJSONCFile verifies that an existing opencode.jsonc is used instead of creating opencode.json.
 func TestOpenCode_ReusesExistingJSONCFile(t *testing.T) {
 	home := fakeHome(t, "linux")
 	dir := filepath.Join(home, ".config", "opencode")
 	mustMkdir(t, dir)
 	jsonc := filepath.Join(dir, "opencode.jsonc")
-	os.WriteFile(jsonc, []byte(`{"$schema": "https://opencode.ai/config.json"}`), 0o644)
+	mustWriteFile(t, jsonc, []byte(`{"$schema": "https://opencode.ai/config.json"}`), 0o644)
 	if got := mustTarget(t, "opencode").InstallPaths(); !reflect.DeepEqual(got, []string{jsonc}) {
 		t.Errorf("paths = %v, want %v", got, jsonc)
 	}
 }
 
+// TestOpenCode_UninstallCleansLegacyConfigJSON verifies that uninstall also removes the entry from the legacy config.json.
 func TestOpenCode_UninstallCleansLegacyConfigJSON(t *testing.T) {
 	home := fakeHome(t, "linux")
 	dir := filepath.Join(home, ".config", "opencode")
 	mustMkdir(t, dir)
 	legacy := filepath.Join(dir, "config.json")
-	os.WriteFile(legacy, []byte(`{"mcp":{"build82":{"type":"local"},"other":{"type":"local"}}}`), 0o644)
+	mustWriteFile(t, legacy, []byte(`{"mcp":{"build82":{"type":"local"},"other":{"type":"local"}}}`), 0o644)
 	tg := mustTarget(t, "opencode")
 	if !hasEntry(tg) {
 		t.Fatal("expected the legacy entry to be found")
@@ -396,7 +428,7 @@ func TestOpenCode_UninstallCleansLegacyConfigJSON(t *testing.T) {
 	if removed, _, err := uninstallTarget(tg); err != nil || !removed {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
-	content, _ := os.ReadFile(legacy)
+	content := mustReadFile(t, legacy)
 	if strings.Contains(string(content), "build82") || !strings.Contains(string(content), "other") {
 		t.Errorf("unexpected legacy file after uninstall: %s", content)
 	}
@@ -404,6 +436,7 @@ func TestOpenCode_UninstallCleansLegacyConfigJSON(t *testing.T) {
 
 // --- cursor -------------------------------------------------------------------------------------
 
+// TestCursor_EntryDeclaresStdioType verifies that the Cursor entry declares the stdio type.
 func TestCursor_EntryDeclaresStdioType(t *testing.T) {
 	home := fakeHome(t, "linux")
 	tg := mustTarget(t, "cursor")
@@ -418,6 +451,7 @@ func TestCursor_EntryDeclaresStdioType(t *testing.T) {
 
 // --- zed ----------------------------------------------------------------------------------------
 
+// TestZed_EntryMatchesDocumentedShape verifies the entry written under context_servers for Zed.
 func TestZed_EntryMatchesDocumentedShape(t *testing.T) {
 	home := fakeHome(t, "linux")
 	tg := mustTarget(t, "zed")
@@ -434,6 +468,7 @@ func TestZed_EntryMatchesDocumentedShape(t *testing.T) {
 	}
 }
 
+// TestZed_WindowsPath verifies the Zed settings path on Windows.
 func TestZed_WindowsPath(t *testing.T) {
 	home := fakeHome(t, "windows")
 	want := filepath.Join(home, "AppData", "Roaming", "Zed", "settings.json")
@@ -452,12 +487,13 @@ const zedSettingsWithComments = `// Zed settings
 }
 `
 
+// TestZed_JSONCSettingsAreReadButNeverRewritten verifies that a settings file with comments is parsed but left unchanged, with an error showing the snippet to add.
 func TestZed_JSONCSettingsAreReadButNeverRewritten(t *testing.T) {
 	home := fakeHome(t, "linux")
 	dir := filepath.Join(home, ".config", "zed")
 	mustMkdir(t, dir)
 	path := filepath.Join(dir, "settings.json")
-	os.WriteFile(path, []byte(zedSettingsWithComments), 0o644)
+	mustWriteFile(t, path, []byte(zedSettingsWithComments), 0o644)
 	tg := mustTarget(t, "zed")
 
 	if !hasEntry(tg) {
@@ -470,12 +506,13 @@ func TestZed_JSONCSettingsAreReadButNeverRewritten(t *testing.T) {
 	if _, _, err := uninstallTarget(tg); err == nil {
 		t.Error("expected uninstall to refuse rewriting a commented settings.json")
 	}
-	content, _ := os.ReadFile(path)
+	content := mustReadFile(t, path)
 	if string(content) != zedSettingsWithComments {
 		t.Errorf("settings.json must be left byte-for-byte unchanged, got:\n%s", content)
 	}
 }
 
+// TestStripJSONC_KeepsStringsIntact verifies that comment- and comma-like text inside strings survives stripping.
 func TestStripJSONC_KeepsStringsIntact(t *testing.T) {
 	src := `{"url": "http://x//y", "s": "a,}" /* c */, "arr": [1, 2,], // tail
 }`
@@ -490,6 +527,7 @@ func TestStripJSONC_KeepsStringsIntact(t *testing.T) {
 
 // --- cline --------------------------------------------------------------------------------------
 
+// TestCline_InstallsIntoEveryDetectedLocation verifies that Cline is configured in both the VS Code extension and CLI locations that exist.
 func TestCline_InstallsIntoEveryDetectedLocation(t *testing.T) {
 	home := fakeHome(t, "linux")
 	noCLIsOnPath(t)
@@ -523,6 +561,7 @@ func TestCline_InstallsIntoEveryDetectedLocation(t *testing.T) {
 
 // --- uninstall reporting ------------------------------------------------------------------------
 
+// TestUninstall_ReportsNotRegisteredWhenNothingWasRemoved verifies the "not registered" report for a file target with no entry.
 func TestUninstall_ReportsNotRegisteredWhenNothingWasRemoved(t *testing.T) {
 	fakeHome(t, "linux")
 	out := captureStdout(t, func() {
@@ -535,6 +574,7 @@ func TestUninstall_ReportsNotRegisteredWhenNothingWasRemoved(t *testing.T) {
 	}
 }
 
+// TestUninstall_CLITargetNotRegistered verifies the "not registered" report for a CLI target with no registration.
 func TestUninstall_CLITargetNotRegistered(t *testing.T) {
 	fakeHome(t, "linux")
 	prev := lookPath

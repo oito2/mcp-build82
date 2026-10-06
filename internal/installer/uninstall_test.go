@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
+// TestHasEntry_FileTarget verifies that hasEntry detects a build82 entry in a file target.
 func TestHasEntry_FileTarget(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
@@ -44,6 +45,7 @@ func TestHasEntry_FileTarget(t *testing.T) {
 	}
 }
 
+// TestRemoveEntryFile_NeverCreatesMissingConfig verifies that removing from a missing file does not create it.
 func TestRemoveEntryFile_NeverCreatesMissingConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
@@ -57,10 +59,11 @@ func TestRemoveEntryFile_NeverCreatesMissingConfig(t *testing.T) {
 	}
 }
 
+// TestRemoveEntryFile_RemovesOnlyOwnKeyPreservesRest verifies that only the build82 key is deleted from a config file.
 func TestRemoveEntryFile_RemovesOnlyOwnKeyPreservesRest(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
-	os.WriteFile(path, []byte(`{"mcpServers":{"existing":{"command":"/bin/existing"},"build82":{"command":"/bin/build82"}},"unrelatedTopLevelKey":"keep-me"}`), 0o644)
+	mustWriteFile(t, path, []byte(`{"mcpServers":{"existing":{"command":"/bin/existing"},"build82":{"command":"/bin/build82"}},"unrelatedTopLevelKey":"keep-me"}`), 0o644)
 
 	tg := target{ID: "cursor", InstallPaths: fixedPaths(path), Shape: shapeMcpServers}
 	if _, err := removeEntryFile(path, tg.Shape); err != nil {
@@ -68,8 +71,10 @@ func TestRemoveEntryFile_RemovesOnlyOwnKeyPreservesRest(t *testing.T) {
 	}
 
 	var parsed map[string]any
-	content, _ := os.ReadFile(path)
-	json.Unmarshal(content, &parsed)
+	content := mustReadFile(t, path)
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatal(err)
+	}
 
 	if parsed["unrelatedTopLevelKey"] != "keep-me" {
 		t.Error("expected unrelated top-level keys to survive")
@@ -83,6 +88,7 @@ func TestRemoveEntryFile_RemovesOnlyOwnKeyPreservesRest(t *testing.T) {
 	}
 }
 
+// TestUninstall_FileTarget_RoundTripsWithInstall verifies that uninstall undoes an install for a file target.
 func TestUninstall_FileTarget_RoundTripsWithInstall(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
@@ -102,21 +108,22 @@ func TestUninstall_FileTarget_RoundTripsWithInstall(t *testing.T) {
 	}
 }
 
+// TestPurgeCandidates_OnlyListsFilesThatExist verifies that purge candidates include only existing generated files.
 func TestPurgeCandidates_OnlyListsFilesThatExist(t *testing.T) {
 	moodleRoot := t.TempDir()
 
 	// Create only 2 of the 13 global files.
-	os.MkdirAll(filepath.Join(moodleRoot, generators.ContextDir), 0o755)
-	os.WriteFile(filepath.Join(moodleRoot, generators.ContextDir, "AI_CONTEXT.md"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(moodleRoot, generators.ContextDir, "MOODLE_API_INDEX.md"), []byte("x"), 0o644)
+	mustMkdir(t, filepath.Join(moodleRoot, generators.ContextDir))
+	mustWriteFile(t, filepath.Join(moodleRoot, generators.ContextDir, "AI_CONTEXT.md"), []byte("x"), 0o644)
+	mustWriteFile(t, filepath.Join(moodleRoot, generators.ContextDir, "MOODLE_API_INDEX.md"), []byte("x"), 0o644)
 	// A file NOT in the tracked list must never be picked up.
-	os.WriteFile(filepath.Join(moodleRoot, generators.ContextDir, ".cache.json"), []byte("{}"), 0o644)
+	mustWriteFile(t, filepath.Join(moodleRoot, generators.ContextDir, ".cache.json"), []byte("{}"), 0o644)
 
 	// One dev-marked plugin with 1 of its 11 files present.
 	pluginDir := filepath.Join(moodleRoot, "local", "demo")
-	os.MkdirAll(filepath.Join(pluginDir, generators.ContextDir), 0o755)
-	os.WriteFile(filepath.Join(pluginDir, generators.ContextDir, ".indevelopment"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(pluginDir, generators.ContextDir, "PLUGIN_CONTEXT.md"), []byte("x"), 0o644)
+	mustMkdir(t, filepath.Join(pluginDir, generators.ContextDir))
+	mustWriteFile(t, filepath.Join(pluginDir, generators.ContextDir, ".indevelopment"), []byte("x"), 0o644)
+	mustWriteFile(t, filepath.Join(pluginDir, generators.ContextDir, "PLUGIN_CONTEXT.md"), []byte("x"), 0o644)
 
 	cfg := &config.Config{MoodlePath: moodleRoot}
 	_, files, err := purgeCandidates(cfg)
@@ -146,11 +153,12 @@ func TestPurgeCandidates_HomeDirUnresolvableReturnsError(t *testing.T) {
 	}
 }
 
+// TestRunPurge_RequiresConfirmation verifies that purge deletes nothing unless the answer is "y".
 func TestRunPurge_RequiresConfirmation(t *testing.T) {
 	moodleRoot := t.TempDir()
-	os.MkdirAll(filepath.Join(moodleRoot, generators.ContextDir), 0o755)
+	mustMkdir(t, filepath.Join(moodleRoot, generators.ContextDir))
 	targetFile := filepath.Join(moodleRoot, generators.ContextDir, "AI_CONTEXT.md")
-	os.WriteFile(targetFile, []byte("x"), 0o644)
+	mustWriteFile(t, targetFile, []byte("x"), 0o644)
 
 	cfg := &config.Config{MoodlePath: moodleRoot}
 

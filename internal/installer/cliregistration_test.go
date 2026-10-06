@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -124,6 +124,8 @@ func fakeCodex(t *testing.T, registered bool) *[]recordedCall {
 	})
 }
 
+// fakeCLI replaces runCommand with `respond`, records every call it receives and returns the
+// recorded calls; the original runner is restored when the test ends.
 func fakeCLI(t *testing.T, respond func(c recordedCall) (string, error)) *[]recordedCall {
 	t.Helper()
 	var calls []recordedCall
@@ -138,6 +140,7 @@ func fakeCLI(t *testing.T, respond func(c recordedCall) (string, error)) *[]reco
 	return &calls
 }
 
+// claudeOnPath makes every PATH lookup succeed, so CLI-based targets are detected.
 func claudeOnPath(t *testing.T) {
 	t.Helper()
 	prev := lookPath
@@ -145,6 +148,7 @@ func claudeOnPath(t *testing.T) {
 	t.Cleanup(func() { lookPath = prev })
 }
 
+// containsCall reports whether `calls` includes a call deeply equal to `want`.
 func containsCall(calls []recordedCall, want recordedCall) bool {
 	for _, c := range calls {
 		if reflect.DeepEqual(c, want) {
@@ -154,12 +158,14 @@ func containsCall(calls []recordedCall, want recordedCall) bool {
 	return false
 }
 
+// claudeRemove returns the `claude mcp remove` call expected for `scope`.
 func claudeRemove(scope string) recordedCall {
 	return recordedCall{Name: "claude", Args: []string{"mcp", "remove", "--scope", scope, "build82"}}
 }
 
 // --- scope parsing -------------------------------------------------------------------------------
 
+// TestClaudeScope_ParsesGetOutput verifies that claudeScope extracts the scope from `claude mcp get` output.
 func TestClaudeScope_ParsesGetOutput(t *testing.T) {
 	cases := map[string]string{
 		claudeGetUser:    scopeUser,
@@ -182,6 +188,7 @@ func TestClaudeScope_ParsesGetOutput(t *testing.T) {
 
 // --- install replaces an existing registration ----------------------------------------------------
 
+// TestClaude_InstallReplacesExistingUserRegistration verifies that an existing user-scope registration is removed before it is added again.
 func TestClaude_InstallReplacesExistingUserRegistration(t *testing.T) {
 	fakeHome(t, "linux")
 	scopes := map[string]bool{scopeUser: true}
@@ -201,6 +208,7 @@ func TestClaude_InstallReplacesExistingUserRegistration(t *testing.T) {
 	}
 }
 
+// TestClaude_InstallReplacesLocalAndUserRegistrations verifies that both local and user registrations are removed on install.
 func TestClaude_InstallReplacesLocalAndUserRegistrations(t *testing.T) {
 	fakeHome(t, "linux")
 	scopes := map[string]bool{scopeLocal: true, scopeUser: true}
@@ -219,6 +227,7 @@ func TestClaude_InstallReplacesLocalAndUserRegistrations(t *testing.T) {
 	}
 }
 
+// TestClaude_InstallKeepsProjectRegistrationAndWarns verifies that a project-scope registration is left in place with a warning.
 func TestClaude_InstallKeepsProjectRegistrationAndWarns(t *testing.T) {
 	fakeHome(t, "linux")
 	scopes := map[string]bool{scopeProject: true, scopeUser: true}
@@ -238,6 +247,7 @@ func TestClaude_InstallKeepsProjectRegistrationAndWarns(t *testing.T) {
 	}
 }
 
+// TestClaude_InstallWithOnlyProjectRegistrationAddsUserScope verifies that install still adds the user-scope registration when only a project one exists.
 func TestClaude_InstallWithOnlyProjectRegistrationAddsUserScope(t *testing.T) {
 	fakeHome(t, "linux")
 	scopes := map[string]bool{scopeProject: true}
@@ -251,6 +261,7 @@ func TestClaude_InstallWithOnlyProjectRegistrationAddsUserScope(t *testing.T) {
 	}
 }
 
+// TestClaude_UnknownScopeFailsWithoutChanges verifies that an undeterminable scope fails the install without modifying anything.
 func TestClaude_UnknownScopeFailsWithoutChanges(t *testing.T) {
 	fakeHome(t, "linux")
 	calls := fakeCLI(t, func(c recordedCall) (string, error) {
@@ -267,19 +278,18 @@ func TestClaude_UnknownScopeFailsWithoutChanges(t *testing.T) {
 	}
 }
 
+// TestClaude_RunPrintsUpdated verifies that Run reports "updated" when it replaced an existing Claude Code registration.
 func TestClaude_RunPrintsUpdated(t *testing.T) {
 	fakeHome(t, "linux")
 	claudeOnPath(t)
 	fakeClaude(t, map[string]bool{scopeUser: true})
 	moodle := t.TempDir()
 	for _, f := range []string{"version.php", "config-dist.php"} {
-		os.WriteFile(filepath.Join(moodle, f), []byte("<?php\n"), 0o644)
+		mustWriteFile(t, filepath.Join(moodle, f), []byte("<?php\n"), 0o644)
 	}
 	mustMkdir(t, filepath.Join(moodle, "lib"))
 	withStdin(t, moodle+"\n")
-	prevWd, _ := os.Getwd()
-	os.Chdir(t.TempDir())
-	t.Cleanup(func() { os.Chdir(prevWd) })
+	t.Chdir(t.TempDir())
 
 	out := captureStdout(t, func() {
 		if err := Run("claude"); err != nil {
@@ -291,6 +301,7 @@ func TestClaude_RunPrintsUpdated(t *testing.T) {
 	}
 }
 
+// TestCodex_InstallReplacesExistingRegistration verifies that an existing Codex registration is removed before it is added again.
 func TestCodex_InstallReplacesExistingRegistration(t *testing.T) {
 	fakeHome(t, "linux")
 	calls := fakeCodex(t, true)
@@ -307,6 +318,7 @@ func TestCodex_InstallReplacesExistingRegistration(t *testing.T) {
 	}
 }
 
+// TestFileTarget_InstallReportsUpdatedOnlyWhenEntryExisted verifies that a file-based install reports a replacement only when a build82 entry already existed.
 func TestFileTarget_InstallReportsUpdatedOnlyWhenEntryExisted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	tg := target{ID: "cursor", InstallPaths: fixedPaths(path), Shape: shapeMcpServers}
@@ -320,6 +332,7 @@ func TestFileTarget_InstallReportsUpdatedOnlyWhenEntryExisted(t *testing.T) {
 
 // --- uninstall across Claude Code scopes -------------------------------------------------------------
 
+// TestClaude_UninstallRemovesLocalScope verifies that uninstall removes a local-scope registration.
 func TestClaude_UninstallRemovesLocalScope(t *testing.T) {
 	fakeHome(t, "linux")
 	scopes := map[string]bool{scopeLocal: true}
@@ -333,6 +346,7 @@ func TestClaude_UninstallRemovesLocalScope(t *testing.T) {
 	}
 }
 
+// TestClaude_UninstallRemovesEveryScopeButProject verifies that uninstall removes local and user registrations but not the project one.
 func TestClaude_UninstallRemovesEveryScopeButProject(t *testing.T) {
 	fakeHome(t, "linux")
 	scopes := map[string]bool{scopeLocal: true, scopeProject: true, scopeUser: true}
@@ -352,6 +366,7 @@ func TestClaude_UninstallRemovesEveryScopeButProject(t *testing.T) {
 	}
 }
 
+// TestClaude_UninstallProjectOnlyWarnsAndSucceeds verifies that uninstall with only a project registration warns and succeeds without removing it.
 func TestClaude_UninstallProjectOnlyWarnsAndSucceeds(t *testing.T) {
 	fakeHome(t, "linux")
 	claudeOnPath(t)
@@ -374,6 +389,7 @@ func TestClaude_UninstallProjectOnlyWarnsAndSucceeds(t *testing.T) {
 
 // --- Cline CLI data directory ---------------------------------------------------------------------
 
+// TestCline_HonorsClineDataDir verifies that CLINE_DATA_DIR relocates the Cline CLI settings file.
 func TestCline_HonorsClineDataDir(t *testing.T) {
 	home := fakeHome(t, "linux")
 	noCLIsOnPath(t)
@@ -416,7 +432,9 @@ func withStdin(t *testing.T, input string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.WriteString(input)
+	if _, err := w.WriteString(input); err != nil {
+		t.Fatal(err)
+	}
 	w.Close()
 	prev := os.Stdin
 	os.Stdin = r

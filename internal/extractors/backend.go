@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,9 +18,9 @@ package extractors
 import "os"
 
 // useTreesitter reports whether the opt-in tree-sitter-php backend (internal/extractors/tsbackend)
-// should be used instead of the default regex/bracket-depth backend. Checked fresh on every call,
-// not cached at package-init time, so tests can flip it with t.Setenv. Never auto-detected — the
-// regex backend stays the default for every value other than exactly "treesitter".
+// should be used instead of the default regex/bracket-depth backend. The environment variable
+// BUILD82_EXTRACTOR_BACKEND is read on every call rather than cached, so it can change at runtime.
+// The regex backend is used for every value other than exactly "treesitter".
 func useTreesitter() bool {
 	return os.Getenv("BUILD82_EXTRACTOR_BACKEND") == "treesitter"
 }

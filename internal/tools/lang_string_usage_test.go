@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -98,6 +98,7 @@ function local_test_render() {
 	}
 }
 
+// TestCheckLangStringUsage_NoDevPlugins verifies nil is returned when there are no dev plugins.
 func TestCheckLangStringUsage_NoDevPlugins(t *testing.T) {
 	if results := checkLangStringUsage(nil); results != nil {
 		t.Errorf("expected nil with no dev plugins, got %+v", results)

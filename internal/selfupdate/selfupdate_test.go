@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/version"
 )
 
+// TestAssetName verifies the asset filename for each OS and architecture.
 func TestAssetName(t *testing.T) {
 	tests := []struct {
 		goos, goarch, want string
@@ -47,6 +48,7 @@ func TestAssetName(t *testing.T) {
 	}
 }
 
+// TestIsNewer verifies version comparison, including dev builds and unparsable tags.
 func TestIsNewer(t *testing.T) {
 	tests := []struct {
 		name, current, latest string
@@ -60,6 +62,17 @@ func TestIsNewer(t *testing.T) {
 		{"dev build always outdated", "dev", "v0.1.0", true},
 		{"unparsable latest never triggers update", "v0.1.0", "not-a-version", false},
 		{"no v prefix on either side", "0.1.0", "0.2.0", true},
+		{"release newer than its rc", "v1.2.3-rc1", "v1.2.3", true},
+		{"rc not newer than release", "v1.2.3", "v1.2.3-rc1", false},
+		{"same rc", "v1.2.3-rc1", "v1.2.3-rc1", false},
+		{"rc2 newer than rc1", "v1.2.3-rc.1", "v1.2.3-rc.2", true},
+		{"numeric ids compare numerically", "v1.0.0-rc.2", "v1.0.0-rc.10", true},
+		{"alphanumeric above numeric", "v1.0.0-1", "v1.0.0-alpha", true},
+		{"alpha before beta", "v1.0.0-beta", "v1.0.0-alpha", false},
+		{"longer pre-release is newer", "v1.0.0-alpha", "v1.0.0-alpha.1", true},
+		{"build metadata ignored", "v1.0.0+a", "v1.0.0+b", false},
+		{"next patch rc newer than prior release", "v1.2.3", "v1.2.4-rc1", true},
+		{"empty pre-release id invalid", "v1.0.0", "v1.0.1-", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,6 +83,7 @@ func TestIsNewer(t *testing.T) {
 	}
 }
 
+// TestFetchLatestRelease_ReturnsRelease verifies that a 200 response is decoded into a Release.
 func TestFetchLatestRelease_ReturnsRelease(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/oito2/mcp-build82/releases/latest" {
@@ -173,12 +187,14 @@ func TestDownloadClient_HasLongerTimeoutThanMetadataClient(t *testing.T) {
 	}
 }
 
+// sha256Hex returns the hex-encoded SHA-256 digest of `data`.
 func sha256Hex(t *testing.T, data []byte) string {
 	t.Helper()
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
 }
 
+// TestVerifyChecksum_MatchAndMismatch verifies that a matching digest passes and a modified file is rejected.
 func TestVerifyChecksum_MatchAndMismatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "build82_linux_amd64")
@@ -202,10 +218,13 @@ func TestVerifyChecksum_MatchAndMismatch(t *testing.T) {
 	}
 }
 
+// TestVerifyChecksum_NoEntryForAsset verifies that a missing checksum entry is an error.
 func TestVerifyChecksum_NoEntryForAsset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bin")
-	os.WriteFile(path, []byte("x"), 0o755)
+	if err := os.WriteFile(path, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	err := VerifyChecksum("deadbeef  some-other-asset\n", "build82_linux_amd64", path)
 	if err == nil {
@@ -247,6 +266,7 @@ func main() {
 	return out
 }
 
+// TestSmokeTest_RealBinary verifies that SmokeTest returns the version printed by a working binary.
 func TestSmokeTest_RealBinary(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildFakeBinary(t, dir, "fake-good", "v9.9.9\n")
@@ -260,6 +280,7 @@ func TestSmokeTest_RealBinary(t *testing.T) {
 	}
 }
 
+// TestSmokeTest_FailingBinary verifies that SmokeTest fails for a binary that exits non-zero.
 func TestSmokeTest_FailingBinary(t *testing.T) {
 	dir := t.TempDir()
 	bin := buildFakeBinary(t, dir, "fake-bad", "")
@@ -330,7 +351,7 @@ func TestAtomicReplace_Success(t *testing.T) {
 	current := buildFakeBinary(t, dir, "build82", "v0.1.0\n")
 	newBin := buildFakeBinary(t, filepath.Join(dir, "staging"), "build82-new", "v0.2.0\n")
 
-	backupPath, err := AtomicReplace(current, newBin)
+	backupPath, err := AtomicReplace(current, newBin, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -360,7 +381,7 @@ func TestAtomicReplace_RefusesOnFailedSmokeTest(t *testing.T) {
 	current := buildFakeBinary(t, dir, "build82", "v0.1.0\n")
 	broken := buildFakeBinary(t, filepath.Join(dir, "staging"), "build82-broken", "") // exits 3, no output
 
-	_, err := AtomicReplace(current, broken)
+	_, err := AtomicReplace(current, broken, "")
 	if err == nil {
 		t.Fatal("expected an error from a failing smoke test")
 	}
@@ -407,7 +428,7 @@ func TestAtomicReplace_DoubleRenameFailureSurfacesBothErrors(t *testing.T) {
 		}
 	}
 
-	_, err := AtomicReplace(current, newBin)
+	_, err := AtomicReplace(current, newBin, "")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -446,7 +467,7 @@ func TestAtomicReplace_SingleRenameFailureStillRestoresSuccessfully(t *testing.T
 		return origRename(oldpath, newpath)
 	}
 
-	_, err := AtomicReplace(current, newBin)
+	_, err := AtomicReplace(current, newBin, "")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -495,6 +516,7 @@ func TestRun_EmptyAndStableChannelAreBothAccepted(t *testing.T) {
 	}
 }
 
+// TestRun_CheckReportsUpdateAvailable verifies that Run in check mode reports a newer release without downloading.
 func TestRun_CheckReportsUpdateAvailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -512,6 +534,7 @@ func TestRun_CheckReportsUpdateAvailable(t *testing.T) {
 	}
 }
 
+// TestRun_CheckAgainstEmptyReleaseList verifies that Run reports no releases when none exist.
 func TestRun_CheckAgainstEmptyReleaseList(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -527,6 +550,7 @@ func TestRun_CheckAgainstEmptyReleaseList(t *testing.T) {
 	}
 }
 
+// TestRun_AlreadyLatestSkipsDownload verifies that Run does not download when already on the latest version.
 func TestRun_AlreadyLatestSkipsDownload(t *testing.T) {
 	original := version.Current
 	version.Current = "v1.0.0"
@@ -752,5 +776,23 @@ func TestDownloadToTemp_WithinMaxSizeSucceeds(t *testing.T) {
 	content, readErr := os.ReadFile(path)
 	if readErr != nil || string(content) != "small body" {
 		t.Errorf("unexpected downloaded content: %q (err=%v)", content, readErr)
+	}
+}
+
+// TestAtomicReplace_RefusesWrongVersion verifies that a new binary reporting a version other than
+// the expected release leaves the original untouched, and that the matching version is accepted.
+func TestAtomicReplace_RefusesWrongVersion(t *testing.T) {
+	dir := t.TempDir()
+	current := buildFakeBinary(t, dir, "build82", "v0.1.0\n")
+	newBin := buildFakeBinary(t, filepath.Join(dir, "staging"), "build82-new", "v0.2.0\n")
+
+	if _, err := AtomicReplace(current, newBin, "v0.3.0"); err == nil {
+		t.Fatal("expected an error for a version mismatch")
+	}
+	if got, err := SmokeTest(current); err != nil || got != "v0.1.0" {
+		t.Errorf("original binary should be untouched, got %q, %v", got, err)
+	}
+	if _, err := AtomicReplace(current, newBin, "v0.2.0"); err != nil {
+		t.Fatalf("matching version should be accepted: %v", err)
 	}
 }

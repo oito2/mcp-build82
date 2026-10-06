@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,20 +26,21 @@ type AdminSetting struct {
 	Type string // the admin_setting_* class name, e.g. "admin_setting_configtext"
 }
 
+// SettingsExtraction is the result of scanning a settings.php file: the file path and its admin
+// settings in source order.
 type SettingsExtraction struct {
 	File     string
 	Settings []AdminSetting
 }
 
-// adminSettingPattern matches "new admin_setting_xxx(" followed by its first argument, if that
-// argument is a string literal — \s* (which spans newlines) tolerates the common multi-line
-// constructor call style real settings.php files use. A non-literal first argument (a variable,
-// e.g. built from a loop) still matches the type with an empty Name rather than being skipped
-// entirely, since the admin_setting_* class name alone is still useful context.
+// adminSettingPattern matches "new admin_setting_xxx(" and captures its first argument when that
+// is a string literal; `\s*` lets the call span lines. A non-literal first argument still matches
+// the type, with an empty name.
 var adminSettingPattern = regexp.MustCompile(`new\s+(admin_setting_\w+)\s*\(\s*(?:['"]([^'"]*)['"])?`)
 
-// ParseSettingsPhp parses a settings.php file for every admin_setting_* declaration. Returns nil
-// if the file can't be read. Always uses a regex scan regardless of BUILD82_EXTRACTOR_BACKEND.
+// ParseSettingsPhp scans the settings.php file at `filePath` for every admin_setting_*
+// declaration outside comments and heredocs. It returns nil when the file cannot be read and always uses a regex scan regardless
+// of BUILD82_EXTRACTOR_BACKEND.
 func ParseSettingsPhp(filePath string) *SettingsExtraction {
 	content, err := readFileCapped(filePath)
 	if err != nil {
@@ -47,13 +48,14 @@ func ParseSettingsPhp(filePath string) *SettingsExtraction {
 	}
 
 	var settings []AdminSetting
-	for _, m := range adminSettingPattern.FindAllStringSubmatch(string(content), -1) {
+	for _, m := range adminSettingPattern.FindAllStringSubmatch(stripCommentsAndHeredocs(string(content)), -1) {
 		settings = append(settings, AdminSetting{Type: m[1], Name: m[2]})
 	}
 	return &SettingsExtraction{File: filePath, Settings: settings}
 }
 
-// ExtractPluginSettings parses pluginPath/settings.php.
+// ExtractPluginSettings parses `pluginPath`/settings.php. It returns nil when that file cannot be
+// read.
 func ExtractPluginSettings(pluginPath string) *SettingsExtraction {
 	return ParseSettingsPhp(filepath.Join(pluginPath, "settings.php"))
 }

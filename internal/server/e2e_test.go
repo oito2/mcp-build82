@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,15 +30,16 @@ import (
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
-// buildE2EFixture extends the shared testdata/moodle fixture into something closer to a real,
-// multi-plugin Moodle installation than the base synthetic fixture, adding the specific plugin
-// shapes each subtest below needs to exercise. Returns the moodle root.
+// buildE2EFixture copies the shared testdata/moodle fixture and extends it into a multi-plugin
+// installation: the dev-marked demo plugin, an assignsubmission_file plugin, a plugin whose
+// output directory is read-only so its generation fails, and legacy root-level generated files.
+// It returns the Moodle root.
 func buildE2EFixture(t *testing.T) string {
 	t.Helper()
-	root := copyFixtureMoodleTree(t) // local/demo already present, not yet dev-marked.
+	root := copyFixtureMoodleTree(t) // contains local/demo, which is not dev-marked yet.
 	markDev(t, filepath.Join(root, "local", "demo"))
 
-	// A real assignsubmission_* plugin, exercising the first-underscore-only component split.
+	// An assignsubmission_* plugin, to exercise splitting the component at the first underscore.
 	asubDir := filepath.Join(root, "mod", "assign", "submission", "file")
 	mustMkdirAll(t, asubDir)
 	mustWriteFile(t, filepath.Join(asubDir, "version.php"), "<?php\n"+
@@ -48,8 +49,8 @@ func buildE2EFixture(t *testing.T) string {
 		"$plugin->maturity  = MATURITY_STABLE;\n")
 	markDev(t, asubDir)
 
-	// A plugin whose .build82/ output directory is read-only, forcing every one of its
-	// generator writes to fail, to check that a batch never aborts on one bad plugin.
+	// A plugin whose .build82/ output directory is read-only, so every write fails, to check that
+	// a batch does not abort on one bad plugin.
 	brokenDir := filepath.Join(root, "local", "broken")
 	mustMkdirAll(t, brokenDir)
 	mustWriteFile(t, filepath.Join(brokenDir, "version.php"), "<?php\n$plugin->component = 'local_broken';\n$plugin->version = 2024010100;\n")
@@ -59,7 +60,7 @@ func buildE2EFixture(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.Chmod(brokenContextDir, 0o755) }) // let t.TempDir() clean up afterward
 
-	// Legacy root-level files from the layout that wrote output outside .build82/.
+	// Generated files at the Moodle root, outside .build82/, which generation must migrate.
 	for _, f := range append(append([]string{}, generators.GlobalContextFilenames...), "tags") {
 		mustWriteFile(t, filepath.Join(root, f), "legacy content for "+f+"\n")
 	}
@@ -67,8 +68,8 @@ func buildE2EFixture(t *testing.T) string {
 	return root
 }
 
-// markDev creates the {pluginDir}/.build82/.indevelopment marker FindDevPlugins looks for,
-// and returns the created .build82 directory path.
+// markDev creates the .build82/.indevelopment marker that makes the plugin at `pluginDir` count as
+// a dev plugin, and returns the path of the .build82 directory.
 func markDev(t *testing.T, pluginDir string) string {
 	t.Helper()
 	ctxDir := filepath.Join(pluginDir, generators.ContextDir)
@@ -77,6 +78,7 @@ func markDev(t *testing.T, pluginDir string) string {
 	return ctxDir
 }
 
+// mustMkdirAll creates `path` and any missing parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -84,6 +86,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes `content` to `path`, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -91,6 +94,8 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// callTool calls the tool `name` with `args` on `session` and returns the result. It fails the test
+// when the call itself returns a protocol error; tool-level errors are reported through IsError.
 func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
@@ -100,6 +105,8 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[st
 	return result
 }
 
+// toolText returns the text of the only content block in `result`, failing the test when there is
+// not exactly one text block.
 func toolText(t *testing.T, result *mcp.CallToolResult) string {
 	t.Helper()
 	if len(result.Content) != 1 {
@@ -112,13 +119,12 @@ func toolText(t *testing.T, result *mcp.CallToolResult) string {
 	return tc.Text
 }
 
-// TestE2E_Phase8Invariants walks through the server's core behavioral invariants, one subtest each,
-// against a richer multi-plugin fixture.
+// TestE2E_Phase8Invariants checks the server's core behavioral guarantees through the MCP tool
+// layer, one subtest each, against the multi-plugin fixture.
 //
-// Subtests run in a deliberate order: the legacy-migration check must run before anything that
-// also triggers a full generators.GenerateAll (update_indexes, in the bad-plugin subtest) —
-// otherwise the legacy root files it asserts on would already have been migrated away by an
-// earlier subtest.
+// The subtests depend on their order: the legacy-migration subtest must run before any other
+// subtest that triggers a full generators.GenerateAll, because that run migrates the legacy root
+// files the subtest asserts on.
 func TestE2E_Phase8Invariants(t *testing.T) {
 	withIsolatedHome(t)
 	root := buildE2EFixture(t)
@@ -137,11 +143,8 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 		}
 	})
 
-	// path_traversal_guard_plugin_batch_list and path_traversal_guard_release_plugin verify that
-	// plugin_batch's "list" mode and release_plugin apply moodletype.IsWithinMoodle after
-	// resolving a caller-supplied plugin identifier via moodletype.ResolvePluginPath. They use an
-	// absolute path that exists on disk but is entirely outside the Moodle root, which
-	// ResolvePluginPath alone would resolve successfully.
+	// The next two subtests verify that plugin_batch's "list" mode and release_plugin reject a
+	// plugin identifier that resolves to an existing directory outside the Moodle root.
 	t.Run("path_traversal_guard_plugin_batch_list", func(t *testing.T) {
 		outside := t.TempDir()
 		result := callTool(t, session, "plugin_batch", map[string]any{
@@ -153,8 +156,7 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 	})
 
 	t.Run("path_traversal_guard_release_plugin", func(t *testing.T) {
-		// An absolute path entirely outside the Moodle root: release_plugin accepts absolute paths,
-		// so it must be rejected by resolveAndValidatePlugin's containment check.
+		// release_plugin accepts absolute paths, so the containment check must reject this one.
 		outside := t.TempDir()
 
 		result := callTool(t, session, "release_plugin", map[string]any{"component": outside})
@@ -166,11 +168,9 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 		}
 	})
 
-	// get_plugin_info_component_syntax and path_traversal_guard_get_plugin_info verify that
-	// handleGetPluginInfo's containment check (resolvePluginPathWithinMoodle, shared with
-	// plugin_batch's list mode) (a) accepts get_plugin_info's "component, relative path, or
-	// absolute path" identifiers, including "local_demo"-style components, and (b) degrades a path
-	// outside the Moodle root to a graceful "not found" response rather than reading or leaking it.
+	// The next two subtests verify that get_plugin_info accepts component-style identifiers such as
+	// "local_demo", and that a path outside the Moodle root yields a "not found" style response
+	// without leaking its metadata.
 	t.Run("get_plugin_info_component_syntax", func(t *testing.T) {
 		result := callTool(t, session, "get_plugin_info", map[string]any{"plugin": "local_demo"})
 		if result.IsError {
@@ -190,10 +190,8 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 		}
 	})
 
-	// dos_guard_search_query_too_long and dos_guard_plugin_batch_too_many_plugins verify the size
-	// caps on search_plugins/search_api's Query (fuzzySearchInFile runs an
-	// O(len(word)*len(query)) Levenshtein comparison per index line) and on how many plugin
-	// identifiers plugin_batch's "list" mode accepts in a single request.
+	// The next two subtests verify the size limits on the search query length and on the number of
+	// plugin identifiers accepted by plugin_batch's "list" mode.
 	t.Run("dos_guard_search_query_too_long", func(t *testing.T) {
 		result := callTool(t, session, "search_plugins", map[string]any{"query": strings.Repeat("a", 500)})
 		if !result.IsError {
@@ -217,7 +215,7 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 		if !result.IsError {
 			t.Error("expected IsError=true for a nonexistent plugin path")
 		}
-		toolText(t, result) // fails the test itself if not exactly one TextContent block
+		toolText(t, result) // fails the test unless there is exactly one text content block
 	})
 
 	t.Run("invariant_4_relative_paths_and_9_legacy_migration", func(t *testing.T) {
@@ -228,8 +226,8 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 			}
 		}
 
-		// update_indexes always runs the full generators.GenerateAll, whose first step is
-		// legacy-file migration, with no "already initialized" gate.
+		// update_indexes always runs the full generators.GenerateAll, which starts by migrating
+		// the legacy root files.
 		result := callTool(t, session, "update_indexes", nil)
 		if result.IsError {
 			t.Fatalf("expected success, got IsError: %s", toolText(t, result))
@@ -327,10 +325,8 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 		}
 	})
 
-	// A byte-identical full text response across two plugin_batch mode=all calls is not expected:
-	// cache.Global.Stats() accumulates for the life of the process and the text report prints
-	// those cumulative totals, so the "Cache: N hits..." line differs between any two calls. This
-	// subtest instead checks deterministic ordering via the format:"json" response's Path field.
+	// The text report includes cumulative cache statistics, so two runs are never byte-identical.
+	// This subtest therefore compares the plugin order in the JSON response's Path field.
 	t.Run("invariant_5_deterministic_ordering", func(t *testing.T) {
 		fetchPaths := func() []string {
 			result := callTool(t, session, "plugin_batch", map[string]any{"mode": "all", "format": "json"})
@@ -357,12 +353,11 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 	})
 
 	t.Run("invariant_2_persistent_cache_across_restart", func(t *testing.T) {
-		// Warm the plugin-level cache first (not itself part of the assertion).
+		// Warm the plugin-level cache; nothing is asserted on this call.
 		callTool(t, session, "plugin_batch", map[string]any{"mode": "all"})
 
-		// Simulate a process restart: swap in a brand-new in-memory cache instance, forcing the
-		// next EnsureLoaded to reload persisted marks from .build82/.cache.json on disk, exercised
-		// through the real MCP tool layer.
+		// Simulate a process restart by replacing the global cache with an empty instance, so the
+		// next run reloads the marks persisted in .build82/.cache.json.
 		original := cache.Global
 		cache.Global = cache.NewMtimeCache()
 		defer func() { cache.Global = original }()

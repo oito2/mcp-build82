@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -83,6 +83,7 @@ func simulateRestart(t *testing.T) {
 	cache.Global = cache.NewMtimeCache()
 }
 
+// resultText returns the text of the single text block of `res`, failing the test when absent.
 func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
 	if res == nil || len(res.Content) == 0 {

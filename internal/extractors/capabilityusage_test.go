@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@ import (
 	"testing"
 )
 
+// TestFindOwnCapabilityChecks_Basic verifies that an own-prefix call is reported with its
+// capability, file and line.
 func TestFindOwnCapabilityChecks_Basic(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "view.php"), `<?php
@@ -35,6 +37,8 @@ require_capability('local/test:view', $context);
 	}
 }
 
+// TestFindOwnCapabilityChecks_IgnoresOtherPrefixes verifies that calls for other capability
+// prefixes are not reported.
 func TestFindOwnCapabilityChecks_IgnoresOtherPrefixes(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "view.php"), `<?php
@@ -46,10 +50,9 @@ has_capability('moodle/course:view', $context);
 	}
 }
 
-// TestFindOwnCapabilityChecks_MultilineArgumentsDetected verifies that a
-// has_capability()/require_capability() call whose arguments span multiple lines (the capability
-// literal on a different line than the function name) is matched, with the line number derived
-// from the match's byte offset.
+// TestFindOwnCapabilityChecks_MultilineArgumentsDetected verifies that a call whose capability
+// literal is on a different line than the function name is matched and reported at the line of
+// the function name.
 func TestFindOwnCapabilityChecks_MultilineArgumentsDetected(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "view.php"), `<?php

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,14 +28,15 @@ import (
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
+// InitInput is the input of the init_moodle_context tool.
 type InitInput struct {
 	MoodlePath string `json:"moodle_path" jsonschema:"Absolute path to the Moodle installation root directory"`
 	Force      bool   `json:"force,omitempty" jsonschema:"Re-initialize even if configuration already exists"`
 	Format     Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
-// InitOutput is the JSON-format shape for init_moodle_context — the template decision every other
-// tool's format:"json" output follows: a struct mirroring the same data the text response renders.
+// InitOutput is the JSON-format response of init_moodle_context. It mirrors the data rendered by
+// the text response.
 type InitOutput struct {
 	Success            bool         `json:"success"`
 	AlreadyInitialized bool         `json:"already_initialized,omitempty"`
@@ -48,6 +49,7 @@ type InitOutput struct {
 	Failed             []FailedFile `json:"failed,omitempty"`
 }
 
+// RegisterInitTool registers the init_moodle_context tool on `server`.
 func RegisterInitTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "init_moodle_context",
@@ -58,6 +60,9 @@ func RegisterInitTool(server *mcp.Server) {
 	}, withRecover(handleInit))
 }
 
+// validateMoodlePath checks that `path` looks like a Moodle root: an existing directory with
+// version.php, a lib/ directory, and config.php or config-dist.php. It returns ("", true) when
+// valid, otherwise a human-readable reason and false.
 func validateMoodlePath(path string) (string, bool) {
 	if !dirExists(path) {
 		return "directory does not exist", false
@@ -74,11 +79,13 @@ func validateMoodlePath(path string) (string, bool) {
 	return "", true
 }
 
+// handleInit validates `in.MoodlePath`, detects the Moodle version, saves the configuration and
+// generates all global index files. When a configuration already exists and `in.Force` is false,
+// it reports that without changing anything. Problems are returned as error results; the error
+// return is always nil.
 func handleInit(ctx context.Context, req *mcp.CallToolRequest, in InitInput) (*mcp.CallToolResult, struct{}, error) {
-	// Resolved once up front and threaded through explicitly (rather than each of config.Load/
-	// config.FilePath/buildInitOutput/renderInitReport re-resolving it). config.FilePath surfaces a
-	// failure to resolve the home directory as a real error instead of silently proceeding with a
-	// cwd-relative path, so that failure must be handled here just like any other.
+	// The config path is resolved once and passed to the output builders. A failure to resolve
+	// the home directory is reported as an error rather than falling back to a relative path.
 	configPath, err := config.FilePath()
 	if err != nil {
 		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
@@ -128,6 +135,8 @@ func handleInit(ctx context.Context, req *mcp.CallToolRequest, in InitInput) (*m
 	return textResult(false, renderInitReport(in.MoodlePath, version, fullVersion, configPath, results)), struct{}{}, nil
 }
 
+// buildInitOutput builds the JSON response of a successful initialization from the generator
+// `results`, with file names relative to `moodlePath`.
 func buildInitOutput(moodlePath, version, fullVersion, configPath string, results []generators.GeneratorResult) InitOutput {
 	generated, skipped, failed := classifyResults(results, moodlePath)
 	return InitOutput{
@@ -137,6 +146,8 @@ func buildInitOutput(moodlePath, version, fullVersion, configPath string, result
 	}
 }
 
+// renderInitReport renders the Markdown report of a successful initialization: the detected
+// Moodle details, the failed, generated and cached files relative to `moodlePath`, and next steps.
 func renderInitReport(moodlePath, version, fullVersion, configPath string, results []generators.GeneratorResult) string {
 	var b strings.Builder
 	b.WriteString("✅ build82 initialized successfully.\n\n")

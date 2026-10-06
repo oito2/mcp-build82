@@ -37,14 +37,17 @@ Run the same checks CI runs before opening a PR:
 ```bash
 gofmt -l .        # must print nothing
 go vet ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
 go build ./...
 go test -race ./...
 BUILD82_EXTRACTOR_BACKEND=treesitter go test -race ./...
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
-All six must be clean (the test suite runs once per extractor backend) — [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs them (on the newest Go 1.26.x patch, `ubuntu-latest`) on every
-push and pull request against `main` and will block merge otherwise. The `-race` flag needs cgo, i.e. a working C compiler on your machine; without one, use plain `go test ./...` locally and rely on CI for the race run. Tests exercise real behavior
+All seven must be clean (the test suite runs once per extractor backend) — [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs them (on the newest Go 1.26.x patch, `ubuntu-24.04`) on every
+push and pull request against `main` and will block merge otherwise. `golangci-lint` uses the
+repository's [`.golangci.yml`](.golangci.yml) (default linters, with the standard exclusions for
+unchecked `Close`/`fmt.Fprint*` errors) and must report `0 issues`; CI pins the same version. The `-race` flag needs cgo, i.e. a working C compiler on your machine; without one, use plain `go test ./...` locally and rely on CI for the race run. Tests exercise real behavior
 wherever practical — real `fsnotify` events for the watcher, a real in-memory MCP client/server
 transport pair for tools, real compiled binaries for install/self-update/CLI-layer checks — rather
 than mocking the SDK or the filesystem.
@@ -144,7 +147,7 @@ Release assets are named `build82_<os>_<arch>` (`.exe` on Windows), plus `build8
 1. **Automatically (normal path):** push a `vX.Y.Z` tag (`git tag vX.Y.Z && git push --tags`).
    [`release.yml`](.github/workflows/release.yml) triggers on tags matching `v*.*.*` and runs two
    jobs:
-   - `release`: sets up the newest Go 1.26.x patch and runs the same checks as CI (`gofmt`, `go vet`, `go build`,
+   - `release`: sets up the newest Go 1.26.x patch and runs the same checks as CI (`gofmt`, `go vet`, `golangci-lint`, `go build`,
      `go test -race` with both the regex and the tree-sitter backend, `govulncheck`), runs
      `go run ./scripts/release <tag>`, validates `dist/server.json` with
      `mcp-publisher validate` (any check failing stops the release), and creates the GitHub

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -41,6 +41,8 @@ func RegisterScaffoldPrompt(server *mcp.Server) {
 	}, withRecoverPrompt(handleScaffoldPrompt))
 }
 
+// typeNotes holds the plugin-type-specific implementation notes included in the scaffold prompt,
+// keyed by plugin type.
 var typeNotes = map[string]string{
 	"mod": "Must implement `{component}_add_instance`, `{component}_update_instance`, and " +
 		"`{component}_delete_instance` in `lib.php`. Standard entry points are `index.php` (list all " +
@@ -57,6 +59,8 @@ var typeNotes = map[string]string{
 	"tool": "Appears under Site Administration. `index.php` is the standard entry point for the tool's UI.",
 }
 
+// getTypeNotes returns the implementation notes for `pluginType`, or a generic sentence when the
+// type has no dedicated notes.
 func getTypeNotes(pluginType string) string {
 	if notes, ok := typeNotes[pluginType]; ok {
 		return notes
@@ -64,6 +68,8 @@ func getTypeNotes(pluginType string) string {
 	return fmt.Sprintf("Follow standard Moodle conventions for %s plugins.", pluginType)
 }
 
+// fallbackCodingStandards is the coding-standards list used when no generated MOODLE_DEV_RULES.md
+// is available.
 var fallbackCodingStandards = []string{
 	"Follow the Moodle coding style (4-space indent, snake_case functions, PascalCase classes).",
 	"Access the database only through the `$DB` API, never raw SQL.",
@@ -73,6 +79,10 @@ var fallbackCodingStandards = []string{
 	"Add `defined('MOODLE_INTERNAL') || die();` at the top of every non-entry-point PHP file.",
 }
 
+// parseFeatures scans the comma-separated `features` text (case-insensitively) and reports which
+// feature groups are requested: database tables, scheduled tasks, web services, events,
+// capabilities, and settings. Each item matches at most one group, and unrecognized items are
+// ignored.
 func parseFeatures(features string) (hasDb, hasTasks, hasServices, hasEvents, hasCaps, hasSettings bool) {
 	for _, f := range strings.Split(strings.ToLower(features), ",") {
 		f = strings.TrimSpace(f)
@@ -94,6 +104,8 @@ func parseFeatures(features string) (hasDb, hasTasks, hasServices, hasEvents, ha
 	return
 }
 
+// scaffoldFewShotUser and scaffoldFewShotAssistant form the few-shot example exchange that
+// precedes the real scaffold request, showing the expected output format.
 const scaffoldFewShotUser = "Scaffold local_demo's version.php for a plugin that stores demo records in a database table."
 
 const scaffoldFewShotAssistant = "## version.php\n\n```php\n<?php\ndefined('MOODLE_INTERNAL') || die();\n\n" +
@@ -102,6 +114,11 @@ const scaffoldFewShotAssistant = "## version.php\n\n```php\n<?php\ndefined('MOOD
 	"> Decision: version follows the YYYYMMDDXX convention with a 00 build suffix, and requires is set to " +
 	"the earliest supported Moodle 4.3 release since the plugin needs no newer core APIs."
 
+// handleScaffoldPrompt renders the scaffold_plugin prompt from the required "type", "name" and
+// "description" arguments and the optional "features" argument. The request lists the derived
+// component and directory, the requested features, type-specific notes, coding standards (from
+// the generated MOODLE_DEV_RULES.md when available), and the files to generate. It returns an
+// invalid-params error when a required argument is missing, or the error from config.Load.
 func handleScaffoldPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	args := req.Params.Arguments
 	if err := requireArgs(args, "type", "name", "description"); err != nil {
@@ -201,6 +218,8 @@ func handleScaffoldPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.
 	}, nil
 }
 
+// featuresBulletList renders the enabled feature flags as a Markdown bullet list, one line per
+// feature, in a fixed order.
 func featuresBulletList(hasDb, hasTasks, hasServices, hasEvents, hasCaps, hasSettings bool) string {
 	var lines []string
 	if hasDb {

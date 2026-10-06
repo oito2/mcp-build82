@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,7 +18,9 @@ package tsbackend
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // upgradeFixtureWellFormed is a well-formed db/upgrade.php fixture.
@@ -46,6 +48,7 @@ function xmldb_local_test_upgrade($oldversion) {
 }
 `
 
+// writeUpgradePhp writes content to a temporary db/upgrade.php and returns its path.
 func writeUpgradePhp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -56,6 +59,7 @@ func writeUpgradePhp(t *testing.T, content string) string {
 	return path
 }
 
+// TestParseUpgradePhp_MatchesRegexBackendFixture verifies upgrade steps and their descriptions for a well-formed upgrade file match the regex backend's output.
 func TestParseUpgradePhp_MatchesRegexBackendFixture(t *testing.T) {
 	path := writeUpgradePhp(t, upgradeFixtureWellFormed)
 	result := ParseUpgradePhp(path)
@@ -81,12 +85,14 @@ func TestParseUpgradePhp_MatchesRegexBackendFixture(t *testing.T) {
 	}
 }
 
+// TestParseUpgradePhp_MissingFile verifies a nonexistent file yields nil.
 func TestParseUpgradePhp_MissingFile(t *testing.T) {
 	if ParseUpgradePhp("/nonexistent/db/upgrade.php") != nil {
 		t.Error("expected nil for missing file")
 	}
 }
 
+// TestParseUpgradePhp_NoUpgradeFunction verifies a file without an xmldb_*_upgrade function yields an empty, non-nil step list.
 func TestParseUpgradePhp_NoUpgradeFunction(t *testing.T) {
 	path := writeUpgradePhp(t, "<?php\n// nothing here\n")
 	result := ParseUpgradePhp(path)
@@ -95,6 +101,7 @@ func TestParseUpgradePhp_NoUpgradeFunction(t *testing.T) {
 	}
 }
 
+// TestParseUpgradePhp_NoStepsInFunction verifies an upgrade function without version-gated blocks yields an empty step list.
 func TestParseUpgradePhp_NoStepsInFunction(t *testing.T) {
 	path := writeUpgradePhp(t, "<?php\nfunction xmldb_local_test_upgrade($oldversion) {\n    return true;\n}\n")
 	result := ParseUpgradePhp(path)
@@ -157,5 +164,32 @@ func TestParseUpgradePhp_RealFileRegression(t *testing.T) {
 	}
 	if found == 0 {
 		t.Skip("no db/upgrade.php files found across real Moodle installations")
+	}
+}
+
+func TestTruncate120_RuneSafe(t *testing.T) {
+	in := strings.Repeat("a", 119) + "é" + "tail"
+	got := truncate120(in)
+	if !utf8.ValidString(got) || len(got) > 120 {
+		t.Fatalf("truncate120 = %q (len %d), want valid UTF-8 within 120 bytes", got, len(got))
+	}
+	if got != strings.Repeat("a", 119) {
+		t.Errorf("truncate120 = %q, want the 119-byte prefix", got)
+	}
+}
+
+func TestParseUpgradePhp_EqualVersionsKeepSourceOrder(t *testing.T) {
+	path := writeUpgradePhp(t, `<?php
+function xmldb_local_test_upgrade($oldversion) {
+    if ($oldversion < 2024010100) { // first
+    }
+    if ($oldversion < 2024010100) { // second
+    }
+    return true;
+}
+`)
+	got := ParseUpgradePhp(path)
+	if len(got.Steps) != 2 || got.Steps[0].Description != "first" || got.Steps[1].Description != "second" {
+		t.Errorf("steps = %+v, want source order first, second", got.Steps)
 	}
 }

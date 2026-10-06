@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,21 +28,21 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// HookCallback, HookDefinition, LegacyCallbackWarning, and HooksExtraction are aliases for
-// phptypes' types.
+// HookCallback, HookDefinition, LegacyCallbackWarning and HooksExtraction alias the phptypes types
+// of the same name.
 type HookCallback = phptypes.HookCallback
 type HookDefinition = phptypes.HookDefinition
 type LegacyCallbackWarning = phptypes.LegacyCallbackWarning
 type HooksExtraction = phptypes.HooksExtraction
 
+// Patterns used to read hook definition classes and db/hooks.php.
 var (
 	hookFqnNamespacePattern = regexp.MustCompile(`(?m)^namespace\s+([a-zA-Z0-9_\\]+)\s*;`)
 	hookFqnClassPattern     = regexp.MustCompile(`(?m)^(?:final\s+)?class\s+([a-zA-Z0-9_]+)`)
 
-	// hookDescriptionMethodPattern/hookTagsMethodPattern match only up to and including the
-	// method's opening brace; the body itself is then isolated via phparray.FindBalancedEnd
-	// (see findMethodBody) before hookReturnStringPattern/hookReturnArrayPattern run, so a
-	// `return` literal belonging to a different method further down the file is never matched.
+	// hookDescriptionMethodPattern and hookTagsMethodPattern match up to and including the method's
+	// opening brace. The body is then isolated with findMethodBody before hookReturnStringPattern
+	// or hookReturnArrayPattern run, so a `return` of a different method is never matched.
 	hookDescriptionMethodPattern = regexp.MustCompile(`get_hook_description\s*\([^)]*\)\s*:\s*string\s*\{`)
 	hookTagsMethodPattern        = regexp.MustCompile(`get_hook_tags\s*\([^)]*\)\s*:\s*array\s*\{`)
 	hookReturnStringPattern      = regexp.MustCompile(`return\s+['"]([^'"]*)['"]`)
@@ -51,15 +51,14 @@ var (
 	hookReplacesArrayPattern   = regexp.MustCompile(`['"]replaces['"]\s*=>\s*['"]([^'"]+)['"]`)
 	hookDeprecatedConstPattern = regexp.MustCompile(`const\s+DEPRECATED_CALLBACK\s*=\s*['"]([^'"]+)['"]\s*;`)
 
-	// docSummaryPattern extracts the first descriptive line out of an already-isolated /** ... */
-	// docblock snippet (see findClassDocSummary); it is never run against a whole file's content,
-	// where it would return the license/@package file header instead of the class's own docblock.
+	// docSummaryPattern extracts the first descriptive line of an already-isolated /** ... */
+	// docblock. It must not run on a whole file, where it would match the file header docblock.
 	docSummaryPattern = regexp.MustCompile(`/\*\*\s*\n?\s*\*?\s*([^\n*][^\n]*)`)
 )
 
-// findMethodBody locates methodOpenPattern's match (which must end at the method's opening `{`)
-// and returns its brace-balanced body (exclusive of the braces themselves), using
-// phparray.FindBalancedEnd.
+// findMethodBody finds the first match of `methodOpenPattern` in `content`, which must end at the
+// method's opening `{`, and returns the brace-balanced body without the braces. The boolean is
+// false when there is no match or the braces are unbalanced.
 func findMethodBody(content string, methodOpenPattern *regexp.Regexp) (string, bool) {
 	loc := methodOpenPattern.FindStringIndex(content)
 	if loc == nil {
@@ -73,8 +72,9 @@ func findMethodBody(content string, methodOpenPattern *regexp.Regexp) (string, b
 	return content[braceStart+1 : end], true
 }
 
-// extractReturnedString finds methodPattern's brace-balanced body and applies returnPattern to it
-// alone, so a `return` literal belonging to some other, later method can never satisfy it.
+// extractReturnedString applies `returnPattern` to the body of the method matched by
+// `methodPattern` in `content` and returns its first capture group. The boolean is false when the
+// method or a matching return is not found.
 func extractReturnedString(content string, methodPattern, returnPattern *regexp.Regexp) (string, bool) {
 	body, ok := findMethodBody(content, methodPattern)
 	if !ok {
@@ -87,10 +87,9 @@ func extractReturnedString(content string, methodPattern, returnPattern *regexp.
 	return m[1], true
 }
 
-// findClassDocSummary locates the hook definition class's own declaration line (matching
-// hookFqnClassPattern) and scans backward for its immediately preceding PHPDoc block, tolerating
-// up to 3 blank lines. This skips any license/@package file-header docblock that comes before the
-// class's own docblock.
+// findClassDocSummary returns the first descriptive line of the PHPDoc block immediately preceding
+// the class declaration in `content`, tolerating up to 3 blank lines in between. A file-header
+// docblock earlier in the file is ignored. It returns "" when there is no class or no such block.
 func findClassDocSummary(content string) string {
 	lines := strings.Split(content, "\n")
 
@@ -148,6 +147,8 @@ func findClassDocSummary(content string) string {
 	return ""
 }
 
+// extractFQN returns the fully-qualified class name (with a leading backslash) built from the
+// namespace and class declarations in `content`, or "" when either is missing.
 func extractFQN(content string) string {
 	ns := hookFqnNamespacePattern.FindStringSubmatch(content)
 	cls := hookFqnClassPattern.FindStringSubmatch(content)
@@ -157,6 +158,9 @@ func extractFQN(content string) string {
 	return `\` + ns[1] + `\` + cls[1]
 }
 
+// parseHookCallbacks returns the callbacks registered in `pluginPath`/db/hooks.php. The hook name
+// is read from "hookname" or, failing that, "hook". It returns nil when the file is missing or
+// has no $callbacks array.
 func parseHookCallbacks(pluginPath string) []HookCallback {
 	content, err := readFileCapped(filepath.Join(pluginPath, "db", "hooks.php"))
 	if err != nil {
@@ -187,6 +191,10 @@ func parseHookCallbacks(pluginPath string) []HookCallback {
 	return callbacks
 }
 
+// parseHookDefinitionFile builds a HookDefinition from the PHP source `content` of a hook class.
+// The description comes from get_hook_description() or else the class docblock summary, and the
+// replaced hook from a 'replaces' entry or a DEPRECATED_CALLBACK constant. The boolean is false
+// when no fully-qualified class name can be determined.
 func parseHookDefinitionFile(content string) (HookDefinition, bool) {
 	fqn := extractFQN(content)
 	if fqn == "" {
@@ -215,6 +223,8 @@ func parseHookDefinitionFile(content string) (HookDefinition, bool) {
 	return HookDefinition{ClassName: fqn, Description: description, Tags: tags, Replaces: replaces}, true
 }
 
+// parseHookDefinitions returns the hook definitions found in the classes/hook/*.php files of
+// `pluginPath`, skipping files that cannot be read or do not declare a class.
 func parseHookDefinitions(pluginPath string) []HookDefinition {
 	matches, _ := filepath.Glob(filepath.Join(pluginPath, "classes", "hook", "*.php"))
 	var defs []HookDefinition
@@ -230,11 +240,13 @@ func parseHookDefinitions(pluginPath string) []HookDefinition {
 	return defs
 }
 
-// legacyFunctionDeclPattern matches every top-level function declaration in lib.php in one pass —
-// used instead of compiling and running one regex per legacyhooks.Map entry, which would cost up
-// to 12 regexp compiles per call.
+// legacyFunctionDeclPattern matches top-level function declarations, so detectLegacyCallbacks can
+// find all declared function names in one pass instead of running one regex per legacy callback.
 var legacyFunctionDeclPattern = regexp.MustCompile(`(?m)^function\s+(\w+)\s*\(`)
 
+// detectLegacyCallbacks returns a warning, sorted by function name, for every legacy callback of
+// `component` (named `component` + "_" + suffix) that is declared in `pluginPath`/lib.php and has a
+// Hook API replacement. It returns nil when lib.php cannot be read.
 func detectLegacyCallbacks(pluginPath, component string) []LegacyCallbackWarning {
 	content, err := readFileCapped(filepath.Join(pluginPath, "lib.php"))
 	if err != nil {
@@ -264,22 +276,22 @@ func detectLegacyCallbacks(pluginPath, component string) []LegacyCallbackWarning
 			),
 		})
 	}
-	// legacyhooks.Map is a map, so the order warnings are appended in is non-deterministic across
-	// runs. Sort the result explicitly so LegacyWarnings has a stable order.
+	// Map iteration order is random, so sort to give LegacyWarnings a stable order.
 	sort.Slice(warnings, func(i, j int) bool {
 		return warnings[i].LegacyFunction < warnings[j].LegacyFunction
 	})
 	return warnings
 }
 
-// PluginUsesHookApi reports whether a plugin actually uses the Hook API. Legacy warnings alone do
-// not count — a plugin with only legacy callbacks and zero hook adoption returns false.
+// PluginUsesHookApi reports whether `e` contains at least one hook callback or definition. Legacy
+// warnings alone do not count.
 func PluginUsesHookApi(e HooksExtraction) bool {
 	return len(e.Callbacks) > 0 || len(e.Definitions) > 0
 }
 
-// ExtractPluginHooks combines all three sub-scans: registered callbacks, hook definitions, and
-// legacy-callback detection.
+// ExtractPluginHooks extracts the registered callbacks, hook definitions and legacy-callback
+// warnings of the plugin at `pluginPath` with frankenstyle name `component`. The error is only
+// non-nil when the tree-sitter backend fails; the regex backend never returns one.
 func ExtractPluginHooks(pluginPath, component string) (HooksExtraction, error) {
 	if useTreesitter() {
 		return tsbackend.ExtractPluginHooks(pluginPath, component)

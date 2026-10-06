@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,26 +23,24 @@ import (
 	"testing"
 )
 
-// stdioPurityExceptions are the only source files allowed to write to stdout. Each is a CLI-only
-// code path (help/version text, interactive install/uninstall prompts, self-update's own progress
-// output) that never runs concurrently with the MCP stdio server loop — the argv dispatch runs
-// exactly one mode per invocation, so these never share a stdout stream with a live JSON-RPC
-// session.
+// stdioPurityExceptions lists the only source files, relative to the module root, allowed to write
+// to stdout. Each belongs to a CLI-only code path (help and version text, install and uninstall
+// prompts, self-update progress, the release tool) that never runs in the same process as the
+// MCP stdio server.
 var stdioPurityExceptions = map[string]bool{
 	filepath.Join("cmd", "build82", "main.go"):               true,
 	filepath.Join("internal", "installer", "install.go"):     true,
 	filepath.Join("internal", "installer", "uninstall.go"):   true,
 	filepath.Join("internal", "selfupdate", "selfupdate.go"): true,
-	filepath.Join("scripts", "release", "main.go"):           true, // maintainer-only release build tool, never runs as the MCP server
+	filepath.Join("scripts", "release", "main.go"):           true, // release build tool, never runs as the MCP server
 }
 
+// stdoutCallPattern matches fmt.Print, fmt.Println, fmt.Printf and any use of os.Stdout.
 var stdoutCallPattern = regexp.MustCompile(`\bfmt\.Print(ln|f)?\(|\bos\.Stdout\b`)
 
-// TestStdioPurity_NoStrayStdoutWrites enforces the stdio transport's core invariant: "nothing but
-// the JSON-RPC protocol may touch stdout" — every other source file in the module must log to
-// stderr only. A stray fmt.Println or direct os.Stdout write anywhere else would corrupt the
-// protocol stream for any client talking to build82 over stdio, so this check greps the whole
-// module automatically.
+// TestStdioPurity_NoStrayStdoutWrites enforces that only the JSON-RPC protocol touches stdout in
+// stdio mode. It scans every non-test Go source file in the module, except those listed in
+// stdioPurityExceptions, for stdout writes, since one would corrupt the protocol stream.
 func TestStdioPurity_NoStrayStdoutWrites(t *testing.T) {
 	root := filepath.Join("..", "..")
 	var violations []string
@@ -87,9 +85,8 @@ func TestStdioPurity_NoStrayStdoutWrites(t *testing.T) {
 	}
 }
 
-// TestStdoutCallPattern_Detection asserts stdoutCallPattern itself with isolated positive and
-// negative snippets, so that weakening the pattern (e.g. narrowing it, or dropping the os.Stdout
-// alternative) fails immediately.
+// TestStdoutCallPattern_Detection checks stdoutCallPattern against snippets that must and must not
+// match, so that weakening the pattern fails.
 func TestStdoutCallPattern_Detection(t *testing.T) {
 	positives := []string{
 		`fmt.Println("hello")`,

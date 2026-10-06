@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,13 +22,12 @@ import (
 	"github.com/oito2/mcp-build82/internal/extractors"
 )
 
-// benchRealMoodleRoot is a full Moodle install used for benchmarking; benchmarks skip gracefully
-// if it is absent.
+// benchRealMoodleRoot is the path of a full Moodle install used by the benchmarks, which skip
+// when it is absent.
 const benchRealMoodleRoot = "/srv/workspace/www/html/mdle/dev-500"
 
-// BenchmarkClassesIndex_FullTreeWalk measures the older, unoptimized behavior of
-// GenerateClassesIndex: parsing every *.php file in the entire installation, then discarding
-// everything outside classes/ directories.
+// BenchmarkClassesIndex_FullTreeWalk measures parsing every *.php file of the installation and
+// discarding those outside classes/ directories.
 func BenchmarkClassesIndex_FullTreeWalk(b *testing.B) {
 	if _, err := os.Stat(benchRealMoodleRoot); err != nil {
 		b.Skipf("real Moodle install not available at %s: %v", benchRealMoodleRoot, err)
@@ -39,9 +38,8 @@ func BenchmarkClassesIndex_FullTreeWalk(b *testing.B) {
 	}
 }
 
-// BenchmarkClassesIndex_RestrictedGlob measures GenerateClassesIndex's current, optimized
-// behavior: resolving the **/classes/**/*.php glob first, then parsing only that restricted file
-// list.
+// BenchmarkClassesIndex_RestrictedGlob measures GenerateClassesIndex's approach: globbing the
+// classes/ files first and parsing only those.
 func BenchmarkClassesIndex_RestrictedGlob(b *testing.B) {
 	if _, err := os.Stat(benchRealMoodleRoot); err != nil {
 		b.Skipf("real Moodle install not available at %s: %v", benchRealMoodleRoot, err)

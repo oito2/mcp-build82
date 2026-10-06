@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,11 +28,13 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
+// GenerateContextInput is the input of the generate_plugin_context tool.
 type GenerateContextInput struct {
 	PluginPath string `json:"plugin_path" jsonschema:"Component (e.g. 'local_myplugin'), path relative to the Moodle root (e.g. 'local/myplugin'), or absolute path"`
 	Format     Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// RegisterGenerateContextTool registers the generate_plugin_context tool on `server`.
 func RegisterGenerateContextTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "generate_plugin_context",
@@ -42,6 +44,10 @@ func RegisterGenerateContextTool(server *mcp.Server) {
 	}, withRecover(handleGenerateContext))
 }
 
+// handleGenerateContext generates the per-plugin context files for the plugin named by
+// `in.PluginPath` and refreshes the global AI index. It returns an error result when the
+// configuration is missing or invalid or the plugin path is rejected; failures of individual files
+// are reported inside the successful report. The error return is always nil.
 func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in GenerateContextInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -57,10 +63,9 @@ func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in Gen
 	}
 
 	result := generators.GenerateAllForPlugin(rp.Path, cfg.MoodlePath, true, &rp.Info)
-	// The returned GeneratorResult must not be discarded — a failure writing MOODLE_AI_INDEX.md
-	// is reported as a stderr warning, not folded into the plugin-scoped
-	// report below (whose paths are relativized against the plugin's own directory, not the Moodle
-	// root this global file lives under).
+	// A failure writing MOODLE_AI_INDEX.md is reported as a stderr warning rather than in the
+	// report below, whose paths are relative to the plugin directory, not the Moodle root where
+	// this global file lives.
 	if r := generators.GenerateAiIndex(cfg.MoodlePath, cfg.MoodleVersion); !r.Success {
 		fmt.Fprintln(os.Stderr, "[build82] warning: failed to update MOODLE_AI_INDEX.md:", r.Error)
 	}
@@ -71,6 +76,7 @@ func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in Gen
 	return textResult(false, renderPluginContextReport(rp, cfg.MoodlePath, result)), struct{}{}, nil
 }
 
+// PluginContextOutput is the JSON-format response of generate_plugin_context.
 type PluginContextOutput struct {
 	Component string       `json:"component"`
 	Type      string       `json:"type"`
@@ -81,7 +87,8 @@ type PluginContextOutput struct {
 	Failed    []FailedFile `json:"failed,omitempty"`
 }
 
-// buildPluginContextOutput reports Path relative to moodlePath, never as an absolute host path.
+// buildPluginContextOutput builds the JSON response for plugin `rp` from the generator `result`.
+// The plugin Path is relative to `moodlePath`, never an absolute host path.
 func buildPluginContextOutput(rp resolvedPlugin, moodlePath string, result generators.PluginGeneratorResult) PluginContextOutput {
 	generated, skipped, failed := classifyResults(result.Files, rp.Path)
 	return PluginContextOutput{
@@ -91,6 +98,9 @@ func buildPluginContextOutput(rp resolvedPlugin, moodlePath string, result gener
 	}
 }
 
+// renderPluginContextReport renders the Markdown report for plugin `rp` from the generator
+// `result`, listing failed, generated and cached files relative to the plugin directory;
+// `moodlePath` is used to display the plugin path.
 func renderPluginContextReport(rp resolvedPlugin, moodlePath string, result generators.PluginGeneratorResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "✅ Generated context for %s (%s), version %s.\n\nPath: %s\n\n",

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -37,6 +37,7 @@ $observers = [
     ],
 ];`
 
+// writeEventsPhp writes content to a temporary db/events.php and returns its path.
 func writeEventsPhp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -47,6 +48,7 @@ func writeEventsPhp(t *testing.T, content string) string {
 	return path
 }
 
+// TestParseEventsPhp_MatchesRegexBackendFixture verifies the parsed observers for a well-formed events file match the regex backend's output.
 func TestParseEventsPhp_MatchesRegexBackendFixture(t *testing.T) {
 	path := writeEventsPhp(t, eventsFixtureWellFormed)
 	result := ParseEventsPhp(path)
@@ -75,6 +77,7 @@ func TestParseEventsPhp_MatchesRegexBackendFixture(t *testing.T) {
 	}
 }
 
+// TestParseEventsPhp_EmptyArray verifies a file without an $observers array yields an empty, non-nil observer list.
 func TestParseEventsPhp_EmptyArray(t *testing.T) {
 	path := writeEventsPhp(t, "<?php\n$observers = [];\n")
 	result := ParseEventsPhp(path)
@@ -83,12 +86,14 @@ func TestParseEventsPhp_EmptyArray(t *testing.T) {
 	}
 }
 
+// TestParseEventsPhp_MissingFile verifies a nonexistent file yields nil.
 func TestParseEventsPhp_MissingFile(t *testing.T) {
 	if ParseEventsPhp("/nonexistent/db/events.php") != nil {
 		t.Error("expected nil for missing file")
 	}
 }
 
+// TestParseEventsPhp_RequiresEitherField verifies an observer is kept when it has either eventname or callback, and dropped when it has neither.
 func TestParseEventsPhp_RequiresEitherField(t *testing.T) {
 	path := writeEventsPhp(t, `<?php
 $observers = [

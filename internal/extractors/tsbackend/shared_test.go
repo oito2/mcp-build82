@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@ import (
 	"github.com/odvcencio/gotreesitter"
 )
 
+// parseSnippet parses a PHP snippet and returns the root node and source bytes, failing the test on a parse error.
 func parseSnippet(t *testing.T, php string) (*gotreesitter.Node, []byte) {
 	t.Helper()
 	dir := t.TempDir()
@@ -38,6 +39,7 @@ func parseSnippet(t *testing.T, php string) (*gotreesitter.Node, []byte) {
 	return tree.RootNode(), src
 }
 
+// TestParseFile_NonexistentReturnsError verifies ParseFile returns an error for a nonexistent path.
 func TestParseFile_NonexistentReturnsError(t *testing.T) {
 	if _, _, err := ParseFile("/nonexistent/file.php"); err == nil {
 		t.Error("expected an error for a nonexistent file")
@@ -76,6 +78,7 @@ func TestParseFile_AtSizeLimitStillParses(t *testing.T) {
 	}
 }
 
+// TestFindAssignment_MatchesByLHSText verifies FindAssignment returns the right-hand side of the assignment whose left-hand side matches.
 func TestFindAssignment_MatchesByLHSText(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 1;\n$b = 2;\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$b" })
@@ -87,6 +90,7 @@ func TestFindAssignment_MatchesByLHSText(t *testing.T) {
 	}
 }
 
+// TestFindAssignment_NoMatchReturnsNil verifies FindAssignment returns nil when no assignment matches.
 func TestFindAssignment_NoMatchReturnsNil(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 1;\n")
 	if v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$nonexistent" }); v != nil {
@@ -94,6 +98,7 @@ func TestFindAssignment_NoMatchReturnsNil(t *testing.T) {
 	}
 }
 
+// TestStringValue_Simple verifies a single-quoted literal is returned as its inner text.
 func TestStringValue_Simple(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 'hello';\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })
@@ -147,6 +152,7 @@ func TestStringValue_Concatenation(t *testing.T) {
 	}
 }
 
+// TestStringValue_ConcatenationThreeFragments verifies a chain of three `.`-joined fragments is joined in order.
 func TestStringValue_ConcatenationThreeFragments(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 'a, ' . 'b, ' . 'c';\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })
@@ -234,6 +240,7 @@ $a = "{$obj->prop}";
 	}
 }
 
+// TestStringValue_WrongNodeKindReturnsFalse verifies a non-string node yields ok=false.
 func TestStringValue_WrongNodeKindReturnsFalse(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 42;\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })
@@ -242,6 +249,7 @@ func TestStringValue_WrongNodeKindReturnsFalse(t *testing.T) {
 	}
 }
 
+// TestIntValue verifies IntValue accepts integer nodes and rejects other node kinds.
 func TestIntValue(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 2024010100;\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })
@@ -251,6 +259,7 @@ func TestIntValue(t *testing.T) {
 	}
 }
 
+// TestArrayElementsAndKeyValue_Keyed verifies keyed array elements expose both key and value nodes.
 func TestArrayElementsAndKeyValue_Keyed(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = ['x' => 1, 'y' => 2];\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })
@@ -270,6 +279,7 @@ func TestArrayElementsAndKeyValue_Keyed(t *testing.T) {
 	}
 }
 
+// TestArrayElementsAndKeyValue_Positional verifies positional array elements expose a nil key and a value node.
 func TestArrayElementsAndKeyValue_Positional(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = ['x', 'y'];\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })
@@ -286,6 +296,7 @@ func TestArrayElementsAndKeyValue_Positional(t *testing.T) {
 	}
 }
 
+// TestArrayElements_WrongNodeKindReturnsNil verifies ArrayElements returns nil for a node that is not an array literal.
 func TestArrayElements_WrongNodeKindReturnsNil(t *testing.T) {
 	root, src := parseSnippet(t, "<?php\n$a = 1;\n")
 	v := FindAssignment(root, func(lhs *gotreesitter.Node) bool { return lhs.Text(src) == "$a" })

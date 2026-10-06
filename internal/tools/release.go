@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,26 +34,22 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
-// excludedNames is the fixed exclusion set: the whole .build82/ directory, the legacy bare
-// PLUGIN_*.md/.indevelopment filenames (for plugins not yet migrated — release_plugin never
-// triggers migration itself), and AI-assistant context files unrelated to build82's own output.
+// excludedNames is the fixed set of base names never packaged into a release ZIP: the .build82/
+// directory, the bare PLUGIN_*.md and .indevelopment files of plugins that still use the legacy
+// layout, other AI-assistant context files, node_modules, .buildignore and .git.
 var excludedNames = buildExcludedNames()
 
+// buildExcludedNames builds the fixed exclusion set held in excludedNames.
 func buildExcludedNames() map[string]struct{} {
 	m := map[string]struct{}{
 		generators.ContextDir: {},
 		"CLAUDE.md":           {}, "GEMINI.md": {}, "AGENTS.md": {},
 		".claudeignore": {}, ".geminiignore": {}, ".aiexclude": {},
 		"node_modules": {},
-		// .buildignore itself is a build82-specific config file, not part of the plugin — shipping
-		// it inside the release ZIP by default would be an oversight, the same reasoning that
-		// already excludes .claudeignore/.geminiignore/.aiexclude above.
+		// .buildignore is build82 configuration, not part of the plugin, like the AI ignore files.
 		".buildignore": {},
-		// .git is excluded unconditionally, in every mode — not just flagged as an error under
-		// strict:true (validateForRelease below also reports it as an explicit issue). A plugin under active development commonly has a .git directory
-		// inside it; packaging it into the default (non-strict) release ZIP would ship the entire
-		// commit history — including anything ever committed and later removed — to every
-		// installer of that ZIP.
+		// .git is excluded in every mode (strict mode additionally reports it as an issue),
+		// because packaging it would ship the full commit history, including removed content.
 		".git": {},
 	}
 	for _, f := range generators.PluginContextFiles {
@@ -63,15 +59,14 @@ func buildExcludedNames() map[string]struct{} {
 	return m
 }
 
+// ReleasePluginInput is the input of the release_plugin tool.
 type ReleasePluginInput struct {
 	Component string `json:"component" jsonschema:"Component (e.g. 'local_myplugin'), path relative to the Moodle root (e.g. 'local/myplugin'), or absolute path"`
-	// output_dir, not outputDir — every other tool input field in this codebase is snake_case
-	// (moodle_path, plugin_path, mark_as_dev, ...); this was the one camelCase outlier, safe to
-	// rename since no v1.0.0 has been published yet.
 	OutputDir string `json:"output_dir,omitempty" jsonschema:"Directory to write the ZIP into (defaults to the current working directory; must already exist)"`
 	Strict    bool   `json:"strict,omitempty" jsonschema:"Validate moodle.org plugin directory submission requirements before packaging; refuses to build the ZIP if any fail (default: false, package unconditionally)"`
 }
 
+// RegisterReleaseTool registers the release_plugin tool on `server`.
 func RegisterReleaseTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "release_plugin",
@@ -81,6 +76,12 @@ func RegisterReleaseTool(server *mcp.Server) {
 	}, withRecover(handleReleasePlugin))
 }
 
+// handleReleasePlugin packages the plugin named by `in.Component` into
+// {component}_{version}.zip inside `in.OutputDir` (default: the working directory, which must
+// exist), excluding build82's own files. With `in.Strict` it first validates the release
+// requirements and refuses to build when any fail. It returns an error result when the component
+// is empty, the configuration or plugin is invalid, the output directory is missing, validation
+// fails, or the ZIP cannot be written; the error return is always nil.
 func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in ReleasePluginInput) (*mcp.CallToolResult, struct{}, error) {
 	if strings.TrimSpace(in.Component) == "" {
 		return textResult(true, "❌ component is required: a component (e.g. 'local_myplugin'), a path relative to the Moodle root (e.g. 'local/myplugin'), or an absolute path."), struct{}{}, nil
@@ -100,9 +101,8 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 		return textResult(true, fmt.Sprintf("❌ Output directory does not exist: %s", outputDir)), struct{}{}, nil
 	}
 
-	// The same central helper generate_plugin_context/explain_plugin use: it accepts all three
-	// identifier forms and rejects anything that resolves outside the Moodle root (e.g.
-	// "local/../../etc").
+	// Accepts a component, relative path or absolute path, and rejects anything resolving outside
+	// the Moodle root (e.g. "local/../../etc").
 	rp, errResult := resolveAndValidatePlugin(in.Component, cfg.MoodlePath)
 	if errResult != nil {
 		return errResult, struct{}{}, nil
@@ -123,25 +123,22 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 		}
 	}
 
-	// Use info.Component (extracted from version.php by resolveAndValidatePlugin, above) rather
-	// than the raw in.Component from the MCP client, which may be a path: building the ZIP
-	// filename from client-controlled input is an unnecessary risk. info.Component is plain
-	// PHP-identifier-shaped data read from the plugin's own source.
+	// The file name uses info.Component (read from the plugin's version.php) rather than the raw
+	// client-supplied identifier, which may be a path.
 	zipName := fmt.Sprintf("%s_%s.zip", info.Component, info.Version)
 	destination := filepath.Join(outputDir, zipName)
 	folderName := filepath.Base(pluginPath)
 
 	excluded := mergeBuildIgnore(pluginPath, excludedNames)
-	foundExcluded, err := createZip(pluginPath, destination, folderName, excluded)
+	foundExcluded, skippedLinks, err := createZip(pluginPath, destination, folderName, excluded)
 	if err != nil {
 		return textResult(true, "❌ Failed to create ZIP: "+err.Error()), struct{}{}, nil
 	}
 
 	var b strings.Builder
 	// Paths are reported relative to the Moodle root, never absolute. A ZIP written outside the
-	// Moodle root (the usual case: output_dir or the working directory) is reported by its file
-	// name alone, which is its path relative to output_dir — the caller already knows that
-	// directory, and echoing it back would leak the host's directory layout.
+	// Moodle root (the usual case) is reported by its file name alone, so the host's directory
+	// layout is not exposed.
 	output, ok := displayPathWithinMoodle(cfg.MoodlePath, destination)
 	if !ok {
 		output = zipName
@@ -155,13 +152,20 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 			fmt.Fprintf(&b, "- %s\n", name)
 		}
 	}
+	if len(skippedLinks) > 0 {
+		sort.Strings(skippedLinks)
+		b.WriteString("\n⚠️ Symbolic links skipped (never added to the archive):\n")
+		for _, rel := range skippedLinks {
+			fmt.Fprintf(&b, "- %s\n", rel)
+		}
+	}
 	return textResult(false, b.String()), struct{}{}, nil
 }
 
-// requestedComponent returns the component the caller asked to release, for strict mode's
-// "version.php declares the expected component" check. A component-shaped identifier is taken
-// as-is; a path identifier names no component itself, so the one implied by the plugin's
-// location on disk ({type}_{directory name}) is used instead.
+// requestedComponent returns the component the caller asked to release, used by strict mode to
+// check that version.php declares the expected component. A component-shaped `identifier` is
+// returned as is; a path identifier names no component itself, so the one implied by the
+// plugin's location ({type}_{directory name}, from `info`) is used instead.
 func requestedComponent(identifier string, info extractors.PluginInfo) string {
 	if !filepath.IsAbs(identifier) && !strings.ContainsAny(identifier, `/\`) {
 		return identifier
@@ -169,18 +173,18 @@ func requestedComponent(identifier string, info extractors.PluginInfo) string {
 	return info.Type + "_" + info.Name
 }
 
-// validMoodleMaturities are the four maturity constants a plugin's $plugin->maturity may use:
-// MATURITY_ALPHA, MATURITY_BETA, MATURITY_RC and MATURITY_STABLE.
+// validMoodleMaturities is the set of accepted $plugin->maturity values: MATURITY_ALPHA,
+// MATURITY_BETA, MATURITY_RC and MATURITY_STABLE.
 var validMoodleMaturities = map[string]struct{}{
 	"MATURITY_ALPHA": {}, "MATURITY_BETA": {}, "MATURITY_RC": {}, "MATURITY_STABLE": {},
 }
 
-// validateForRelease checks a minimal, objectively-verifiable set of release requirements: the
-// requested component matches what version.php itself declares, the required version.php fields are present and well-formed, the component's English
-// language file exists, a Privacy API provider is declared, third-party libraries are declared if
-// present, and no .git directory got left inside the plugin folder. It deliberately stops short of
-// subjective checks (README quality, code style) that would need heuristics instead of a
-// straightforward yes/no per requirement.
+// validateForRelease checks the plugin at `pluginPath` (described by `info`) against a minimal set
+// of objectively verifiable release requirements: `requestedComponent` matches the component
+// declared in version.php, the required version.php fields are present and well-formed, the
+// English language file exists, a Privacy API provider exists, bundled third-party libraries are
+// declared, and no .git directory is present. Subjective checks such as README quality or code
+// style are out of scope. It returns one message per failed requirement, or nil when all pass.
 func validateForRelease(pluginPath, requestedComponent string, info extractors.PluginInfo) []string {
 	var issues []string
 
@@ -203,16 +207,15 @@ func validateForRelease(pluginPath, requestedComponent string, info extractors.P
 		issues = append(issues, fmt.Sprintf("missing language file lang/en/%s.php", info.Component))
 	}
 
-	// Every plugin must declare a Privacy API provider — even one that stores no personal data
-	// must implement \core_privacy\local\metadata\null_provider explicitly rather than omit the
-	// class. This is a plain file-existence check.
+	// Every plugin must declare a Privacy API provider; one that stores no personal data
+	// implements null_provider. This is a plain file-existence check.
 	if !fileExists(filepath.Join(pluginPath, "classes", "privacy", "provider.php")) {
 		issues = append(issues, "missing classes/privacy/provider.php — every plugin must declare a Privacy API "+
 			"provider (implement \\core_privacy\\local\\metadata\\null_provider if the plugin stores no personal data)")
 	}
 
-	// thirdpartylibs.xml is required whenever a plugin bundles third-party code under thirdparty/,
-	// declaring name/version/license/location for each bundled library.
+	// thirdpartylibs.xml must declare the libraries whenever third-party code is bundled under
+	// thirdparty/.
 	if dirExists(filepath.Join(pluginPath, "thirdparty")) && !fileExists(filepath.Join(pluginPath, "thirdpartylibs.xml")) {
 		issues = append(issues, "plugin has a thirdparty/ directory but no thirdpartylibs.xml declaring the bundled libraries")
 	}
@@ -224,10 +227,10 @@ func validateForRelease(pluginPath, requestedComponent string, info extractors.P
 	return issues
 }
 
-// mergeBuildIgnore adds any patterns from the plugin's optional .buildignore file to the fixed
-// exclusion set, additively — a missing file is not an error, just nothing extra to merge.
-// Patterns are matched as exact basenames, .gitignore-style directory/file names, one per line,
-// '#'-comments and blank lines skipped.
+// mergeBuildIgnore returns a copy of the exclusion set `base` extended with the entries of the
+// plugin's optional .buildignore file at `pluginPath`. Each line is an exact base name of a file
+// or directory; blank lines and lines starting with '#' are skipped. A missing or unreadable file
+// adds nothing. `base` is never modified.
 func mergeBuildIgnore(pluginPath string, base map[string]struct{}) map[string]struct{} {
 	merged := make(map[string]struct{}, len(base))
 	for k := range base {
@@ -247,63 +250,61 @@ func mergeBuildIgnore(pluginPath string, base map[string]struct{}) map[string]st
 	return merged
 }
 
-// newZipDestination opens the on-disk file createZip writes into (always a temporary file next to
-// the final ZIP, never the final path itself). It's a package-level variable (rather than a direct
-// os.Create call) purely so tests can substitute a destination whose Write()/Close() fails, to
-// verify createZip surfaces that failure and leaves no partial archive behind. Production
-// behavior: os.Create.
+// newZipDestination opens the file at `path` for writing the archive; createZip passes a
+// temporary file next to the final ZIP. It defaults to os.Create and is a variable so tests can
+// substitute a destination whose Write or Close fails.
 var newZipDestination = func(path string) (io.WriteCloser, error) {
 	return os.Create(path)
 }
 
-// createZip recursively collects pluginPath's files, skipping any entry whose basename is in
-// excluded (at every depth), and archives them under folderName/ at outputPath. Returns the
-// basenames that were actually found and excluded (for reporting).
+// createZip archives the files under `pluginPath`, skipping every entry whose base name is in
+// `excluded` at any depth, into the ZIP at `outputPath`, with all entries placed under
+// `folderName`/. Symbolic links (files and directories) are never archived. It returns the base
+// names that were found and excluded, the plugin-relative paths of the skipped symbolic links, and
+// an error when the archive cannot be created or written.
 //
 // The archive is written to a temporary file in outputPath's directory and renamed onto
-// outputPath only after it has been completely written and closed, so a failure at any point
-// (walk, read, write, or the final central-directory flush) never leaves a truncated ZIP at
-// outputPath — nor replaces a previous good one. The temporary file is removed on failure.
-func createZip(pluginPath, outputPath, folderName string, excluded map[string]struct{}) ([]string, error) {
+// `outputPath` only after it has been completely written and closed, so a failure never leaves a
+// truncated ZIP there nor replaces a previous good one. The temporary file is removed on failure.
+func createZip(pluginPath, outputPath, folderName string, excluded map[string]struct{}) (found, links []string, err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(outputPath), "."+filepath.Base(outputPath)+".*.tmp")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tmpPath := tmp.Name()
-	// os.CreateTemp creates the file 0600; a release archive is meant to be shared, so give it the
-	// usual 0644 a plain os.Create would typically have produced.
+	// os.CreateTemp creates the file with mode 0600; a release archive is meant to be shared, so
+	// it gets the usual 0644.
 	chmodErr := tmp.Chmod(0o644)
 	if err := errors.Join(chmodErr, tmp.Close()); err != nil {
 		os.Remove(tmpPath)
-		return nil, err
+		return nil, nil, err
 	}
 
-	found, err := writeZip(pluginPath, tmpPath, folderName, excluded, []string{tmpPath, outputPath})
+	found, links, err = writeZip(pluginPath, tmpPath, folderName, excluded, []string{tmpPath, outputPath})
 	if err == nil {
 		err = os.Rename(tmpPath, outputPath)
 	}
 	if err != nil {
 		os.Remove(tmpPath)
-		return nil, err
+		return nil, nil, err
 	}
-	return found, nil
+	return found, links, nil
 }
 
-// writeZip does the actual archiving for createZip into destPath. Entries whose path is in skip
-// (the archive being written, and its final destination) are never archived into themselves when
-// the output directory lies inside the plugin.
+// writeZip writes the archive described in createZip to `destPath` and returns the base names that
+// were found and excluded plus the plugin-relative (slash-separated) paths of the symbolic links
+// that were skipped. Files whose path is in `skip` (the archive being written and its final
+// destination) are not archived, so the archive never contains itself when the output directory
+// lies inside the plugin.
 //
-// Both f.Close() and zw.Close() errors are captured via the named err return (rather than being
-// discarded by a bare `defer f.Close()`/`defer zw.Close()`) — zip.Writer.Close() is what actually
-// flushes the ZIP's central directory, so if it fails (e.g. a full disk or another I/O error), the
-// archive is truncated/corrupt even though every individual file write up to that point
-// succeeded. Silently ignoring that error would let release_plugin report success for a broken ZIP.
-// Only the first Close() error is kept — a later Close() failing after an earlier real error (from
-// the walk itself, or from the first Close()) must not mask that earlier, more specific error.
-func writeZip(pluginPath, destPath, folderName string, excluded map[string]struct{}, skip []string) (found []string, err error) {
+// Errors from closing the file and the zip writer are returned through `err`, because closing the
+// zip writer is what flushes the central directory; ignoring that failure would report success for
+// a corrupt archive. Only the first error is kept so a later close failure never masks an earlier,
+// more specific one.
+func writeZip(pluginPath, destPath, folderName string, excluded map[string]struct{}, skip []string) (found, links []string, err error) {
 	f, err := newZipDestination(destPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil && err == nil {
@@ -340,6 +341,14 @@ func writeZip(pluginPath, destPath, folderName string, excluded map[string]struc
 			}
 			return nil
 		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			rel, relErr := filepath.Rel(pluginPath, path)
+			if relErr != nil {
+				return relErr
+			}
+			links = append(links, filepath.ToSlash(rel))
+			return nil
+		}
 		if d.IsDir() {
 			return nil
 		}
@@ -365,12 +374,12 @@ func writeZip(pluginPath, destPath, folderName string, excluded map[string]struc
 		return copyErr
 	})
 	if walkErr != nil {
-		return nil, walkErr
+		return nil, nil, walkErr
 	}
 
 	found = make([]string, 0, len(foundSet))
 	for name := range foundSet {
 		found = append(found, name)
 	}
-	return found, nil
+	return found, links, nil
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,14 +17,12 @@ package toolutil
 
 import "github.com/modelcontextprotocol/go-sdk/mcp"
 
-// NotInitialized returns the canned response returned by every tool that requires config to be
-// loaded but found none. A constructor function rather than a shared *mcp.CallToolResult var:
-// a package-level var would expose one *mcp.CallToolResult pointer, shared
-// by every tool and every concurrent call, with a mutable Content slice — a future call site doing
-// something as innocuous-looking as `res := toolutil.NotInitialized; res.Content =
-// append(res.Content, x)` would corrupt this canonical response for the entire process, for every
-// client, until restart. Nothing mutates it today, but a constructor removes the risk entirely
-// instead of relying on every future caller remembering not to.
+// NotInitialized returns the error response used by every tool that requires a loaded
+// configuration when none exists. It tells the caller to run `init_moodle_context` first.
+//
+// It is a constructor rather than a shared package-level result so that each call gets its own
+// *mcp.CallToolResult and Content slice; a caller that mutates the result cannot affect other
+// tools or concurrent calls.
 func NotInitialized() *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{

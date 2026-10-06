@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -40,6 +40,7 @@ $functions = [
     ],
 ];`
 
+// writeServicesPhp writes content to a temporary db/services.php and returns its path.
 func writeServicesPhp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -50,6 +51,7 @@ func writeServicesPhp(t *testing.T, content string) string {
 	return path
 }
 
+// TestParseServicesPhp_MatchesRegexBackendFixture verifies the parsed functions for a well-formed services file match the regex backend's output.
 func TestParseServicesPhp_MatchesRegexBackendFixture(t *testing.T) {
 	path := writeServicesPhp(t, servicesFixtureWellFormed)
 	result := ParseServicesPhp(path)
@@ -72,6 +74,7 @@ func TestParseServicesPhp_MatchesRegexBackendFixture(t *testing.T) {
 	}
 }
 
+// TestParseServicesPhp_EmptyArray verifies a file without a $functions array yields an empty, non-nil function list.
 func TestParseServicesPhp_EmptyArray(t *testing.T) {
 	path := writeServicesPhp(t, "<?php\n$functions = [];\n")
 	result := ParseServicesPhp(path)
@@ -80,6 +83,7 @@ func TestParseServicesPhp_EmptyArray(t *testing.T) {
 	}
 }
 
+// TestParseServicesPhp_SkipsEntryWithNeitherClassnameNorDescription verifies an entry with neither classname nor description is dropped.
 func TestParseServicesPhp_SkipsEntryWithNeitherClassnameNorDescription(t *testing.T) {
 	path := writeServicesPhp(t, `<?php
 $functions = [
@@ -93,6 +97,7 @@ $functions = [
 	}
 }
 
+// TestParseServicesPhp_MissingFile verifies a nonexistent file yields nil.
 func TestParseServicesPhp_MissingFile(t *testing.T) {
 	if ParseServicesPhp("/nonexistent/db/services.php") != nil {
 		t.Error("expected nil for missing file")

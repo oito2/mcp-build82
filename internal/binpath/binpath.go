@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,11 +24,9 @@ import (
 	"path/filepath"
 )
 
-// Resolve returns the absolute, symlink-resolved path to the currently running executable. If the
-// executable path can't be resolved through symlinks (e.g. it doesn't exist as a real file, only
-// relevant in unusual environments), it falls back to the unresolved path from os.Executable
-// rather than failing outright — a working, if unresolved, path is more useful to the caller than
-// no path at all.
+// Resolve returns the absolute, symlink-resolved path to the currently running executable. If
+// symlink resolution fails, it returns the unresolved path from os.Executable with a nil error.
+// The error is non-nil only when os.Executable itself fails. It never panics.
 func Resolve() (string, error) {
 	p, err := os.Executable()
 	if err != nil {

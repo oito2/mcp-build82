@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// mustMkdirAll creates the directory `path` (and parents), failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -28,6 +29,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes `content` to `path`, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -35,6 +37,7 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// TestMigrateLegacyFiles_MovesFile verifies an existing legacy file is moved into ContextDir.
 func TestMigrateLegacyFiles_MovesFile(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "AI_CONTEXT.md"), "legacy content")
@@ -53,6 +56,7 @@ func TestMigrateLegacyFiles_MovesFile(t *testing.T) {
 	}
 }
 
+// TestMigrateLegacyFiles_NothingToMigrate verifies no results are produced when no legacy file exists.
 func TestMigrateLegacyFiles_NothingToMigrate(t *testing.T) {
 	dir := t.TempDir()
 	results := MigrateLegacyFiles(dir, []string{"AI_CONTEXT.md"})
@@ -61,6 +65,7 @@ func TestMigrateLegacyFiles_NothingToMigrate(t *testing.T) {
 	}
 }
 
+// TestMigrateLegacyFiles_Idempotent verifies a second migration call is a no-op.
 func TestMigrateLegacyFiles_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "AI_CONTEXT.md"), "v1")
@@ -72,6 +77,7 @@ func TestMigrateLegacyFiles_Idempotent(t *testing.T) {
 	}
 }
 
+// TestMigrateLegacyFiles_DiscardsStaleDuplicate verifies a legacy copy is removed when ContextDir already has the file.
 func TestMigrateLegacyFiles_DiscardsStaleDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, ContextDir))
@@ -91,9 +97,8 @@ func TestMigrateLegacyFiles_DiscardsStaleDuplicate(t *testing.T) {
 	}
 }
 
-// TestMigrateLegacyFiles_RejectsTraversalFilename verifies that MigrateLegacyFiles validates its
-// filenames: a name that escapes the root (path traversal) is rejected instead of being renamed or
-// removed.
+// TestMigrateLegacyFiles_RejectsTraversalFilename verifies a filename escaping the root is
+// rejected and the outside file is left untouched.
 func TestMigrateLegacyFiles_RejectsTraversalFilename(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -113,9 +118,8 @@ func TestMigrateLegacyFiles_RejectsTraversalFilename(t *testing.T) {
 	}
 }
 
-// TestMigrateLegacyFiles_RejectsAbsoluteFilename verifies that an absolute
-// filename is rejected, since filepath.Join(root, f) does not re-root an absolute second
-// argument.
+// TestMigrateLegacyFiles_RejectsAbsoluteFilename verifies an absolute filename is rejected and
+// the target file is left untouched.
 func TestMigrateLegacyFiles_RejectsAbsoluteFilename(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -131,9 +135,8 @@ func TestMigrateLegacyFiles_RejectsAbsoluteFilename(t *testing.T) {
 	}
 }
 
-// TestMigrateLegacyFiles_RejectsSymlink confirms a legacy "file" that's actually a symlink is
-// refused rather than migrated — os.Stat (unlike os.Lstat) follows symlinks, so a naive existence
-// check alone wouldn't catch this.
+// TestMigrateLegacyFiles_RejectsSymlink verifies a legacy entry that is a symlink is refused and
+// left in place.
 func TestMigrateLegacyFiles_RejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	outside := t.TempDir()
@@ -154,6 +157,7 @@ func TestMigrateLegacyFiles_RejectsSymlink(t *testing.T) {
 	}
 }
 
+// TestDetectLegacyFiles_ReadOnly verifies DetectLegacyFiles reports existing files without moving them.
 func TestDetectLegacyFiles_ReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "AI_CONTEXT.md"), "legacy content")
@@ -162,20 +166,42 @@ func TestDetectLegacyFiles_ReadOnly(t *testing.T) {
 	if len(found) != 1 || found[0] != "AI_CONTEXT.md" {
 		t.Fatalf("expected to detect AI_CONTEXT.md, got %+v", found)
 	}
-	// Must not have moved anything — this is read-only.
+	// Detection must not move anything.
 	if _, err := os.Stat(filepath.Join(dir, "AI_CONTEXT.md")); err != nil {
 		t.Error("expected DetectLegacyFiles to leave the file in place")
 	}
 }
 
+// TestGlobalContextFilenames_Has13Entries verifies the global context file list has 13 entries.
 func TestGlobalContextFilenames_Has13Entries(t *testing.T) {
 	if len(GlobalContextFilenames) != 13 {
 		t.Errorf("expected 13 global context filenames, got %d", len(GlobalContextFilenames))
 	}
 }
 
+// TestPluginContextFiles_Has12Entries verifies the plugin context file list has 12 entries.
 func TestPluginContextFiles_Has12Entries(t *testing.T) {
 	if len(PluginContextFiles) != 12 {
 		t.Errorf("expected 12 plugin context filenames, got %d", len(PluginContextFiles))
+	}
+}
+
+// TestMigrateLegacyFiles_DotsInNameAreNotTraversal verifies a name containing ".." inside a
+// segment is migrated, while real traversal and separators are rejected.
+func TestMigrateLegacyFiles_DotsInNameAreNotTraversal(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "a..b"), "x")
+	results := MigrateLegacyFiles(root, []string{"a..b", "..", "sub/file", "../x"})
+	byFile := map[string]MigrationResult{}
+	for _, r := range results {
+		byFile[r.File] = r
+	}
+	if r, ok := byFile["a..b"]; !ok || r.Error != "" {
+		t.Errorf("expected a..b to migrate, got %+v", r)
+	}
+	for _, bad := range []string{"..", "sub/file", "../x"} {
+		if byFile[bad].Error == "" {
+			t.Errorf("expected %q to be rejected", bad)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/odvcencio/gotreesitter"
 
@@ -26,9 +27,9 @@ import (
 )
 
 // ParseUpgradePhp parses a db/upgrade.php file's xmldb_{component}_upgrade() function body for
-// version-gated `if ($oldversion < NNNNNNNNNN) { ... }` steps — the first extractor reading
-// control flow rather than an array literal or class structure. Returns nil if the file can't be
-// read.
+// version-gated `if ($oldversion < NNNNNNNNNN) { ... }` steps. Steps are sorted by ascending
+// version; each carries a description derived from the step block. Returns nil if the file can't
+// be read, and an extraction with no steps when the upgrade function is missing.
 func ParseUpgradePhp(filePath string) *phptypes.UpgradeExtraction {
 	tree, src, err := ParseFile(filePath)
 	if err != nil {
@@ -66,7 +67,7 @@ func ParseUpgradePhp(filePath string) *phptypes.UpgradeExtraction {
 		})
 	}
 
-	sort.Slice(steps, func(i, j int) bool {
+	sort.SliceStable(steps, func(i, j int) bool {
 		vi, _ := strconv.Atoi(steps[i].Version)
 		vj, _ := strconv.Atoi(steps[j].Version)
 		return vi < vj
@@ -172,10 +173,16 @@ func lineCommentText(node *gotreesitter.Node, src []byte) (string, bool) {
 	return strings.TrimSpace(strings.TrimPrefix(text, "//")), true
 }
 
+// truncate120 trims surrounding whitespace from s and cuts the result to at most 120 bytes,
+// backing up to the nearest rune boundary so a multi-byte character is never split.
 func truncate120(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > 120 {
-		return s[:120]
+		cut := 120
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		return s[:cut]
 	}
 	return s
 }

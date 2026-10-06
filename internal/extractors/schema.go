@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@ import (
 	"strings"
 )
 
+// The xml* types mirror the structure of a Moodle XMLDB install.xml document for decoding.
 type xmlField struct {
 	Name     string `xml:"NAME,attr"`
 	Type     string `xml:"TYPE,attr"`
@@ -58,31 +59,40 @@ type DbSchema struct {
 	File   string
 	Tables []DbTable
 }
+
+// DbTable is one table of a DbSchema with its fields, keys and indexes.
 type DbTable struct {
 	Name, Comment string
 	Fields        []DbField
 	Keys          []DbKey
 	Indexes       []DbIndex
 }
+
+// DbField is one column of a DbTable.
 type DbField struct {
 	Name, Type, Length, Default, Comment string
 	NotNull, Sequence                    bool
 }
+
+// DbKey is one key of a DbTable; Ref is the referenced table, when there is one.
 type DbKey struct {
 	Name, Type, Ref string
 	Fields          []string
 }
+
+// DbIndex is one index of a DbTable.
 type DbIndex struct {
 	Name   string
 	Unique bool
 	Fields []string
 }
 
-// toBool applies Moodle XMLDB's exact truthiness rule: only the literal string "true" is true.
+// toBool reports whether the XMLDB attribute value `s` is true; only the literal "true" is.
 func toBool(s string) bool {
 	return s == "true"
 }
 
+// splitFields splits the comma-separated field list `s` and trims whitespace, dropping empty names.
 func splitFields(s string) []string {
 	var out []string
 	for _, f := range strings.Split(s, ",") {
@@ -94,6 +104,7 @@ func splitFields(s string) []string {
 	return out
 }
 
+// mapFields converts decoded XML fields into DbField values.
 func mapFields(fields []xmlField) []DbField {
 	out := make([]DbField, 0, len(fields))
 	for _, f := range fields {
@@ -105,6 +116,7 @@ func mapFields(fields []xmlField) []DbField {
 	return out
 }
 
+// mapKeys converts decoded XML keys into DbKey values.
 func mapKeys(keys []xmlKey) []DbKey {
 	out := make([]DbKey, 0, len(keys))
 	for _, k := range keys {
@@ -113,6 +125,7 @@ func mapKeys(keys []xmlKey) []DbKey {
 	return out
 }
 
+// mapIndexes converts decoded XML indexes into DbIndex values.
 func mapIndexes(indexes []xmlIndex) []DbIndex {
 	out := make([]DbIndex, 0, len(indexes))
 	for _, i := range indexes {
@@ -121,9 +134,8 @@ func mapIndexes(indexes []xmlIndex) []DbIndex {
 	return out
 }
 
-// ParseInstallXml parses a db/install.xml file. Returns nil if the file doesn't exist. Malformed
-// XML content degrades to a non-nil *DbSchema with an empty Tables slice — it never returns an
-// error for malformed content, only for a missing file.
+// ParseInstallXml parses the db/install.xml file at `xmlFilePath`. It returns nil when the file
+// cannot be read. Malformed XML yields a non-nil schema with an empty Tables slice.
 func ParseInstallXml(xmlFilePath string) *DbSchema {
 	content, err := readFileCapped(xmlFilePath)
 	if err != nil {
@@ -147,7 +159,8 @@ func ParseInstallXml(xmlFilePath string) *DbSchema {
 	return &DbSchema{File: xmlFilePath, Tables: tables}
 }
 
-// ExtractPluginSchema parses pluginPath/db/install.xml.
+// ExtractPluginSchema parses `pluginPath`/db/install.xml. It returns nil when that file cannot be
+// read.
 func ExtractPluginSchema(pluginPath string) *DbSchema {
 	return ParseInstallXml(filepath.Join(pluginPath, "db", "install.xml"))
 }

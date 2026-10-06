@@ -6,10 +6,10 @@
 
 [![CI](https://github.com/oito2/mcp-build82/actions/workflows/ci.yml/badge.svg)](https://github.com/oito2/mcp-build82/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/oito2/mcp-build82.svg)](https://pkg.go.dev/github.com/oito2/mcp-build82)
-[![Go Report Card](https://goreportcard.com/badge/github.com/oito2/mcp-build82)](https://goreportcard.com/report/github.com/oito2/mcp-build82)
 [![Go Version](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Release](https://img.shields.io/github/v/release/oito2/mcp-build82?sort=semver)](https://github.com/oito2/mcp-build82/releases)
 [![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Code: AI-Assisted](https://img.shields.io/badge/Code-AI--Assisted-blueviolet)](#ai-usage-in-this-project)
 
 🌐 **Language:** English · [Português](docs/pt-br/leiame.md)
 
@@ -24,6 +24,7 @@ plugins that follow its real conventions. Distributed as a single static binary.
 - [Client Setup](#client-setup)
 - [Update & Maintenance](#update--maintenance)
 - [Documentation](#documentation)
+- [AI Usage in This Project](#ai-usage-in-this-project)
 - [License](#license)
 
 ## Overview
@@ -199,6 +200,14 @@ The full documentation site lives in [`docs/en/index.md`](docs/en/index.md) (als
 
 Contributing: see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow and release
 process, and the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## AI Usage in This Project
+
+This project was developed with the assistance of generative AI tools:
+
+- **Scope:** Generation of boilerplate, unit tests and refactoring of helper functions.
+
+- **Oversight:** All generated code was manually reviewed, tested and validated before integration.
 
 ## License
 

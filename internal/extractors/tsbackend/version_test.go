@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// writeVersionPhp writes content to a temporary version.php and returns the directory containing it.
 func writeVersionPhp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -48,6 +49,7 @@ $plugin->release   = '1.0.0';
 	}
 }
 
+// TestReadVersionPhp_MissingFieldsComeBackEmpty verifies absent fields are returned as empty strings.
 func TestReadVersionPhp_MissingFieldsComeBackEmpty(t *testing.T) {
 	dir := writeVersionPhp(t, "<?php\n$version = 2024010100;\n") // no $plugin->* at all
 	component, version, requires, maturity := ReadVersionPhp(dir)
@@ -56,6 +58,7 @@ func TestReadVersionPhp_MissingFieldsComeBackEmpty(t *testing.T) {
 	}
 }
 
+// TestReadVersionPhp_NonexistentFile verifies a missing version.php yields empty values for every field.
 func TestReadVersionPhp_NonexistentFile(t *testing.T) {
 	dir := t.TempDir() // no version.php at all
 	component, version, requires, maturity := ReadVersionPhp(dir)

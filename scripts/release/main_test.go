@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,9 +21,8 @@ import (
 	"testing"
 )
 
-// TestSemverTagPattern_ValidatesStrictly verifies that the version pattern accepts only strict
-// semver tags: the version is interpolated verbatim into a -ldflags string passed to `go build`,
-// and a value containing spaces/quotes could inject unintended linker flags.
+// TestSemverTagPattern_ValidatesStrictly verifies that semverTagPattern accepts only strict
+// "vMAJOR.MINOR.PATCH" tags and rejects values that could inject extra linker flags.
 func TestSemverTagPattern_ValidatesStrictly(t *testing.T) {
 	valid := []string{"v0.1.0", "v1.2.3", "v10.20.30"}
 	for _, v := range valid {
@@ -49,8 +48,8 @@ func TestSemverTagPattern_ValidatesStrictly(t *testing.T) {
 	}
 }
 
-// TestReleaseLDFlags_StripsAndStampsVersion checks that release builds drop the symbol table and
-// DWARF info (-s -w) and still stamp the version into internal/version.Current.
+// TestReleaseLDFlags_StripsAndStampsVersion verifies that the release linker flags strip the symbol
+// table and DWARF info (-s -w) and stamp the version into internal/version.Current.
 func TestReleaseLDFlags_StripsAndStampsVersion(t *testing.T) {
 	got := strings.Fields(releaseLDFlags("v1.2.3"))
 	want := []string{"-s", "-w", "-X", module + "/internal/version.Current=v1.2.3"}

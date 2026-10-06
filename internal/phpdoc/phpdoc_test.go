@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@ package phpdoc
 
 import "testing"
 
-// TestClassifyVisibility covers the 7-step priority order plus the 4 interaction cases.
+// TestClassifyVisibility covers each classification rule in priority order plus the cases where two rules compete.
 func TestClassifyVisibility(t *testing.T) {
 	cases := []struct {
 		name string
@@ -52,7 +52,7 @@ func TestClassifyVisibility(t *testing.T) {
 	}
 }
 
-// TestParseDocBlock_BasicFields verifies the field extraction of parseDocBlock.
+// TestParseDocBlock_BasicFields verifies the field extraction of ParseDocBlock.
 func TestParseDocBlock_BasicFields(t *testing.T) {
 	raw := `/**
  * Returns the number of widgets configured for a course.
@@ -93,5 +93,15 @@ func TestParseDocBlock_BareSummaryWithNoTags(t *testing.T) {
 	doc := ParseDocBlock(raw)
 	if doc.Summary != "The real class summary that should be extracted." {
 		t.Errorf("Summary mismatch: %q", doc.Summary)
+	}
+}
+
+func TestParseDocBlock_SingleLine(t *testing.T) {
+	if got := ParseDocBlock("/** text */").Summary; got != "text" {
+		t.Errorf("Summary = %q, want %q", got, "text")
+	}
+	d := ParseDocBlock("/** @deprecated since 4.0 */")
+	if d.Summary != "" || d.Deprecated != "since 4.0" {
+		t.Errorf("got Summary=%q Deprecated=%q", d.Summary, d.Deprecated)
 	}
 }

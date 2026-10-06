@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -115,6 +115,8 @@ func scanPhpClassFile(path, relFile string) []phptypes.PhpClass {
 	return classes
 }
 
+// findAllClassLikeDeclarations returns every class, interface, trait and enum declaration node
+// under root, in document order, including nested ones.
 func findAllClassLikeDeclarations(root *gotreesitter.Node) []*gotreesitter.Node {
 	var found []*gotreesitter.Node
 	gotreesitter.Walk(root, func(n *gotreesitter.Node, depth int) gotreesitter.WalkAction {
@@ -127,6 +129,8 @@ func findAllClassLikeDeclarations(root *gotreesitter.Node) []*gotreesitter.Node 
 	return found
 }
 
+// classKind maps a declaration node to its kind: interface, trait, enum, "abstract class" or
+// "class".
 func classKind(decl *gotreesitter.Node) phptypes.ClassKind {
 	switch decl.Type(phpLang) {
 	case "interface_declaration":
@@ -143,6 +147,8 @@ func classKind(decl *gotreesitter.Node) phptypes.ClassKind {
 	}
 }
 
+// classExtends returns the source text of the parent class named in decl's extends clause, or an
+// empty string when there is none.
 func classExtends(decl *gotreesitter.Node, src []byte) string {
 	base := FirstChildOfType(decl, "base_clause")
 	if base == nil || base.NamedChildCount() == 0 {
@@ -151,6 +157,8 @@ func classExtends(decl *gotreesitter.Node, src []byte) string {
 	return base.NamedChild(0).Text(src)
 }
 
+// classImplements returns the source text of each interface named in decl's implements clause,
+// or nil when there is none.
 func classImplements(decl *gotreesitter.Node, src []byte) []string {
 	clause := FirstChildOfType(decl, "class_interface_clause")
 	if clause == nil {

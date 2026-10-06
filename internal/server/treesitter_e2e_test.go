@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,11 +26,9 @@ import (
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
-// TestE2E_TreesitterBackend_TestdataFixture runs the whole init_moodle_context ->
-// generate_plugin_context path with BUILD82_EXTRACTOR_BACKEND=treesitter against the shared
-// testdata/moodle fixture, through the same in-memory MCP client/server pattern the rest of
-// internal/server's tests use, and actually reads the generated Markdown content (not just checks
-// IsError/exit codes) to confirm it's sane.
+// TestE2E_TreesitterBackend_TestdataFixture runs init_moodle_context and generate_plugin_context
+// with the tree-sitter extractor backend against the shared testdata/moodle fixture over an
+// in-memory MCP session, then checks the content of the generated Markdown files.
 func TestE2E_TreesitterBackend_TestdataFixture(t *testing.T) {
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "treesitter")
 	withIsolatedHome(t)
@@ -53,9 +51,9 @@ func TestE2E_TreesitterBackend_TestdataFixture(t *testing.T) {
 	assertSaneDemoContext(t, root)
 }
 
-// assertSaneDemoContext reads every generated PLUGIN_*.md for local/demo and checks the content
-// reflects what testdata/moodle/local/demo's fixture source actually contains — proof the
-// tree-sitter backend extracted real data, not just that the generator ran without error.
+// assertSaneDemoContext reads the generated PLUGIN_*.md files of local/demo under the Moodle root
+// `root` and checks that they contain the values present in the fixture source, which shows that
+// the extractor found real data.
 func assertSaneDemoContext(t *testing.T, root string) {
 	t.Helper()
 	pluginDir := filepath.Join(root, "local", "demo")
@@ -95,8 +93,8 @@ func assertSaneDemoContext(t *testing.T, root string) {
 		}
 	}
 
-	// The two db/upgrade.php version-gated steps (2023120100, 2024010100) land in the "Upgrade
-	// History" section of PLUGIN_DEPENDENCIES.md, not the callback index.
+	// The two version-gated steps of db/upgrade.php (2023120100, 2024010100) appear in the
+	// "Upgrade History" section of PLUGIN_DEPENDENCIES.md.
 	dependencies := read("PLUGIN_DEPENDENCIES.md")
 	for _, want := range []string{"2023120100", "2024010100"} {
 		if !strings.Contains(dependencies, want) {
@@ -110,11 +108,10 @@ func assertSaneDemoContext(t *testing.T, root string) {
 	}
 }
 
-// TestE2E_TreesitterBackend_RealPlugins spot-checks the tree-sitter backend against
-// a handful of real, unmodified plugin sources sampled from /srv/workspace/www/html/mdle, copied
-// into an isolated temp Moodle root (never writing into the shared real installation itself —
-// generate_plugin_context writes a .build82/ dir into whatever plugin path it's pointed at).
-// Skips gracefully if that path isn't present in the current environment.
+// TestE2E_TreesitterBackend_RealPlugins runs the tree-sitter backend on a few plugins (a mod, a
+// block and an admin tool) copied from a real Moodle installation at a fixed local path into a
+// temporary Moodle root, so the installation is never written to. The test is skipped when that
+// installation or the sample plugins are not present.
 func TestE2E_TreesitterBackend_RealPlugins(t *testing.T) {
 	const realInstall = "/srv/workspace/www/html/mdle/dev-500"
 	if _, err := os.Stat(filepath.Join(realInstall, "version.php")); err != nil {
@@ -123,10 +120,10 @@ func TestE2E_TreesitterBackend_RealPlugins(t *testing.T) {
 
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "treesitter")
 	withIsolatedHome(t)
-	root := copyFixtureMoodleTree(t) // supplies config.php/version.php/lib/ so IsMoodleRoot holds.
+	root := copyFixtureMoodleTree(t) // supplies the files that make the directory a Moodle root.
 	t.Setenv("BUILD82_MOODLE_PATH", root)
 
-	// A handful of real plugins with different shapes: a mod, a block, and an admin tool.
+	// Plugins of different types: a mod, a block and an admin tool.
 	samples := []string{
 		"mod/forum",
 		"blocks/html",
@@ -137,7 +134,7 @@ func TestE2E_TreesitterBackend_RealPlugins(t *testing.T) {
 	for _, rel := range samples {
 		src := filepath.Join(realInstall, rel)
 		if _, err := os.Stat(filepath.Join(src, "version.php")); err != nil {
-			continue // not every sample exists in every installation; skip what's missing.
+			continue // skip samples missing from this installation
 		}
 		dst := filepath.Join(root, rel)
 		copyRealPluginTree(t, src, dst)
@@ -184,9 +181,9 @@ func TestE2E_TreesitterBackend_RealPlugins(t *testing.T) {
 	}
 }
 
-// copyRealPluginTree copies a real plugin directory's PHP-relevant source files (skipping any
-// pre-existing generated output, lang packs, tests, and other volume that doesn't matter for this
-// spot check) into dst, preserving directory structure.
+// copyRealPluginTree copies the PHP files of the plugin directory `src` into `dst`, preserving the
+// directory structure. Generated output and the tests, lang, amd, templates, pix and vendor
+// directories are skipped. It fails the test on any error.
 func copyRealPluginTree(t *testing.T, src, dst string) {
 	t.Helper()
 	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,11 +24,10 @@ import (
 	"github.com/oito2/mcp-build82/internal/fsutil"
 )
 
-// ConfigSource identifies where a resolved Config came from — diagnostic only, not used for
-// branching logic elsewhere. Typed the same way every other closed-set value in this codebase is
-// (Format, BatchMode, WatchAction, ...) rather than left as a bare string.
+// ConfigSource identifies where a resolved Config came from. It is informational only.
 type ConfigSource string
 
+// Values of ConfigSource.
 const (
 	SourceEnv  ConfigSource = "env"
 	SourceFile ConfigSource = "file"
@@ -36,16 +35,21 @@ const (
 
 // Config is the resolved build82 configuration: which Moodle installation to operate on.
 type Config struct {
-	MoodlePath        string
-	MoodleVersion     string
+	// MoodlePath is the Moodle root directory.
+	MoodlePath string
+	// MoodleVersion is the Moodle release version string; it may be empty.
+	MoodleVersion string
+	// MoodleFullVersion is the full Moodle version identifier; it may be empty.
 	MoodleFullVersion string
-	Source            ConfigSource
+	// Source records whether the values came from the environment or the config file.
+	Source ConfigSource
 }
 
+// configFilename is the name of the config file inside the home directory.
 const configFilename = ".build82"
 
-// configPath resolves ~/.build82. It returns the error from os.UserHomeDir (e.g. an unset
-// $HOME/%USERPROFILE%) instead of falling back to a path relative to the working directory.
+// configPath returns the path of ~/.build82. It returns the os.UserHomeDir error (for example an
+// unset $HOME/%USERPROFILE%) rather than falling back to a relative path.
 func configPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -54,10 +58,9 @@ func configPath() (string, error) {
 	return filepath.Join(home, configFilename), nil
 }
 
-// Load resolves configuration, env wins over file. Returns (nil, nil) if neither source is
-// present. Returns a non-nil error only for a genuine failure resolving the config file's location
-// (see configPath) — never for "no config file exists yet", which loadFromFile still reports as
-// (nil, nil).
+// Load resolves the configuration; the BUILD82_MOODLE_* environment variables take precedence
+// over ~/.build82. It returns (nil, nil) when neither source provides a Moodle path, and an error
+// only when the config file's location cannot be resolved.
 func Load() (*Config, error) {
 	if c := loadFromEnv(); c != nil {
 		return c, nil
@@ -65,6 +68,8 @@ func Load() (*Config, error) {
 	return loadFromFile()
 }
 
+// loadFromEnv builds a Config from the BUILD82_MOODLE_* environment variables, or returns nil when
+// BUILD82_MOODLE_PATH is empty. Values are trimmed of surrounding whitespace.
 func loadFromEnv() *Config {
 	path := strings.TrimSpace(os.Getenv("BUILD82_MOODLE_PATH"))
 	if path == "" {
@@ -78,14 +83,15 @@ func loadFromEnv() *Config {
 	}
 }
 
+// loadFromFile builds a Config from the KEY=VALUE lines of ~/.build82. It returns (nil, nil) when
+// the file is missing, unreadable or has no MOODLE_PATH; an unreadable file also prints a warning to
+// stderr. The error is non-nil only when the file's location cannot be resolved.
 func loadFromFile() (*Config, error) {
 	cfgPath, err := configPath()
 	if err != nil {
 		return nil, err
 	}
-	// Any read error (permission denied, etc.) degrades to "no config from file". A genuine read
-	// failure (as opposed to the file not existing, which ReadOptional reports as ok==false,
-	// err==nil) is reported with a stderr warning and Load continues with (nil, nil).
+	// A read failure other than a missing file only warns and is treated as no config.
 	content, ok, err := fsutil.ReadOptional(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build82: warning: could not read config file %s: %v\n", cfgPath, err)
@@ -118,16 +124,14 @@ func loadFromFile() (*Config, error) {
 	}, nil
 }
 
-// Save writes cfg to ~/.build82 as three "KEY=VALUE\n" lines (unprefixed keys). Callers should only
-// call Save with a freshly-built Config from tool input — this does not guard against overwriting
-// an env-sourced config (deliberately permissive).
+// Save writes `cfg` to ~/.build82 as three "KEY=VALUE\n" lines (MOODLE_PATH, MOODLE_VERSION,
+// MOODLE_FULLVERSION). It returns an error when a value contains a newline or the file cannot be
+// written. Source is not persisted, and an env-sourced Config is written like any other.
 //
-// There is no cross-process lock on ~/.build82: concurrent Save calls from separate processes race
-// and the last writer wins. fsutil.WriteAtomic guarantees the file is never left truncated.
+// There is no cross-process lock: concurrent Save calls race and the last writer wins, but the
+// write is atomic so the file is never left truncated.
 func Save(cfg Config) error {
-	// Load() parses this file as "last write wins" per KEY=VALUE line, so a value containing a
-	// newline would inject extra lines and let one field's value overwrite another on the next
-	// Load(). Such values are rejected.
+	// A newline in a value would inject extra KEY=VALUE lines that override other fields on load.
 	for _, v := range []string{cfg.MoodlePath, cfg.MoodleVersion, cfg.MoodleFullVersion} {
 		if strings.ContainsAny(v, "\n\r") {
 			return fmt.Errorf("config value contains a newline, refusing to write: %q", v)
@@ -146,12 +150,10 @@ func Save(cfg Config) error {
 	return fsutil.WriteAtomic(cfgPath, []byte(content), 0o644)
 }
 
-// Exists reports whether a config is resolvable from either the env var or the config file. The
-// second return is non-nil only if the config-file path itself couldn't be resolved (see
-// configPath) — that failure must not be conflated with the ordinary "false, no config file
-// present" case.
+// Exists reports whether BUILD82_MOODLE_PATH is set to a non-blank value or the config file exists. The error is non-nil
+// only when the config file's location cannot be resolved. The file's content is not validated.
 func Exists() (bool, error) {
-	if os.Getenv("BUILD82_MOODLE_PATH") != "" {
+	if strings.TrimSpace(os.Getenv("BUILD82_MOODLE_PATH")) != "" {
 		return true, nil
 	}
 	cfgPath, err := configPath()
@@ -162,7 +164,8 @@ func Exists() (bool, error) {
 	return statErr == nil, nil
 }
 
-// FilePath returns the resolved path to the config file, for diagnostic messages (e.g. doctor).
+// FilePath returns the path of the config file (~/.build82), or an error when the home directory
+// cannot be resolved.
 func FilePath() (string, error) {
 	return configPath()
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,30 +32,33 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
-// maxQueryLen caps search_plugins/search_api's Query — fuzzySearchInFile runs a Levenshtein
-// comparison (O(len(word) * len(query))) against every word of every line of the index file, so an
-// unbounded query lets a caller force an arbitrarily large amount of CPU work on a single request.
+// maxQueryLen is the maximum accepted length of the search_plugins and search_api queries. It
+// bounds the CPU cost of fuzzySearchInFile, which compares the query by edit distance against
+// every word of every line of an index file.
 const maxQueryLen = 200
 
 // --- shared index cache --------------------------------------------------------
 
+// indexCacheEntry is a cached index file: its modification time (UnixNano) and its lines.
 type indexCacheEntry struct {
 	mtime int64
 	lines []string
 }
 
+// indexCache holds the lines of recently searched index files keyed by path, guarded by
+// indexCacheMu.
 var (
 	indexCache   = map[string]indexCacheEntry{}
 	indexCacheMu sync.Mutex
 )
 
+// indexCacheMax is the number of files indexCache holds before it is emptied.
 const indexCacheMax = 50
 
-// cachedLines returns filePath's content split into lines, from the shared mtime-invalidated
-// cache — the stat+read+cache-or-refresh logic both searchInFile and fuzzySearchInFile share.
-// Caching matters most for fuzzySearchInFile, which runs a full Levenshtein comparison against
-// every word of every line on the zero-exact-match path. Guarded by a mutex — Go tool handlers
-// may run concurrently across sessions.
+// cachedLines returns the content of `filePath` split into lines, served from a cache that is
+// refreshed when the file's modification time changes. It returns nil when the file cannot be
+// stat'ed or read. The cache is mutex-protected because handlers may run concurrently. Callers
+// must not modify the returned slice.
 func cachedLines(filePath string) []string {
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -82,7 +85,8 @@ func cachedLines(filePath string) []string {
 	return entry.lines
 }
 
-// searchInFile is case-insensitive substring match over every line of the given file.
+// searchInFile returns the lines of the file `filePath` that contain `query`, compared
+// case-insensitively. It returns nil when the file cannot be read.
 func searchInFile(filePath, query string) []string {
 	lines := cachedLines(filePath)
 	if lines == nil {
@@ -98,10 +102,10 @@ func searchInFile(filePath, query string) []string {
 	return out
 }
 
-// fuzzySearchInFile is a fuzzy/typo-tolerant fallback — only tried when the exact substring match
-// returns zero results, and never replaces it. Uses a simple token-overlap heuristic: a line
-// matches if it contains a word whose Levenshtein distance to the query is small relative to the
-// query's length.
+// fuzzySearchInFile is the typo-tolerant fallback for searchInFile, used only when the exact match
+// finds nothing. It returns the lines of `filePath` that contain a word whose edit distance to
+// `query` (case-insensitive) is within the limit given by maxEditDistance. It returns nil when the
+// file cannot be read.
 func fuzzySearchInFile(filePath, query string) []string {
 	lines := cachedLines(filePath)
 	if lines == nil {
@@ -123,6 +127,8 @@ func fuzzySearchInFile(filePath, query string) []string {
 	return out
 }
 
+// maxEditDistance returns the edit distance tolerated for a query of `queryLen` bytes: none for
+// very short queries, growing with length.
 func maxEditDistance(queryLen int) int {
 	switch {
 	case queryLen <= 3:
@@ -134,12 +140,15 @@ func maxEditDistance(queryLen int) int {
 	}
 }
 
+// wordSplit splits `s` into words made of the characters a-z, 0-9 and underscore.
 func wordSplit(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
 	})
 }
 
+// levenshtein returns the edit distance (insertions, deletions, substitutions) between the
+// strings `a` and `b`, measured in runes.
 func levenshtein(a, b string) int {
 	if a == b {
 		return 0
@@ -167,6 +176,7 @@ func levenshtein(a, b string) int {
 	return prev[len(rb)]
 }
 
+// min3 returns the smallest of `a`, `b` and `c`.
 func min3(a, b, c int) int {
 	m := a
 	if b < m {
@@ -180,12 +190,15 @@ func min3(a, b, c int) int {
 
 // --- 5a. search_plugins ---------------------------------------------------------
 
+// SearchPluginsInput is the input of the search_plugins tool.
 type SearchPluginsInput struct {
 	Query  string `json:"query" jsonschema:"Search term (component name, plugin type, etc.)"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"Max results, 1-100 (default 20)"`
 	Format Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// RegisterSearchTools registers the search_plugins, search_api, get_plugin_info and
+// list_dev_plugins tools on `server`.
 func RegisterSearchTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_plugins",
@@ -208,6 +221,7 @@ func RegisterSearchTools(server *mcp.Server) {
 	}, withRecover(handleListDevPlugins))
 }
 
+// normalizeLimit returns `def` when `limit` is not positive, and `limit` capped at 100 otherwise.
 func normalizeLimit(limit, def int) int {
 	if limit <= 0 {
 		return def
@@ -218,6 +232,10 @@ func normalizeLimit(limit, def int) int {
 	return limit
 }
 
+// handleSearchPlugins searches the generated plugin index for `in.Query`, falling back to fuzzy
+// matching when there is no exact match, and returns at most `in.Limit` rows (default 20, max
+// 100). It returns an error result when the configuration is missing or invalid, the query is
+// longer than maxQueryLen, or the index has not been generated; the error return is always nil.
 func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in SearchPluginsInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -264,28 +282,48 @@ func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in Searc
 	return textResult(false, b.String()), struct{}{}, nil
 }
 
-// filterTableRows keeps only lines starting with "|" and not containing "Component" (the header
-// row).
+// filterTableRows returns the Markdown table rows among `lines`: those starting with "|",
+// excluding the header row (whose first cell is "Component") and the separator row.
 func filterTableRows(lines []string) []string {
 	var out []string
 	for _, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "|") && !strings.Contains(l, "Component") {
-			out = append(out, l)
+		t := strings.TrimSpace(l)
+		if !strings.HasPrefix(t, "|") || isTableHeaderOrSeparator(t) {
+			continue
 		}
+		out = append(out, l)
 	}
 	return out
 }
 
+// isTableHeaderOrSeparator reports whether the trimmed table row `row` is the plugin index header
+// (first cell "Component") or a Markdown separator row (cells made only of '-', ':' and spaces).
+func isTableHeaderOrSeparator(row string) bool {
+	cells := strings.Split(strings.Trim(row, "|"), "|")
+	if strings.TrimSpace(cells[0]) == "Component" {
+		return true
+	}
+	for _, c := range cells {
+		if strings.Trim(strings.TrimSpace(c), "-:") != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // --- 5b. search_api ---------------------------------------------------------------
 
+// ApiVisibilityFilter selects which entries of the API index search_api returns.
 type ApiVisibilityFilter string
 
+// Supported values of ApiVisibilityFilter.
 const (
 	ApiVisPublic     ApiVisibilityFilter = "public"
 	ApiVisDeprecated ApiVisibilityFilter = "deprecated"
 	ApiVisAll        ApiVisibilityFilter = "all"
 )
 
+// SearchApiInput is the input of the search_api tool.
 type SearchApiInput struct {
 	Query      string              `json:"query" jsonschema:"Search term (function name, keyword in summary, etc.)"`
 	Visibility ApiVisibilityFilter `json:"visibility,omitempty" jsonschema:"'public' (default), 'deprecated', or 'all'"`
@@ -293,6 +331,11 @@ type SearchApiInput struct {
 	Format     Format              `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// handleSearchApi searches the generated API index for `in.Query`, falling back to fuzzy matching
+// when there is no exact match. `in.Visibility` (default "public") keeps non-deprecated,
+// deprecated or all functions, and at most `in.Limit` entries (default 30, max 100) are returned.
+// It returns an error result when the configuration is missing or invalid, the query is longer
+// than maxQueryLen, or the index has not been generated; the error return is always nil.
 func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApiInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -359,6 +402,8 @@ func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApi
 	return textResult(false, b.String()), struct{}{}, nil
 }
 
+// filterFunctionLines returns the function entries among `lines`: those that are Markdown list
+// items starting with a code span.
 func filterFunctionLines(lines []string) []string {
 	var out []string
 	for _, l := range lines {
@@ -371,11 +416,16 @@ func filterFunctionLines(lines []string) []string {
 
 // --- 5c. get_plugin_info ---------------------------------------------------------
 
+// GetPluginInfoInput is the input of the get_plugin_info tool.
 type GetPluginInfoInput struct {
 	Plugin string `json:"plugin" jsonschema:"Component, relative path, or absolute path"`
 	Format Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// handleGetPluginInfo returns the generated PLUGIN_AI_CONTEXT.md of the plugin named by
+// `in.Plugin`, or its live-detected metadata when that file does not exist. When the plugin cannot
+// be found, it lists index entries matching the identifier or returns an error result. The error
+// return is always nil.
 func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPluginInfoInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -387,11 +437,9 @@ func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPl
 
 	pluginPath, ok := resolvePluginPathWithinMoodle(in.Plugin, cfg.MoodlePath)
 	if !ok {
-		// resolvePluginPathWithinMoodle returning false covers two distinct cases
-		// (unresolvable identifier vs. resolved-but-outside-the-root) — both fall through to the
-		// same fuzzy-match-search / not-found path below. A path that resolves outside the Moodle
-		// root is treated the same as one that doesn't resolve at all, rather than producing a
-		// containment-specific error, because this tool is a forgiving, best-effort lookup.
+		// An unresolvable identifier and one resolving outside the Moodle root are treated the
+		// same: both fall through to the index lookup and not-found handling below, because this
+		// tool is a forgiving, best-effort lookup.
 		pluginPath = filepath.Join(cfg.MoodlePath, in.Plugin)
 	}
 
@@ -410,7 +458,7 @@ func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPl
 		return textResult(true, fmt.Sprintf("❌ Plugin not found: %s", in.Plugin)), struct{}{}, nil
 	}
 
-	// Reported relative to the Moodle root: an absolute host path must never leak into tool output.
+	// Reported relative to the Moodle root so no absolute host path appears in the output.
 	relPath := relativeToMoodle(cfg.MoodlePath, pluginPath)
 
 	if content, err := os.ReadFile(generators.PluginOutputPath(pluginPath, "PLUGIN_AI_CONTEXT.md")); err == nil {
@@ -437,10 +485,14 @@ func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPl
 
 // --- 5d. list_dev_plugins ---------------------------------------------------------
 
+// ListDevPluginsInput is the input of the list_dev_plugins tool.
 type ListDevPluginsInput struct {
 	Format Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// handleListDevPlugins lists the plugins marked .indevelopment with their path relative to the
+// Moodle root and whether a generated PLUGIN_AI_CONTEXT.md exists. It returns an error result when
+// the configuration is missing or invalid; the error return is always nil.
 func handleListDevPlugins(ctx context.Context, req *mcp.CallToolRequest, in ListDevPluginsInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {

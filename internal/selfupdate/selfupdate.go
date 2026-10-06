@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -38,32 +38,26 @@ import (
 	"github.com/oito2/mcp-build82/internal/version"
 )
 
+// GitHub API endpoint and repository that releases are fetched from.
 const (
 	defaultAPIBaseURL = "https://api.github.com"
 	repoOwner         = "oito2"
 	repoName          = "mcp-build82"
 )
 
-// maxAssetSize caps a single downloaded release asset (binary or checksums.txt). Without a limit,
-// a slow/hung or compromised/unexpected server response could block indefinitely or fill the disk
-// before the checksum verification step ever runs. A package var, not a const, so tests can shrink
-// it temporarily instead of needing to actually serve a multi-hundred-MB response.
+// maxAssetSize caps the size in bytes of a single downloaded release asset (binary or
+// checksums.txt), so an oversized response cannot fill the disk before checksum verification runs.
+// It is a variable so tests can lower it.
 var maxAssetSize int64 = 200 << 20 // 200 MiB — generous headroom over any real build82 binary
 
-// maxReleaseResponseSize caps how much of a GitHub Releases API response FetchLatestRelease will
-// ever read into memory — both the JSON metadata decode on success and the error body read on an
-// unexpected status. Release metadata is at most a few KB; 1 MiB is generous headroom while still
-// closing off unbounded-read exposure to a slow/hung or unexpectedly huge response. A package var,
-// not a const, so tests can shrink it instead of needing to actually serve a multi-hundred-KB body.
+// maxReleaseResponseSize caps how many bytes of a GitHub Releases API response FetchLatestRelease
+// reads into memory, for both the JSON body on success and the error body on an unexpected status.
+// It is a variable so tests can lower it.
 var maxReleaseResponseSize int64 = 1 << 20 // 1 MiB
 
-// httpClient is used for every network call self-update makes (release metadata + asset
-// downloads). A bare http.Client (the zero value / http.DefaultClient) has no Timeout, so a
-// hung connection would block `build82 self-update` indefinitely with no way to cancel it.
-// CheckRedirect refuses any redirect hop that downgrades to plain http — otherwise a
-// compromised/MITM'd intermediate could force the download of a binary or checksums.txt over an
-// unencrypted connection even though the initial URL was validated as https (see
-// validateAssetURL).
+// httpClient is the client used for release-metadata requests. It has a 30-second overall timeout
+// and refuses any redirect to a non-https URL, so a response can never push the exchange onto an
+// unencrypted connection (see validateAssetURL for the initial-URL check).
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -74,24 +68,18 @@ var httpClient = &http.Client{
 	},
 }
 
-// downloadClient is used specifically for downloading release assets (the binary and
-// checksums.txt), which can legitimately take much longer than a release-metadata query on a slow
-// connection — up to maxAssetSize (200 MiB). httpClient's 30s Timeout covers the entire exchange
-// (connect + read the whole body), so reusing it for asset downloads too would abort a perfectly
-// healthy, slow-but-progressing download. downloadClient reuses httpClient's CheckRedirect
-// (https-only redirects) so both clients enforce the exact same redirect policy, but gives the
-// exchange a much longer ceiling instead of httpClient's tight one. FetchLatestRelease keeps using
-// httpClient — metadata responses are tiny and should never legitimately take anywhere near 30s.
+// downloadClient is the client used to download release assets (the binary and checksums.txt). It
+// applies the same https-only redirect policy as httpClient but allows a 5-minute overall timeout,
+// since an asset can be up to maxAssetSize bytes on a slow connection.
 var downloadClient = &http.Client{
 	Timeout:       5 * time.Minute,
 	CheckRedirect: httpClient.CheckRedirect,
 }
 
-// validateAssetURL rejects any release-asset URL (browser_download_url from the GitHub Releases
-// API response) that isn't https, or whose host isn't github.com or a *.githubusercontent.com
-// subdomain (GitHub's own asset-hosting domain, e.g. objects.githubusercontent.com), so a
-// modified API response or an https->http downgrade cannot point self-update at an arbitrary URL.
-// Called before every downloadToTemp call in Run().
+// validateAssetURL checks a release-asset download URL (`raw`, a browser_download_url from the
+// release metadata). It returns an error when the URL cannot be parsed, is not https, or its host
+// is neither github.com nor a *.githubusercontent.com subdomain. Run calls it before every asset
+// download.
 func validateAssetURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -118,7 +106,8 @@ type Asset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-// FindAsset looks up an asset by its exact filename.
+// FindAsset returns the asset whose filename equals `name` exactly; ok is false when the release
+// has no such asset.
 func (r *Release) FindAsset(name string) (Asset, bool) {
 	for _, a := range r.Assets {
 		if a.Name == name {
@@ -128,8 +117,8 @@ func (r *Release) FindAsset(name string) (Asset, bool) {
 	return Asset{}, false
 }
 
-// AssetName returns the exact release-asset filename for goos/goarch, following this project's
-// naming convention (`build82_{GOOS}_{GOARCH}{ext}`).
+// AssetName returns the release-asset filename for the given `goos` and `goarch`, in the form
+// `build82_{GOOS}_{GOARCH}`, with a `.exe` suffix on windows.
 func AssetName(goos, goarch string) string {
 	ext := ""
 	if goos == "windows" {
@@ -138,9 +127,10 @@ func AssetName(goos, goarch string) string {
 	return fmt.Sprintf("build82_%s_%s%s", goos, goarch, ext)
 }
 
-// FetchLatestRelease queries the GitHub Releases API for the latest release. apiBaseURL is
-// injectable so tests can point it at an httptest.Server instead of the real GitHub API. A nil
-// Release with a nil error means no releases exist yet (GitHub returns 404 for an empty list).
+// FetchLatestRelease queries the GitHub Releases API at `apiBaseURL` using `client` and returns the
+// latest release. A nil Release with a nil error means no release exists (HTTP 404). Any other
+// non-200 status, a request failure, or an undecodable body is returned as an error. Response
+// reads are capped at maxReleaseResponseSize bytes.
 func FetchLatestRelease(client *http.Client, apiBaseURL string) (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", apiBaseURL, repoOwner, repoName)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -171,55 +161,133 @@ func FetchLatestRelease(client *http.Client, apiBaseURL string) (*Release, error
 	return &rel, nil
 }
 
-// parseSemver parses a "vX.Y.Z" (or "X.Y.Z") tag into its three numeric components, ignoring any
-// pre-release/build suffix after a "-" or "+".
-func parseSemver(s string) (major, minor, patch int, ok bool) {
+// semver is a parsed "vX.Y.Z[-pre-release][+build]" version. Build metadata is discarded.
+type semver struct {
+	major, minor, patch int
+	pre                 []string
+}
+
+// parseSemver parses a "vX.Y.Z" (or "X.Y.Z") tag `s`, with an optional "-" pre-release part
+// and an optional "+" build part that is ignored. ok is false when the core does not have exactly
+// three numeric dot-separated parts or a pre-release identifier is empty.
+func parseSemver(s string) (v semver, ok bool) {
 	s = strings.TrimPrefix(s, "v")
-	if idx := strings.IndexAny(s, "-+"); idx >= 0 {
+	if idx := strings.Index(s, "+"); idx >= 0 {
+		s = s[:idx]
+	}
+	if idx := strings.Index(s, "-"); idx >= 0 {
+		v.pre = strings.Split(s[idx+1:], ".")
+		for _, id := range v.pre {
+			if id == "" {
+				return semver{}, false
+			}
+		}
 		s = s[:idx]
 	}
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
-		return 0, 0, 0, false
+		return semver{}, false
 	}
 	nums := make([]int, 3)
 	for i, p := range parts {
 		n, err := strconv.Atoi(p)
-		if err != nil {
-			return 0, 0, 0, false
+		if err != nil || n < 0 {
+			return semver{}, false
 		}
 		nums[i] = n
 	}
-	return nums[0], nums[1], nums[2], true
+	v.major, v.minor, v.patch = nums[0], nums[1], nums[2]
+	return v, true
 }
 
-// IsNewer reports whether latest is a strictly newer version than current. An unparsable current
-// version (e.g. "dev", which internal/version.Current reports for a binary built without the
-// release ldflags) is always treated as outdated, since a dev build has no real version to compare
-// against. An unparsable latest tag never triggers an update — we can't safely claim one is
-// available.
+// isNumeric reports whether `id` consists only of ASCII digits.
+func isNumeric(id string) bool {
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return id != ""
+}
+
+// comparePre compares two pre-release identifier lists by semver precedence and returns -1, 0 or
+// 1. An empty list (a normal release) ranks above any pre-release. Identifiers compare left to
+// right: numeric ones numerically, alphanumeric ones lexically in ASCII order, numeric below
+// alphanumeric, and a shorter list below a longer one when all shared identifiers are equal.
+func comparePre(a, b []string) int {
+	switch {
+	case len(a) == 0 && len(b) == 0:
+		return 0
+	case len(a) == 0:
+		return 1
+	case len(b) == 0:
+		return -1
+	}
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] == b[i] {
+			continue
+		}
+		aNum, bNum := isNumeric(a[i]), isNumeric(b[i])
+		switch {
+		case aNum && bNum:
+			// Compare by length first so arbitrarily long numbers need no integer conversion.
+			an, bn := strings.TrimLeft(a[i], "0"), strings.TrimLeft(b[i], "0")
+			if len(an) != len(bn) {
+				return cmpInt(len(an), len(bn))
+			}
+			return strings.Compare(an, bn)
+		case aNum:
+			return -1
+		case bNum:
+			return 1
+		default:
+			return strings.Compare(a[i], b[i])
+		}
+	}
+	return cmpInt(len(a), len(b))
+}
+
+// cmpInt returns -1, 0 or 1 as a is less than, equal to or greater than b.
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
+
+// IsNewer reports whether `latest` is a strictly newer version than `current` by semver
+// precedence: major, minor and patch numbers first, then pre-release identifiers (a release
+// outranks the same version with a pre-release suffix). Build metadata is ignored. An unparsable
+// `current` (such as "dev", the default of version.Current) is always treated as outdated. An
+// unparsable `latest` never counts as newer.
 func IsNewer(current, latest string) bool {
-	lMajor, lMinor, lPatch, lOK := parseSemver(latest)
+	l, lOK := parseSemver(latest)
 	if !lOK {
 		return false
 	}
-	cMajor, cMinor, cPatch, cOK := parseSemver(current)
+	c, cOK := parseSemver(current)
 	if !cOK {
 		return true
 	}
-	if cMajor != lMajor {
-		return lMajor > cMajor
+	if c.major != l.major {
+		return l.major > c.major
 	}
-	if cMinor != lMinor {
-		return lMinor > cMinor
+	if c.minor != l.minor {
+		return l.minor > c.minor
 	}
-	return lPatch > cPatch
+	if c.patch != l.patch {
+		return l.patch > c.patch
+	}
+	return comparePre(c.pre, l.pre) < 0
 }
 
-// VerifyChecksum checks that filePath's SHA-256 digest matches the line for assetName inside
-// checksumsContent (the "checksums.txt" release asset, standard `sha256sum` output format:
-// "<hex digest>  <filename>" per line). This step must never be skipped before replacing the
-// running binary — a corrupted or tampered download is a real supply-chain risk.
+// VerifyChecksum checks that the SHA-256 digest of the file at `filePath` matches the entry for
+// `assetName` in `checksumsContent` (checksums.txt content in `sha256sum` format, one
+// "<hex digest>  <filename>" per line). It returns an error when there is no entry for
+// `assetName`, the file cannot be read, or the digests differ.
 func VerifyChecksum(checksumsContent, assetName, filePath string) error {
 	var want string
 	for _, line := range strings.Split(checksumsContent, "\n") {
@@ -251,9 +319,11 @@ func VerifyChecksum(checksumsContent, assetName, filePath string) error {
 	return nil
 }
 
-// downloadToTemp downloads url into a new temp file inside dir and returns its path. dir should
-// be the same directory as the binary that will eventually be replaced, so a later rename can be
-// an atomic same-filesystem operation.
+// downloadToTemp downloads `url` with `client` into a new temp file in `dir` (named from
+// `pattern`, as in os.CreateTemp) and returns its path. `dir` should be the directory of the binary
+// to be replaced so a later rename stays on one filesystem. It returns an error on a request
+// failure, a non-200 status, a write or close failure, or a body larger than maxAssetSize; in the
+// last three cases the temp file is removed.
 func downloadToTemp(client *http.Client, url, dir, pattern string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -274,31 +344,32 @@ func downloadToTemp(client *http.Client, url, dir, pattern string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
 	}
-	defer tmp.Close()
 
 	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxAssetSize+1))
 	if err != nil {
+		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
 		return "", fmt.Errorf("write %s: %w", tmp.Name(), err)
 	}
 	if n > maxAssetSize {
+		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
 		return "", fmt.Errorf("download %s exceeded max size of %d bytes", url, maxAssetSize)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("close %s: %w", tmp.Name(), err)
 	}
 	return tmp.Name(), nil
 }
 
-// smokeTestTimeout bounds how long SmokeTest waits for the downloaded binary to answer
-// `--version` before giving up. Without a bound, a hung/broken downloaded binary would block
-// `self-update` (and AtomicReplace, which never touches the original binary until after this
-// call) forever, with no way to cancel it. A package var, not a const, so tests can shrink it
-// instead of needing to actually wait out a real 10s timeout against a deliberately hung process.
+// smokeTestTimeout bounds how long SmokeTest waits for a binary to answer `--version`. It is a
+// variable so tests can lower it.
 var smokeTestTimeout = 10 * time.Second
 
-// SmokeTest runs binaryPath --version as a subprocess and returns its trimmed stdout. Any error
-// (non-zero exit, empty output, or timing out after smokeTestTimeout) means the caller must not
-// trust this binary — this always runs before AtomicReplace ever touches the currently-running
-// executable.
+// SmokeTest runs `binaryPath --version` as a subprocess and returns its trimmed stdout. It returns
+// an error on a non-zero exit, empty output, or a timeout after smokeTestTimeout, in which case the
+// binary must not be trusted.
 func SmokeTest(binaryPath string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), smokeTestTimeout)
 	defer cancel()
@@ -317,24 +388,27 @@ func SmokeTest(binaryPath string) (string, error) {
 	return v, nil
 }
 
-// osRename is os.Rename, indirected through a package variable purely so tests can inject a
-// failure at a specific rename call — the real-world "second rename fails after the first already
-// succeeded, and the restore rename then ALSO fails" scenario has no other reliable, portable way
-// to reproduce deterministically in a unit test.
+// osRename is os.Rename held in a variable so tests can inject rename failures.
 var osRename = os.Rename
 
-// AtomicReplace swaps newBinaryPath into currentBinaryPath's place. Both paths must be on the
-// same filesystem so the final rename is atomic. The new binary is smoke-tested *before* the
-// original is touched at all — on any failure the original file is left completely untouched, so
-// the system is never left without a working binary. Returns the path the original binary was
-// backed up to.
-func AtomicReplace(currentBinaryPath, newBinaryPath string) (backupPath string, err error) {
+// AtomicReplace swaps the binary at `newBinaryPath` into the place of `currentBinaryPath`, which is
+// first renamed to `currentBinaryPath + ".bak"` (returned as `backupPath`). Both paths must be on
+// the same filesystem so the renames are atomic. The new binary is made executable and smoke-tested
+// before the original is touched; when `wantVersion` is not empty, its `--version` output must also
+// equal that version (compared without a leading "v"), so a failure there leaves the original untouched. If moving the
+// new binary into place fails, the backup is renamed back; if that also fails, the returned error
+// reports that `currentBinaryPath` is missing.
+func AtomicReplace(currentBinaryPath, newBinaryPath, wantVersion string) (backupPath string, err error) {
 	if err := os.Chmod(newBinaryPath, 0o755); err != nil {
 		return "", fmt.Errorf("chmod new binary: %w", err)
 	}
 
-	if _, err := SmokeTest(newBinaryPath); err != nil {
+	got, err := SmokeTest(newBinaryPath)
+	if err != nil {
 		return "", fmt.Errorf("refusing to replace: %w", err)
+	}
+	if wantVersion != "" && strings.TrimPrefix(got, "v") != strings.TrimPrefix(wantVersion, "v") {
+		return "", fmt.Errorf("refusing to replace: new binary reports version %q, expected %s", got, wantVersion)
 	}
 
 	backupPath = currentBinaryPath + ".bak"
@@ -342,9 +416,8 @@ func AtomicReplace(currentBinaryPath, newBinaryPath string) (backupPath string, 
 		return "", fmt.Errorf("back up current binary: %w", err)
 	}
 	if err := osRename(newBinaryPath, currentBinaryPath); err != nil {
-		// Best-effort restore so the system is never left without a working binary. If the
-		// restore itself also fails, currentBinaryPath is missing (neither the old binary nor the
-		// new one is there), so both errors are reported.
+		// Best-effort restore of the original binary. If the restore also fails,
+		// currentBinaryPath is missing, so both errors are reported.
 		if restoreErr := osRename(backupPath, currentBinaryPath); restoreErr != nil {
 			return "", fmt.Errorf("move new binary into place: %w (restore also failed, %s is now MISSING — recover it manually from %s: %v)",
 				err, currentBinaryPath, backupPath, restoreErr)
@@ -354,22 +427,11 @@ func AtomicReplace(currentBinaryPath, newBinaryPath string) (backupPath string, 
 	return backupPath, nil
 }
 
-// Rollback restores the previous binary from its ".bak" backup (created by AtomicReplace) back
-// into binaryPath — the manual-recovery path ("mv build82.bak build82") for when a newly
-// self-updated binary passes SmokeTest at update time but turns out to be broken in real use
-// afterwards. Wired up as `build82 self-update --rollback`.
-//
-// Unlike AtomicReplace, this is a single rename: binaryPath already holds the (possibly broken)
-// current binary and backupPath simply replaces it atomically — there's no "back up the current
-// binary first" step, since whatever is at binaryPath is discarded.
-// The rename goes through the same osRename seam AtomicReplace uses, so a failure here is surfaced
-// with full context rather than silently discarded, matching AtomicReplace's own rigor.
-//
-// After the rename, SmokeTest runs against the restored binary purely as a diagnostic
-// confirmation. If it fails, that error is returned but the rename is NOT undone — the binary has
-// already been restored, and reverting would put the known-broken pre-rollback binary back in
-// place, which is strictly worse than leaving the (reportedly working, per its own prior
-// AtomicReplace smoke test) restored one in place.
+// Rollback restores the binary at `binaryPath` from its ".bak" backup created by AtomicReplace,
+// as used by `build82 self-update --rollback`. The backup is renamed over `binaryPath`, discarding
+// whatever is there. It returns an error when the backup is missing or cannot be inspected, or the
+// rename fails. After the rename the restored binary is smoke-tested; a failure there is returned
+// as an error, but the rename is not undone.
 func Rollback(binaryPath string) error {
 	backupPath := binaryPath + ".bak"
 
@@ -393,22 +455,27 @@ func Rollback(binaryPath string) error {
 
 // RunOptions configures a self-update run.
 type RunOptions struct {
-	Check   bool
-	Yes     bool
-	Channel string // reserved for a future pre-release channel; "stable" is the only one today
+	// Check only reports whether a newer release exists, without downloading anything.
+	Check bool
+	// Yes skips the confirmation prompt.
+	Yes bool
+	// Channel selects the release channel; empty or "stable" is the only supported value.
+	Channel string
 
-	// APIBaseURL overrides the GitHub API base URL — only ever set in tests, pointed at an
-	// httptest.Server so no test depends on real network access.
+	// APIBaseURL overrides the GitHub API base URL; empty means the public GitHub API.
 	APIBaseURL string
-	Stdout     io.Writer
-	Stdin      io.Reader
+	// Stdout receives progress output; nil means os.Stdout.
+	Stdout io.Writer
+	// Stdin supplies the confirmation answer; nil means os.Stdin.
+	Stdin io.Reader
 }
 
-// Run is the top-level `build82 self-update` flow: check the latest release, download and verify
-// it, then atomically replace the running binary.
+// Run is the top-level `build82 self-update` flow: it checks the latest release, asks for
+// confirmation (unless `opts.Yes` or `opts.Check`), downloads the platform binary and checksums.txt,
+// verifies the checksum, and atomically replaces the running binary. It returns nil when there is
+// nothing to do or the user declines, and an error for an unsupported channel, a failed query or
+// download, a missing asset, a checksum mismatch or a failed replacement.
 func Run(opts RunOptions) error {
-	// Channel is reserved for a future pre-release channel; "stable" (or unset) is the only
-	// supported value. Any other value is rejected with an error instead of being ignored.
 	if opts.Channel != "" && opts.Channel != "stable" {
 		return fmt.Errorf("unsupported channel %q: only \"stable\" is currently supported", opts.Channel)
 	}
@@ -493,13 +560,13 @@ func Run(opts RunOptions) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(newBinaryPath) }() // no-op once successfully renamed into place
+	defer func() { _ = os.Remove(newBinaryPath) }() // no-op once renamed into place
 
 	if err := VerifyChecksum(string(checksumsContent), assetName, newBinaryPath); err != nil {
 		return fmt.Errorf("checksum verification failed, refusing to replace the running binary: %w", err)
 	}
 
-	backupPath, err := AtomicReplace(currentBinaryPath, newBinaryPath)
+	backupPath, err := AtomicReplace(currentBinaryPath, newBinaryPath, rel.TagName)
 	if err != nil {
 		return err
 	}

@@ -30,7 +30,7 @@ build82 uninstall [target] [--purge]
 | `target` | Optional. The first argument that does not start with `-`. One of `claude`, `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`. Omitted: all registrations found. |
 | `--purge` | Optional, may appear anywhere. After unregistering, also deletes generated files and the config file, with its own separate confirmation. |
 
-Extra positional arguments after the first are ignored. An unknown `target` fails with `unknown target "<id>" — supported targets: <list>` and exit code 1.
+An extra positional argument or an unknown flag is a usage error (exit code 2). An unknown `target` fails with `unknown target "<id>" — supported targets: <list>` and exit code 1.
 
 ### Without a target
 

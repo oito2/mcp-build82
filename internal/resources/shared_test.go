@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,10 +23,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestWithRecoverResource_ConvertsPanicToErrorResult verifies that withRecoverResource converts a
-// panic inside a resource (or resource template) handler — e.g. extractors.DetectPlugin or a
-// filepath.WalkDir hitting a malformed/adversarial plugin directory — into a normal error return
-// instead of letting the panic escape and crash the process.
+// TestWithRecoverResource_ConvertsPanicToErrorResult verifies that a panic inside a wrapped
+// handler is returned as an error with a nil result and the panic message preserved.
 func TestWithRecoverResource_ConvertsPanicToErrorResult(t *testing.T) {
 	panicky := func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		panic("boom: simulated resource handler failure")
@@ -47,8 +45,8 @@ func TestWithRecoverResource_ConvertsPanicToErrorResult(t *testing.T) {
 	}
 }
 
-// TestWithRecoverResource_PassesThroughNormalResults confirms the wrapper is transparent when the
-// handler doesn't panic — it must return exactly what the handler returned, not swallow or alter it.
+// TestWithRecoverResource_PassesThroughNormalResults verifies the wrapper returns a non-panicking
+// handler's result unchanged.
 func TestWithRecoverResource_PassesThroughNormalResults(t *testing.T) {
 	normal := func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return &mcp.ReadResourceResult{

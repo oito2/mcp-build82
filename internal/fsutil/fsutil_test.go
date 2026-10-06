@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// TestReadOptional_MissingFileReturnsOkFalseNoError verifies a missing file yields nil content, ok=false and no error.
 func TestReadOptional_MissingFileReturnsOkFalseNoError(t *testing.T) {
 	content, ok, err := ReadOptional(filepath.Join(t.TempDir(), "missing.txt"))
 	if err != nil {
@@ -34,6 +35,7 @@ func TestReadOptional_MissingFileReturnsOkFalseNoError(t *testing.T) {
 	}
 }
 
+// TestReadOptional_ExistingFileReturnsContent verifies an existing file's content is returned with ok=true.
 func TestReadOptional_ExistingFileReturnsContent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "present.txt")
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
@@ -59,7 +61,7 @@ func TestReadOptional_PermissionDeniedReturnsError(t *testing.T) {
 	if err := os.WriteFile(path, []byte("x"), 0o000); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(path, 0o644) // let t.TempDir() clean up afterward
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) }) // let t.TempDir() clean up afterward
 
 	_, ok, err := ReadOptional(path)
 	if ok {
@@ -70,6 +72,7 @@ func TestReadOptional_PermissionDeniedReturnsError(t *testing.T) {
 	}
 }
 
+// TestWriteAtomic_CreatesParentDirAndWritesContent verifies missing parent directories are created and the content is written.
 func TestWriteAtomic_CreatesParentDirAndWritesContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "config.json")
@@ -83,6 +86,7 @@ func TestWriteAtomic_CreatesParentDirAndWritesContent(t *testing.T) {
 	}
 }
 
+// TestWriteAtomic_OverwritesExistingFile verifies an existing file is replaced by the new content.
 func TestWriteAtomic_OverwritesExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -119,6 +123,7 @@ func TestWriteAtomic_NoStrayTempFileLeftBehind(t *testing.T) {
 	}
 }
 
+// TestWriteAtomic_SetsRequestedPermissions verifies the written file has the requested permission bits.
 func TestWriteAtomic_SetsRequestedPermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -131,5 +136,20 @@ func TestWriteAtomic_SetsRequestedPermissions(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("expected mode 0600, got %v", info.Mode().Perm())
+	}
+}
+
+// TestWriteAtomic_DirModeDerivedFromPerm verifies a 0600 file gets a 0700 parent directory.
+func TestWriteAtomic_DirModeDerivedFromPerm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "new", "f")
+	if err := WriteAtomic(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o700 {
+		t.Errorf("dir mode = %o, want 700", got)
 	}
 }

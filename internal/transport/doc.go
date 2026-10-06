@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package transport wires the Streamable HTTP MCP transport (StartHTTPServer: health check, bearer
-// token auth, Host-header validation). This package has no stdio code; stdio uses the SDK's own
-// &mcp.StdioTransport{}.
+// Package transport serves MCP over HTTP: StartHTTPServer exposes the Streamable HTTP and SSE
+// endpoints with a health check, Bearer token authentication and Host header validation. It
+// contains no stdio code; the stdio transport comes from the SDK's mcp.StdioTransport.
 package transport

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -29,12 +29,13 @@ import (
 // GeneratorResult is genutil.GeneratorResult, re-exported for convenience within this package.
 type GeneratorResult = genutil.GeneratorResult
 
+// skipWalkDirNames lists the directory names walkMoodleFiles never descends into.
 var skipWalkDirNames = map[string]bool{"vendor": true, "node_modules": true, ".git": true}
 
-// walkMoodleFiles walks root recursively, skipping vendor/, node_modules/, and .git/ at every
-// depth, and calls visit for every non-directory entry found with its full path and its
-// root-relative path in slash form. Shared by globMoodleSuffix/globMoodleClassesPhp/
-// findMarkerFiles, which differ only in their match predicate.
+// walkMoodleFiles walks `root` recursively, skipping vendor/, node_modules/, and .git/ at every
+// depth, and calls `visit` for every non-directory, non-symlink entry with its full path and its
+// root-relative slash-form path. Unreadable entries are silently skipped. It is the shared walker
+// behind the glob/find helpers, which differ only in their match predicate.
 func walkMoodleFiles(root string, visit func(path, relSlash string)) {
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -46,10 +47,8 @@ func walkMoodleFiles(root string, visit func(path, relSlash string)) {
 			}
 			return nil
 		}
-		// Skip symlinked files: every visit callback
-		// here eventually reads the file's content, which would otherwise follow the symlink to
-		// wherever it points, potentially pulling content from outside the scanned Moodle tree into
-		// a generated index.
+		// Skip symlinked files: visit callbacks read file content, which would otherwise follow
+		// the link and pull content from outside the scanned Moodle tree into a generated index.
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
@@ -62,7 +61,8 @@ func walkMoodleFiles(root string, visit func(path, relSlash string)) {
 	})
 }
 
-// globMoodleSuffix returns every file whose root-relative path (in slash form) ends with suffix.
+// globMoodleSuffix returns the full path of every file under `root` whose root-relative slash-form
+// path ends with `suffix`.
 func globMoodleSuffix(root, suffix string) []string {
 	var matches []string
 	walkMoodleFiles(root, func(path, relSlash string) {
@@ -73,11 +73,9 @@ func globMoodleSuffix(root, suffix string) []string {
 	return matches
 }
 
-// globMoodleBasename returns every file whose base name (the last path segment) is exactly name —
-// unlike globMoodleSuffix, which matches on raw string suffix and so also matches any file merely
-// ending in name (e.g. "notajax.php" for name="ajax.php"), even when that's not a real filename
-// boundary. Used wherever the convention being matched is "a file literally named X", not "a file
-// whose name ends with X".
+// globMoodleBasename returns the full path of every file under `root` whose base name is exactly
+// `name`. Unlike globMoodleSuffix, it does not match files that merely end with `name` (e.g.
+// "notajax.php" for "ajax.php").
 func globMoodleBasename(root, name string) []string {
 	var matches []string
 	walkMoodleFiles(root, func(path, relSlash string) {
@@ -88,9 +86,8 @@ func globMoodleBasename(root, name string) []string {
 	return matches
 }
 
-// globMoodleClassesPhp returns every .php file under root that lives inside a "classes/"
-// directory at any depth — the restricted glob GenerateClassesIndex uses instead of scanning the
-// whole installation.
+// globMoodleClassesPhp returns the full path of every .php file under `root` that lives inside a
+// "classes/" directory at any depth. GenerateClassesIndex uses it to avoid scanning every file.
 func globMoodleClassesPhp(root string) []string {
 	var matches []string
 	walkMoodleFiles(root, func(path, relSlash string) {
@@ -104,7 +101,7 @@ func globMoodleClassesPhp(root string) []string {
 	return matches
 }
 
-// findMarkerFiles finds every {ContextDir}/.indevelopment marker under root.
+// findMarkerFiles returns the full path of every ContextDir/.indevelopment marker file under `root`.
 func findMarkerFiles(root string) []string {
 	var matches []string
 	walkMoodleFiles(root, func(path, _ string) {
@@ -115,8 +112,8 @@ func findMarkerFiles(root string) []string {
 	return matches
 }
 
-// FindDevPlugins returns every plugin directory marked .indevelopment (unsorted — sorting is each
-// caller's own responsibility).
+// FindDevPlugins returns the root directory of every plugin under `moodlePath` that has a
+// ContextDir/.indevelopment marker. The result is unsorted and free of duplicates.
 func FindDevPlugins(moodlePath string) []string {
 	markers := findMarkerFiles(moodlePath)
 	seen := map[string]struct{}{}
@@ -131,8 +128,9 @@ func FindDevPlugins(moodlePath string) []string {
 	return dirs
 }
 
-// FindPluginDirs returns every plugin directory found under any of moodletype.PluginTypeToDir's
-// values (unsorted — sorting is each caller's own responsibility).
+// FindPluginDirs returns every plugin directory under `moodlePath` that contains a version.php
+// directly inside a `<typeDir>/<name>/` folder, for each directory in moodletype.PluginTypeToDir.
+// The result is unsorted and free of duplicates.
 func FindPluginDirs(moodlePath string) []string {
 	seen := map[string]struct{}{}
 	var dirs []string
@@ -150,9 +148,10 @@ func FindPluginDirs(moodlePath string) []string {
 }
 
 // Nil-safe accessors: every ParseXxxPhp extractor returns a nil pointer when its source file
-// doesn't exist (e.g. a plugin with no db/tasks.php) — a real, legitimate case, not an error. Every
-// generator that reads these fields must go through these helpers rather than dereferencing the
-// pointer directly, whether the data came from PreloadedPluginData or a fresh extractor call.
+// does not exist (e.g. a plugin with no db/tasks.php), which is a legitimate case. Generators read
+// these fields through the helpers below instead of dereferencing the pointer directly.
+
+// eventsOf returns the observers of `e`, or nil when `e` is nil.
 func eventsOf(e *extractors.EventsExtraction) []extractors.EventObserver {
 	if e == nil {
 		return nil
@@ -160,6 +159,7 @@ func eventsOf(e *extractors.EventsExtraction) []extractors.EventObserver {
 	return e.Observers
 }
 
+// tasksOf returns the scheduled tasks of `e`, or nil when `e` is nil.
 func tasksOf(e *extractors.TasksExtraction) []extractors.ScheduledTask {
 	if e == nil {
 		return nil
@@ -167,6 +167,7 @@ func tasksOf(e *extractors.TasksExtraction) []extractors.ScheduledTask {
 	return e.Tasks
 }
 
+// servicesOf returns the web service functions of `e`, or nil when `e` is nil.
 func servicesOf(e *extractors.ServicesExtraction) []extractors.WebServiceFunction {
 	if e == nil {
 		return nil
@@ -174,6 +175,7 @@ func servicesOf(e *extractors.ServicesExtraction) []extractors.WebServiceFunctio
 	return e.Functions
 }
 
+// capsOf returns the capabilities of `e`, or nil when `e` is nil.
 func capsOf(e *extractors.CapabilitiesExtraction) []extractors.Capability {
 	if e == nil {
 		return nil
@@ -181,18 +183,20 @@ func capsOf(e *extractors.CapabilitiesExtraction) []extractors.Capability {
 	return e.Capabilities
 }
 
-// pluginInfoCache memoizes extractors.DetectPlugin across the several global generators that
-// each need a plugin's identity within one GenerateAll call. Mutex-guarded because wave 1's
-// generators access it concurrently.
+// pluginInfoCache memoizes extractors.DetectPlugin results by plugin path, so the global
+// generators of one GenerateAll call detect each plugin once. It is safe for concurrent use.
 type pluginInfoCache struct {
 	mu sync.Mutex
 	m  map[string]extractors.PluginInfo
 }
 
+// newPluginInfoCache returns an empty pluginInfoCache.
 func newPluginInfoCache() *pluginInfoCache {
 	return &pluginInfoCache{m: map[string]extractors.PluginInfo{}}
 }
 
+// get returns the PluginInfo for `pluginPath`, detecting and caching it on first use. Detection
+// errors are ignored and the resulting (possibly zero) info is cached.
 func (c *pluginInfoCache) get(pluginPath string) extractors.PluginInfo {
 	c.mu.Lock()
 	if info, ok := c.m[pluginPath]; ok {

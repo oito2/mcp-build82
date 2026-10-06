@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,6 +13,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package selfupdate implements `build82 self-update` — checking for, downloading, and
-// safely replacing the running binary with a newer release from GitHub.
+// Package selfupdate implements `build82 self-update`: it checks for a newer GitHub release,
+// downloads and verifies it, and replaces the running binary, keeping a backup for rollback.
 package selfupdate

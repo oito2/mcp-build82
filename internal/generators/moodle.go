@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@ import (
 
 // --- 1. GenerateAiContext ---------------------------------------------------
 
+// aiContextDirectoryPurpose maps top-level Moodle directories to their one-line purpose.
 var aiContextDirectoryPurpose = [][2]string{
 	{"admin/", "Site administration pages and admin tools"},
 	{"auth/", "Authentication plugins"},
@@ -49,11 +50,13 @@ var aiContextDirectoryPurpose = [][2]string{
 	{"user/", "User profile pages and profile field plugins"},
 }
 
+// aiContextKeyApis lists the core lib/ files highlighted as key APIs.
 var aiContextKeyApis = []string{
 	"accesslib.php", "moodlelib.php", "filelib.php", "weblib.php", "gradelib.php",
 	"completionlib.php", "enrollib.php", "grouplib.php", "externallib.php",
 }
 
+// aiContextCodingGuidelines lists the coding guidelines rendered into AI_CONTEXT.md.
 var aiContextCodingGuidelines = []string{
 	"Follow the [Moodle coding style](https://moodledev.io/general/development/policies/codingstyle).",
 	"Access the database only through the `$DB` API (`get_records`, `execute`, ...), never raw SQL.",
@@ -64,17 +67,17 @@ var aiContextCodingGuidelines = []string{
 	"Escape all dynamic output (`s()`, `format_string()`, `format_text()`) before rendering it.",
 }
 
+// GenerateAiContext writes AI_CONTEXT.md, an overview of the installation at `moodlePath` showing
+// `moodleVersion`, the number of `pluginDirs`, directory purposes, key APIs, coding guidelines and
+// links to the other index files. The result reports write failures; panics are captured in it.
 func GenerateAiContext(moodlePath, moodleVersion string, pluginDirs []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "AI_CONTEXT.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		var b strings.Builder
 		b.WriteString(genutil.Header("Moodle AI Context", "Overview of this Moodle installation for AI coding assistants."))
 
-		// The installation root has no meaningful path relative to itself (genutil.RelativeOrOriginal
-		// would just yield ".") — its own directory name is the least-leaky value that's still useful
-		// context (distinguishes between multiple local Moodle installs) without exposing the full
-		// absolute tree (and often an OS username baked into it) into a file meant to travel with the
-		// repo.
+		// The root has no useful path relative to itself, so only its directory name is written;
+		// this keeps the absolute host path out of a file meant to travel with the repository.
 		fmt.Fprintf(&b, "## Installation\n\n| Field | Value |\n|---|---|\n| Version | %s |\n| Path | %s |\n| Plugins found | %d |\n\n",
 			moodleVersion, filepath.Base(moodlePath), len(pluginDirs))
 
@@ -110,8 +113,9 @@ func GenerateAiContext(moodlePath, moodleVersion string, pluginDirs []string) Ge
 
 // --- 2. GenerateApiIndex -----------------------------------------------------
 
-// apiFunctionLine renders one function line. This exact format is load-bearing: search_api's
-// visibility filter substring-matches "@deprecated" in the rendered line — keep both in sync.
+// apiFunctionLine renders the Markdown list line for `f`: name, deprecation marker, summary,
+// return type and since-version. Deprecated functions carry the literal "@deprecated" marker,
+// which search_api's visibility filter matches by substring, so the marker text must stay.
 func apiFunctionLine(f extractors.ApiFunction) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- `%s()`", genutil.EscapeMdCell(f.Name))
@@ -134,6 +138,8 @@ func apiFunctionLine(f extractors.ApiFunction) string {
 	return b.String()
 }
 
+// GenerateApiIndex writes MOODLE_API_INDEX.md, listing the public and deprecated lib/ functions of
+// `moodlePath` grouped by source file, with visibility counts. Failures are reported in the result.
 func GenerateApiIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_API_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -170,6 +176,8 @@ func GenerateApiIndex(moodlePath string) GeneratorResult {
 
 // --- 3. GenerateEventsIndex ---------------------------------------------------
 
+// GenerateEventsIndex writes MOODLE_EVENTS_INDEX.md, a table of every event observer declared in
+// a db/events.php under `moodlePath`, sorted by event name, then source file and callback. Failures are reported in the result.
 func GenerateEventsIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_EVENTS_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -185,7 +193,15 @@ func GenerateEventsIndex(moodlePath string) GeneratorResult {
 				rows = append(rows, row{o.EventName, o.Callback, filepath.ToSlash(rel)})
 			}
 		}
-		sort.Slice(rows, func(i, j int) bool { return rows[i].event < rows[j].event })
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].event != rows[j].event {
+				return rows[i].event < rows[j].event
+			}
+			if rows[i].source != rows[j].source {
+				return rows[i].source < rows[j].source
+			}
+			return rows[i].callback < rows[j].callback
+		})
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Moodle Events Index", "Every event observer registered across all plugins."))
@@ -200,6 +216,8 @@ func GenerateEventsIndex(moodlePath string) GeneratorResult {
 
 // --- 4. GenerateTasksIndex ----------------------------------------------------
 
+// GenerateTasksIndex writes MOODLE_TASKS_INDEX.md, a table of every scheduled task declared in a
+// db/tasks.php under `moodlePath`, in file-walk order. Failures are reported in the result.
 func GenerateTasksIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_TASKS_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -207,7 +225,7 @@ func GenerateTasksIndex(moodlePath string) GeneratorResult {
 		b.WriteString(genutil.Header("Moodle Tasks Index", "Every scheduled task registered across all plugins."))
 		b.WriteString("| Class | Schedule | Blocking | Source |\n|---|---|---|---|\n")
 
-		// Not sorted — file iteration (glob) order, deliberately.
+		// Rows keep file-walk order rather than being sorted.
 		for _, f := range globMoodleSuffix(moodlePath, "db/tasks.php") {
 			extraction := extractors.ParseTasksPhp(f)
 			if extraction == nil {
@@ -226,6 +244,8 @@ func GenerateTasksIndex(moodlePath string) GeneratorResult {
 
 // --- 5. GenerateServicesIndex -------------------------------------------------
 
+// GenerateServicesIndex writes MOODLE_SERVICES_INDEX.md, a table of every web service function
+// declared in a db/services.php under `moodlePath`. Failures are reported in the result.
 func GenerateServicesIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_SERVICES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -251,6 +271,8 @@ func GenerateServicesIndex(moodlePath string) GeneratorResult {
 
 // --- 6. GenerateDbTablesIndex -------------------------------------------------
 
+// GenerateDbTablesIndex writes MOODLE_DB_TABLES_INDEX.md, a table of every table (with field
+// count) declared in a db/install.xml under `moodlePath`. Failures are reported in the result.
 func GenerateDbTablesIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_DB_TABLES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -275,6 +297,8 @@ func GenerateDbTablesIndex(moodlePath string) GeneratorResult {
 
 // --- 7. GenerateClassesIndex --------------------------------------------------
 
+// GenerateClassesIndex writes MOODLE_CLASSES_INDEX.md, a table of every class, interface, trait
+// and enum found in classes/ directories under `moodlePath`. Failures are reported in the result.
 func GenerateClassesIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_CLASSES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -282,7 +306,7 @@ func GenerateClassesIndex(moodlePath string) GeneratorResult {
 		b.WriteString(genutil.Header("Moodle Classes Index", "Every class/interface/trait/enum found under a classes/ directory."))
 		b.WriteString("| FQN | Kind | File |\n|---|---|---|\n")
 
-		// Restricted glob: **/classes/**/*.php, not a full-installation scan.
+		// Only files under classes/ directories are scanned, not the whole installation.
 		files := globMoodleClassesPhp(moodlePath)
 		extraction := extractors.ExtractClassesFromFiles(files, moodlePath)
 		for _, c := range extraction.Classes {
@@ -295,6 +319,8 @@ func GenerateClassesIndex(moodlePath string) GeneratorResult {
 
 // --- 8. GenerateCapabilitiesIndex ---------------------------------------------
 
+// GenerateCapabilitiesIndex writes MOODLE_CAPABILITIES_INDEX.md, a table of every capability
+// declared in a db/access.php under `moodlePath`. Failures are reported in the result.
 func GenerateCapabilitiesIndex(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_CAPABILITIES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -320,6 +346,9 @@ func GenerateCapabilitiesIndex(moodlePath string) GeneratorResult {
 
 // --- 9. GeneratePluginIndex ---------------------------------------------------
 
+// GeneratePluginIndex writes MOODLE_PLUGIN_INDEX.md, a table of the plugins in `pluginDirs`
+// (sorted by path) with component, type, name and version taken from `infoCache`. Failures are
+// reported in the result.
 func GeneratePluginIndex(moodlePath string, pluginDirs []string, infoCache *pluginInfoCache) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -343,6 +372,8 @@ func GeneratePluginIndex(moodlePath string, pluginDirs []string, infoCache *plug
 
 // --- 10. GenerateDevRules (fully static) -------------------------------------
 
+// GenerateDevRules writes MOODLE_DEV_RULES.md, a static set of Moodle coding-standard snippets.
+// Failures are reported in the result.
 func GenerateDevRules(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_DEV_RULES.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -407,6 +438,7 @@ class send_reminders extends \core\task\scheduled_task {
 
 // --- 11. GeneratePluginGuide (static + moodleVersion) ------------------------
 
+// pluginGuideComponentNaming maps component prefixes to the plugin kind and directory they denote.
 var pluginGuideComponentNaming = [][2]string{
 	{"mod_*", "Activity modules (mod/{name})"},
 	{"block_*", "Blocks (blocks/{name})"},
@@ -419,6 +451,8 @@ var pluginGuideComponentNaming = [][2]string{
 	{"tool_*", "Admin tools (admin/tool/{name})"},
 }
 
+// GeneratePluginGuide writes MOODLE_PLUGIN_GUIDE.md, a guide to scaffolding a plugin that embeds
+// `moodleVersion` in its version.php template. Failures are reported in the result.
 func GeneratePluginGuide(moodlePath, moodleVersion string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_GUIDE.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -452,6 +486,9 @@ func GeneratePluginGuide(moodlePath, moodleVersion string) GeneratorResult {
 
 // --- 12. GenerateAiWorkspace --------------------------------------------------
 
+// GenerateAiWorkspace writes MOODLE_AI_WORKSPACE.md, summarizing the plugins in `pluginDirs`:
+// those marked in development and those that already have a PLUGIN_AI_CONTEXT.md. Plugin identity
+// comes from `infoCache`. Failures are reported in the result.
 func GenerateAiWorkspace(moodlePath string, pluginDirs []string, infoCache *pluginInfoCache) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_AI_WORKSPACE.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -503,14 +540,16 @@ func GenerateAiWorkspace(moodlePath string, pluginDirs []string, infoCache *plug
 
 // --- 13. GenerateAiIndex ------------------------------------------------------
 
-// GenerateAiIndex is the public entry point for callers outside GenerateAll (the watcher package,
-// and any future single-plugin-update tool) that don't already have pluginDirs/infoCache computed —
-// it derives them fresh. GenerateAll itself calls the internal generateAiIndex directly with the
-// values it already computed, to avoid a redundant FindPluginDirs glob.
+// GenerateAiIndex writes MOODLE_AI_INDEX.md for callers that have no plugin list yet: it
+// discovers the plugin directories of `moodlePath` itself and then delegates to generateAiIndex.
+// `moodleVersion` is the detected Moodle version. Failures are reported in the result.
 func GenerateAiIndex(moodlePath, moodleVersion string) GeneratorResult {
 	return generateAiIndex(moodlePath, moodleVersion, FindPluginDirs(moodlePath), newPluginInfoCache())
 }
 
+// generateAiIndex writes MOODLE_AI_INDEX.md, linking the global context files that currently exist
+// and the PLUGIN_AI_CONTEXT.md of each plugin in `pluginDirs` that has one. GenerateAll calls it
+// directly with the plugin list it already computed.
 func generateAiIndex(moodlePath, moodleVersion string, pluginDirs []string, infoCache *pluginInfoCache) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -546,7 +585,9 @@ func generateAiIndex(moodlePath, moodleVersion string, pluginDirs []string, info
 
 // --- GenerateCtags -------------------------------------------------------------
 
-// GenerateCtags shells out to ctags. Skipped gracefully (not a failure) if ctags isn't on PATH.
+// GenerateCtags runs ctags over `moodlePath` to produce the tags file under ContextDir. When
+// ctags is not on PATH it returns a successful, skipped result. Directory creation or ctags
+// failures are reported in the result's Error field.
 func GenerateCtags(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "tags")
 	if _, err := exec.LookPath("ctags"); err != nil {
@@ -555,10 +596,8 @@ func GenerateCtags(moodlePath string) GeneratorResult {
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return GeneratorResult{File: output, Error: err.Error()}
 	}
-	// "--" before moodlePath prevents a path beginning with "-" (e.g. a misconfigured
-	// BUILD82_MOODLE_PATH) from being interpreted as a ctags flag instead of the target directory.
-	// exec.Command never invokes a shell, so this isn't
-	// shell-injection risk — just defensive argument-boundary hardening.
+	// "--" stops a `moodlePath` starting with "-" from being parsed as a ctags flag; no shell is
+	// involved, so this only guards the argument boundary.
 	cmd := exec.Command("ctags", "-R", "--languages=PHP", "--exclude=vendor", "--exclude=node_modules", "-f", output, "--", moodlePath)
 	if err := cmd.Run(); err != nil {
 		return GeneratorResult{File: output, Error: err.Error()}
@@ -569,8 +608,10 @@ func GenerateCtags(moodlePath string) GeneratorResult {
 
 // --- GenerateAll orchestrator --------------------------------------------------
 
-// GenerateAll runs every global generator, respecting the mtime cache, and returns one
-// GeneratorResult per output file. Called by init_moodle_context and update_indexes.
+// GenerateAll runs every global generator for `moodlePath` (Moodle version `moodleVersion`) and
+// returns one GeneratorResult per output file, in completion order. It first migrates legacy
+// files, skips generators whose output is fresh in the mtime cache, runs the independent
+// generators concurrently, then the AI index and ctags, and finally persists the cache.
 func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 	var (
 		results []GeneratorResult
@@ -605,6 +646,16 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 		pluginVersionFiles[i] = filepath.Join(d, "version.php")
 	}
 
+	// The workspace and AI index also depend on each plugin's generated context file and
+	// development marker. The plugin's output directory is a source too: its mtime changes when
+	// either file is created or deleted, which the file entries alone cannot detect.
+	contextInputs := append([]string{}, pluginVersionFiles...)
+	for _, d := range pluginDirs {
+		contextFile := PluginOutputPath(d, "PLUGIN_AI_CONTEXT.md")
+		contextInputs = append(contextInputs,
+			filepath.Dir(contextFile), contextFile, PluginOutputPath(d, ".indevelopment"))
+	}
+
 	tasks := []func(){
 		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "AI_CONTEXT.md"), pluginVersionFiles,
 			func() GeneratorResult { return GenerateAiContext(moodlePath, moodleVersion, pluginDirs) }),
@@ -628,7 +679,7 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 			func() GeneratorResult { return GenerateDevRules(moodlePath) }),
 		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_GUIDE.md"), globalSources,
 			func() GeneratorResult { return GeneratePluginGuide(moodlePath, moodleVersion) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_WORKSPACE.md"), pluginVersionFiles,
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_WORKSPACE.md"), contextInputs,
 			func() GeneratorResult { return GenerateAiWorkspace(moodlePath, pluginDirs, infoCache) }),
 	}
 
@@ -640,9 +691,9 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 	}
 	wave1.Wait()
 
-	// Wave 2: GenerateAiIndex must run after wave 1, since it checks disk existence of the files
-	// wave 1 just wrote.
-	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md"), pluginVersionFiles,
+	// The AI index runs after the concurrent generators because it links only files that exist
+	// on disk.
+	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md"), contextInputs,
 		func() GeneratorResult { return generateAiIndex(moodlePath, moodleVersion, pluginDirs, infoCache) })()
 
 	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "tags"), globalSources,

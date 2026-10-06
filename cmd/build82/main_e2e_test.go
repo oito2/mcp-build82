@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,10 +26,11 @@ import (
 	"time"
 )
 
-// This file tests main()'s dispatch by running the real compiled binary as a subprocess: main()
-// calls os.Exit directly, so its behavior can't be exercised in-process (an in-process os.Exit
-// would kill the test runner itself).
+// The tests in this file run the compiled binary as a subprocess, because main calls os.Exit and
+// cannot be exercised in-process.
 
+// buildBuildBinary compiles the command into a temporary directory and returns the path of the
+// binary. It fails the test when the build fails.
 func buildBuildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "build82")
@@ -64,36 +66,45 @@ func TestMain_UnknownSubcommandExitsWithError(t *testing.T) {
 	}
 }
 
-// TestMain_UnrecognizedFlagStillAttemptsServerMode verifies that flag-like unrecognized first args
-// (e.g. a bare, undocumented flag) still fall through to server mode; only bareword typos are
-// rejected.
-func TestMain_UnrecognizedFlagStillAttemptsServerMode(t *testing.T) {
+// TestMain_UsageErrorsExitWithCode2 verifies that unknown flags, missing flag values and
+// server-only flags without --http print a message on stderr and exit with status 2, for every
+// subcommand.
+func TestMain_UsageErrorsExitWithCode2(t *testing.T) {
 	bin := buildBuildBinary(t)
 
-	cmd := exec.Command(bin, "--totally-unrecognized-flag")
-	cmd.Stdin = strings.NewReader("") // closed/empty stdin: the stdio transport sees EOF and returns quickly
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	_ = cmd.Run() // exit status depends on transport EOF handling — not the point of this test
-
-	if strings.Contains(stderr.String(), "unknown command") {
-		t.Errorf("expected a flag-like unrecognized arg to NOT be treated as an unknown command, got:\n%s", stderr.String())
+	tests := [][]string{
+		{"--totally-unrecognized-flag"},
+		{"--port", "8080"},
+		{"--http", "--port"},
+		{"--token", "x"},
+		{"install", "--bogus"},
+		{"self-update", "--channel"},
+		{"self-update", "--bogus"},
+		{"uninstall", "--bogus"},
 	}
-	if !strings.Contains(stderr.String(), "build82 server running on stdio") {
-		t.Errorf("expected it to still attempt server mode, got:\n%s", stderr.String())
+	for _, args := range tests {
+		cmd := exec.Command(bin, args...)
+		cmd.Stdin = strings.NewReader("")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+			t.Errorf("%v: expected exit status 2, got %v", args, err)
+		}
+		if !strings.Contains(stderr.String(), "Error:") {
+			t.Errorf("%v: expected an error message on stderr, got %q", args, stderr.String())
+		}
 	}
 }
 
-// TestMain_HTTPWithExplicitEmptyTokenFailsToStart is an end-to-end test: `--token ""`
-// (an explicit empty value, as a shell would produce interpolating an empty variable into
-// `--token "$TOKEN"`) must be a hard configuration error that refuses to start the --http server,
-// rather than silently falling back to "no token = auth disabled". Uses the real compiled binary
-// (like the tests above) since main()'s error path calls os.Exit directly.
+// TestMain_HTTPWithExplicitEmptyTokenFailsToStart verifies that an explicit empty `--token ""`
+// makes the binary exit with status 1 and never start the --http server, instead of falling back
+// to running without authentication.
 func TestMain_HTTPWithExplicitEmptyTokenFailsToStart(t *testing.T) {
 	bin := buildBuildBinary(t)
 
-	// exec.Command passes "" through as a genuinely empty argv entry — equivalent to what a shell
-	// produces for `--token "$UNSET_OR_EMPTY_VAR"`, without needing an actual subshell here.
+	// exec.Command passes "" as an empty argv entry, as a shell does for an empty variable.
 	cmd := exec.Command(bin, "--http", "--token", "", "--port", "0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -114,9 +125,8 @@ func TestMain_HTTPWithExplicitEmptyTokenFailsToStart(t *testing.T) {
 	}
 }
 
-// TestMain_HTTPWithEnvTokenDoesNotFailToStart is an end-to-end test: BUILD82_TOKEN must
-// be usable as a --token fallback when --token itself isn't passed on the CLI at all — a non-empty
-// env token must never trigger the "empty token" configuration error.
+// TestMain_HTTPWithEnvTokenDoesNotFailToStart verifies that a non-empty BUILD82_TOKEN is accepted
+// as the token when --token is not passed, without the empty-token configuration error.
 func TestMain_HTTPWithEnvTokenDoesNotFailToStart(t *testing.T) {
 	bin := buildBuildBinary(t)
 
@@ -128,9 +138,8 @@ func TestMain_HTTPWithEnvTokenDoesNotFailToStart(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	// The process runs the HTTP server indefinitely until signaled — it must not have exited
-	// immediately with the empty-token config error. Give it a brief moment to fail fast if it were
-	// going to, then terminate it; we only assert on stderr content, not on process lifetime.
+	// The server runs until signaled. Allow a brief moment for a startup failure to show, then
+	// kill it; only stderr is checked, not the process lifetime.
 	time.Sleep(200 * time.Millisecond)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
@@ -141,15 +150,12 @@ func TestMain_HTTPWithEnvTokenDoesNotFailToStart(t *testing.T) {
 	}
 }
 
-// TestMain_SelfUpdateRollbackRestoresBackup is the end-to-end coverage for `build82 self-update
-// --rollback`: it must resolve the running binary's own path (exactly like self-update itself does via
-// binpath.Resolve) and promote a "<binary>.bak" sitting next to it back into place.
+// TestMain_SelfUpdateRollbackRestoresBackup verifies that `build82 self-update --rollback`
+// resolves the running binary's path and promotes the "<binary>.bak" file next to it back into
+// place, printing a confirmation.
 //
-// The just-built binary is copied to serve as its own ".bak" — it's a real, fully working build82
-// binary that already answers --version, so it doubles as a legitimate "previous version" without
-// needing a second, separately-versioned build. The exec path is resolved through
-// filepath.EvalSymlinks first (mirroring binpath.Resolve's own fallback-on-failure behavior)
-// so the .bak file is placed next to whatever path the running process will actually resolve to.
+// A copy of the built binary serves as the backup. The path is resolved with
+// filepath.EvalSymlinks first, so the backup sits next to the path the process will resolve.
 func TestMain_SelfUpdateRollbackRestoresBackup(t *testing.T) {
 	bin := buildBuildBinary(t)
 	resolvedBin, err := filepath.EvalSymlinks(bin)
@@ -181,8 +187,8 @@ func TestMain_SelfUpdateRollbackRestoresBackup(t *testing.T) {
 	}
 }
 
-// TestMain_SelfUpdateRollbackWithNoBackupFailsClearly confirms the CLI surfaces Rollback's "no
-// backup found" error on stderr with exit code 1, rather than a panic or a silent success.
+// TestMain_SelfUpdateRollbackWithNoBackupFailsClearly verifies that a rollback without a backup
+// file reports "no backup found" on stderr and exits with status 1.
 func TestMain_SelfUpdateRollbackWithNoBackupFailsClearly(t *testing.T) {
 	bin := buildBuildBinary(t)
 	resolvedBin, err := filepath.EvalSymlinks(bin)

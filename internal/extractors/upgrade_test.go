@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,9 +18,14 @@ package extractors
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
+// upgradeFixtureWellFormed is an upgrade.php with steps out of order, covering each description
+// source.
 const upgradeFixtureWellFormed = `<?php
 function xmldb_local_test_upgrade($oldversion) {
     global $DB;
@@ -45,6 +50,8 @@ function xmldb_local_test_upgrade($oldversion) {
 }
 `
 
+// TestParseUpgradePhp verifies that steps are sorted by version and described from an inline comment or an
+// xmldb_table reference.
 func TestParseUpgradePhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -75,12 +82,14 @@ func TestParseUpgradePhp(t *testing.T) {
 	}
 }
 
+// TestParseUpgradePhp_MissingFile verifies that a missing file yields nil.
 func TestParseUpgradePhp_MissingFile(t *testing.T) {
 	if ParseUpgradePhp("/nonexistent/db/upgrade.php") != nil {
 		t.Error("expected nil for missing file")
 	}
 }
 
+// TestParseUpgradePhp_NoUpgradeFunction verifies that a file without the upgrade function yields an empty extraction.
 func TestParseUpgradePhp_NoUpgradeFunction(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -92,6 +101,7 @@ func TestParseUpgradePhp_NoUpgradeFunction(t *testing.T) {
 	}
 }
 
+// TestParseUpgradePhp_NoStepsInFunction verifies that an upgrade function without steps yields an empty extraction.
 func TestParseUpgradePhp_NoStepsInFunction(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -103,9 +113,8 @@ func TestParseUpgradePhp_NoStepsInFunction(t *testing.T) {
 	}
 }
 
-// TestParseUpgradePhp_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for the exact fixture, including both
-// description-fallback tiers.
+// TestParseUpgradePhp_TreesitterBackendParity verifies that both backends return identical steps
+// and descriptions for the fixture.
 func TestParseUpgradePhp_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -127,8 +136,8 @@ func TestParseUpgradePhp_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// TestParseUpgradePhp_TreesitterBackendParity_RealFiles runs both backends against every real
-// db/upgrade.php across all 4 real Moodle installations and confirms they agree.
+// TestParseUpgradePhp_TreesitterBackendParity_RealFiles verifies that both backends agree on every
+// db/upgrade.php of the available Moodle installations. The test is skipped when none is found.
 func TestParseUpgradePhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
@@ -164,20 +173,67 @@ func TestParseUpgradePhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	}
 }
 
-// TestGetUpgradeVersions_NilInputDoesNotPanic confirms GetUpgradeVersions handles a nil
-// *UpgradeExtraction (a plugin with no db/upgrade.php, the common case) by returning nil instead of
-// panicking on a nil pointer dereference.
+// TestGetUpgradeVersions_NilInputDoesNotPanic verifies that a nil extraction yields nil.
 func TestGetUpgradeVersions_NilInputDoesNotPanic(t *testing.T) {
 	if got := GetUpgradeVersions(nil); got != nil {
 		t.Errorf("expected nil, got %v", got)
 	}
 }
 
+// TestGetUpgradeVersions_NoReSort verifies that versions are returned in the order of the steps.
 func TestGetUpgradeVersions_NoReSort(t *testing.T) {
 	e := &UpgradeExtraction{Steps: []UpgradeStep{{Version: "2024010100"}, {Version: "2023010100"}}}
 	versions := GetUpgradeVersions(e)
-	// Preserves whatever order Steps is already in — does not re-sort.
+	// The existing order of Steps must be preserved.
 	if versions[0] != "2024010100" || versions[1] != "2023010100" {
 		t.Errorf("expected GetUpgradeVersions to preserve Steps order, got %v", versions)
+	}
+}
+
+// TestTruncate120_RuneSafe verifies that truncation never splits a multi-byte rune.
+func TestTruncate120_RuneSafe(t *testing.T) {
+	in := strings.Repeat("a", 119) + "é" + "tail"
+	got := truncate120(in)
+	if !utf8.ValidString(got) || len(got) > 120 {
+		t.Errorf("invalid or too long result: len=%d valid=%v", len(got), utf8.ValidString(got))
+	}
+	if got != strings.Repeat("a", 119) {
+		t.Errorf("unexpected result %q", got)
+	}
+}
+
+// TestParseUpgradePhp_EqualVersionsKeepSourceOrder verifies that steps with the same version keep
+// their source order after sorting.
+func TestParseUpgradePhp_EqualVersionsKeepSourceOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "upgrade.php")
+	body := "<?php\nfunction xmldb_local_test_upgrade($oldversion) {\n"
+	vers := []string{"2024010102", "2024010101", "2024010100"}
+	var all []string
+	for i := 0; i < 60; i++ {
+		d := "step" + strconv.Itoa(i)
+		all = append(all, d)
+		body += "    if ($oldversion < " + vers[i%3] + ") {\n        // " + d + "\n    }\n"
+	}
+	body += "    return true;\n}\n"
+	mustWriteFile(t, path, body)
+
+	got := ParseUpgradePhp(path)
+	// Expected order: grouped by version ascending, source order inside each group.
+	var want []string
+	for _, r := range []int{2, 1, 0} {
+		for i, d := range all {
+			if i%3 == r {
+				want = append(want, d)
+			}
+		}
+	}
+	if got == nil || len(got.Steps) != len(want) {
+		t.Fatalf("unexpected extraction: %+v", got)
+	}
+	for i, w := range want {
+		if got.Steps[i].Description != w {
+			t.Errorf("step %d: got %q, want %q", i, got.Steps[i].Description, w)
+		}
 	}
 }

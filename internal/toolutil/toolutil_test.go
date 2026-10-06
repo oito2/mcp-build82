@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// TestNotInitialized verifies the response is a single text error block carrying the build82
+// message and none of the legacy branding.
 func TestNotInitialized(t *testing.T) {
 	result := NotInitialized()
 	if !result.IsError {

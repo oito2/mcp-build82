@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,11 +27,11 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// ApiVisibility is an alias for phpdoc.Visibility. The parseDocBlock/classifyVisibility logic lives
-// in internal/phpdoc, shared with the tree-sitter backend. Aliasing keeps references to
-// extractors.ApiVisibility and extractors.PhpDocBlock working unchanged.
+// ApiVisibility is an alias for phpdoc.Visibility. The PHPDoc parsing and visibility classification
+// live in internal/phpdoc, shared with the tree-sitter backend.
 type ApiVisibility = phpdoc.Visibility
 
+// Visibility classes an API function can have; they alias the phpdoc constants.
 const (
 	VisPublic     = phpdoc.Public
 	VisDeprecated = phpdoc.Deprecated
@@ -47,18 +47,22 @@ type PhpDocBlock = phpdoc.PhpDocBlock
 // type directly.
 type ApiFunction = phptypes.ApiFunction
 
+// ApiCounts holds how many scanned functions fall into each visibility class.
 type ApiCounts struct {
 	Public, Deprecated, Internal, Private, Unverified int
 }
 
+// ApiExtraction is the result of scanning Moodle's lib directory: the scanned directory, the
+// public and deprecated functions found, and the counts for every visibility class.
 type ApiExtraction struct {
 	Directory string
 	Functions []ApiFunction
 	Counts    ApiCounts
 }
 
-// findDocBlock walks backward from the function declaration line at funcLineIndex to find the
-// immediately preceding PHPDoc block, tolerating up to 3 blank lines. Returns nil if none is found.
+// findDocBlock searches `lines` backward from the function declaration at index `funcLineIndex`
+// for the PHPDoc block that immediately precedes it, tolerating up to 3 blank lines in between. It
+// returns the parsed block, or nil when there is none.
 func findDocBlock(lines []string, funcLineIndex int) *PhpDocBlock {
 	blankCount := 0
 	closeIndex := -1
@@ -105,6 +109,9 @@ func findDocBlock(lines []string, funcLineIndex int) *PhpDocBlock {
 // funcPattern matches only top-level (non-indented) function declarations.
 var funcPattern = regexp.MustCompile(`^function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(`)
 
+// scanPhpFile returns every top-level function declared in the PHP file `filePath`, with its
+// classified visibility and 1-based line number. Functions whose names start with "__" are
+// skipped. It returns nil when the file cannot be read or exceeds the size cap.
 func scanPhpFile(filePath string) []ApiFunction {
 	if useTreesitter() {
 		return tsbackend.ExtractFunctionsFromPhpFile(filePath)
@@ -137,8 +144,7 @@ func scanPhpFile(filePath string) []ApiFunction {
 	return results
 }
 
-// PriorityFiles is a fixed, ordered list of well-known Moodle core lib filenames, scanned first
-// (in this order), which determines the grouping order in the generated API index.
+// PriorityFiles lists well-known Moodle core lib filenames in the order they are scanned first.
 var PriorityFiles = []string{
 	"moodlelib.php", "accesslib.php", "filelib.php", "weblib.php", "gradelib.php",
 	"completionlib.php", "enrollib.php", "grouplib.php", "datalib.php", "outputlib.php",
@@ -147,9 +153,9 @@ var PriorityFiles = []string{
 	"grade/gradelib.php",
 }
 
-// getPhpFiles returns every .php file directly inside dirPath (never recursing into
-// subdirectories — ExtractMoodleApi's top-level {moodlePath}/lib scan is the only caller, and it
-// deliberately excludes lib/classes/* and other subdirectories), with PriorityFiles listed first.
+// getPhpFiles returns the absolute paths of the .php files directly inside `dirPath`, without
+// recursing into subdirectories, with the files named in PriorityFiles listed first. It returns
+// nil when `dirPath` is not a directory.
 func getPhpFiles(dirPath string) []string {
 	if !dirExists(dirPath) {
 		return nil
@@ -184,13 +190,14 @@ func getPhpFiles(dirPath string) []string {
 	return files
 }
 
+// visibilityOrder gives the sort rank of each visibility class in ExtractMoodleApi's output.
 var visibilityOrder = map[ApiVisibility]int{
 	VisPublic: 0, VisDeprecated: 1, VisUnverified: 2, VisInternal: 3, VisPrivate: 4,
 }
 
-// ExtractMoodleApi scans every .php file in {moodlePath}/lib (priority-ordered), classifies every
-// function, computes Counts before filtering, then returns only public+deprecated functions —
-// private, internal, and unverified are always excluded from Functions.
+// ExtractMoodleApi scans every .php file directly inside `moodlePath`/lib (priority files first)
+// and classifies every function. Counts covers all functions, while Functions keeps only the
+// public and deprecated ones, sorted by visibility, file and name.
 func ExtractMoodleApi(moodlePath string) ApiExtraction {
 	libPath := filepath.Join(moodlePath, "lib")
 	phpFiles := getPhpFiles(libPath)
@@ -237,8 +244,9 @@ func ExtractMoodleApi(moodlePath string) ApiExtraction {
 	return ApiExtraction{Directory: libPath, Functions: functions, Counts: counts}
 }
 
-// ExtractFunctionsFromPhpFile scans a single PHP file for top-level function declarations,
-// returning every function unfiltered (unlike ExtractMoodleApi).
+// ExtractFunctionsFromPhpFile returns every top-level function declared in the PHP file
+// `filePath`, regardless of visibility (unlike ExtractMoodleApi). It returns nil when the file does
+// not exist.
 func ExtractFunctionsFromPhpFile(filePath string) []ApiFunction {
 	if !fileExists(filePath) {
 		return nil

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,9 +26,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// connectLoggingClient connects a new client/session pair to s, subscribed at "info" level, and
-// returns a channel every LoggingMessage notification's Data (asserted as a string, matching what
-// makeHandleWatch's OnChange callback sends) is pushed to.
+// connectLoggingClient connects a new client session to `s` with the "info" logging level and
+// returns it with a channel that receives the string Data of every logging notification.
 func connectLoggingClient(t *testing.T, ctx context.Context, s *mcp.Server) (*mcp.ClientSession, <-chan string) {
 	t.Helper()
 	received := make(chan string, 8)
@@ -55,11 +54,9 @@ func connectLoggingClient(t *testing.T, ctx context.Context, s *mcp.Server) (*mc
 	return session, received
 }
 
-// TestWatchPlugins_NotifiesAllConnectedSessions verifies that the watcher's change notification is
-// sent to every session connected to the server, not only the one that called
-// watch_plugins action=start. Connects two independent sessions
-// to the same server, starts the watcher from session A only, triggers a real filesystem change,
-// and asserts BOTH sessions receive the notification.
+// TestWatchPlugins_NotifiesAllConnectedSessions verifies that a watcher change notification
+// reaches every session connected to the server, not only the one that started the watcher. Two
+// sessions connect, one starts the watcher, a real file change is made, and both must be notified.
 func TestWatchPlugins_NotifiesAllConnectedSessions(t *testing.T) {
 	withIsolatedHome(t)
 	root := copyFixtureMoodleTree(t)
@@ -79,8 +76,7 @@ func TestWatchPlugins_NotifiesAllConnectedSessions(t *testing.T) {
 	}
 	t.Cleanup(func() { callTool(t, sessionA, "watch_plugins", map[string]any{"action": "stop"}) })
 
-	// Trigger a real fsnotify event on one of the watched files (the watcher's file list
-	// includes version.php): a real event with real debounce timing, not a mock.
+	// Modify a watched file (version.php) to trigger a real filesystem event.
 	versionPhp := filepath.Join(root, "local", "demo", "version.php")
 	content, err := os.ReadFile(versionPhp)
 	if err != nil {

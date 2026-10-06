@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -42,6 +42,8 @@ var (
 	}
 )
 
+// configShape identifies the layout of a tool's MCP configuration, which determines the JSON key and
+// entry fields written for build82 (or that the tool is configured through its own CLI).
 type configShape string
 
 const (
@@ -70,7 +72,9 @@ func (s configShape) topKey() string {
 // cliSpec describes a tool that manages its own MCP registrations through a CLI, so build82
 // delegates to that CLI instead of editing the tool's config file directly.
 type cliSpec struct {
-	Bin     string
+	// Bin is the CLI executable name, looked up on PATH.
+	Bin string
+	// AddArgs returns the command that registers build82 for the given binary and Moodle path.
 	AddArgs func(binaryPath, moodlePath string) []string
 	// RemoveArgs returns the command that removes build82 from one scope. Tools with a single
 	// configuration receive an empty scope and ignore it.
@@ -129,7 +133,8 @@ func claudeScope(out []byte) string {
 	return ""
 }
 
-// target is one entry in the install table.
+// target is one entry in the install table: an AI tool build82 can be registered in, with how to
+// detect it and where or how its configuration is written.
 type target struct {
 	ID, Label string
 	// A target is detected when DetectCmd is on PATH or any directory from DetectDirs exists.
@@ -148,6 +153,8 @@ type target struct {
 	Unsupported string
 }
 
+// removePaths returns the config files an uninstall inspects: RemovePaths when set, otherwise
+// InstallPaths, otherwise nil.
 func (t target) removePaths() []string {
 	if t.RemovePaths != nil {
 		return t.RemovePaths()
@@ -158,13 +165,14 @@ func (t target) removePaths() []string {
 	return nil
 }
 
+// fixedPaths returns a path-list function that always yields the given paths.
 func fixedPaths(paths ...string) func() []string {
 	return func() []string { return paths }
 }
 
-// targets builds the install table. A home directory that cannot be resolved (unset
-// $HOME/%USERPROFILE%) is an error: defaulting to "" would make every path below relative to the
-// process's cwd, so install/uninstall could touch an unrelated file with no visible error.
+// targets builds the install table for the current operating system. It returns an error when the
+// home directory cannot be resolved (unset $HOME/%USERPROFILE%): defaulting to "" would make every
+// path relative to the working directory, so install/uninstall could touch an unrelated file.
 func targets() ([]target, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -280,6 +288,8 @@ func targets() ([]target, error) {
 	}, nil
 }
 
+// clineVSCodeSettings returns the MCP settings file of the Cline VS Code extension inside its
+// globalStorage directory `dir`.
 func clineVSCodeSettings(dir string) string {
 	return filepath.Join(dir, "settings", "cline_mcp_settings.json")
 }
@@ -322,8 +332,8 @@ func clineDir() (string, error) {
 	}
 }
 
-// detectTarget is generic over every target: it only consults the target's own DetectCmd and
-// DetectDirs, so adding a target never requires touching this function.
+// detectTarget reports whether the tool behind `t` appears to be installed: its DetectCmd is on
+// PATH or one of its DetectDirs exists. Unsupported targets are never detected.
 func detectTarget(t target) bool {
 	if t.Unsupported != "" {
 		return false
@@ -343,11 +353,13 @@ func detectTarget(t target) bool {
 	return false
 }
 
+// dirExists reports whether `path` exists and is a directory.
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
 
+// fileExists reports whether `path` exists and is not a directory.
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
@@ -355,9 +367,11 @@ func fileExists(path string) bool {
 
 // --- JSON config read/write/merge ---------------------------------------------------------------
 
-// readConfig parses a config file. A missing file is an empty config. strict reports whether the
-// file was plain JSON; when it only parses after removing comments and trailing commas (JSONC),
-// strict is false and the caller must not rewrite it, since re-encoding would drop the comments.
+// readConfig parses the JSON object in the config file at `path`. A missing file yields an empty
+// config. strict reports whether the file was plain JSON; when it only parses after removing
+// comments and trailing commas (JSONC), strict is false and the caller must not rewrite it, since
+// re-encoding would drop the comments. It returns an error when the file cannot be read or is not
+// valid JSON(C).
 func readConfig(path string) (m map[string]any, strict bool, err error) {
 	content, ok, err := fsutil.ReadOptional(path)
 	if err != nil {
@@ -382,10 +396,11 @@ func readConfig(path string) (m map[string]any, strict bool, err error) {
 	return m, false, nil
 }
 
+// writeJSON atomically writes `data` to `path` as indented JSON with a trailing newline. It keeps
+// the file's existing permissions (0o644 for a new file) and returns any marshal or write error.
 func writeJSON(path string, data map[string]any) error {
-	// Preserve the file's existing permissions instead of always requesting 0o644: these files
-	// often hold secrets for other MCP servers, and WriteAtomic's temp-file+rename means the mode
-	// passed here governs the final file.
+	// These files often hold secrets for other MCP servers, and WriteAtomic's temp-file+rename means
+	// the mode passed here governs the final file, so the existing mode must be carried over.
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
@@ -397,6 +412,8 @@ func writeJSON(path string, data map[string]any) error {
 	return fsutil.WriteAtomic(path, append(b, '\n'), mode)
 }
 
+// mergeServerEntry sets the "build82" key of the object under `topKey` in `m` to `entry`,
+// creating that object when it is missing or not an object, and returns `m`.
 func mergeServerEntry(m map[string]any, topKey string, entry map[string]any) map[string]any {
 	sub, ok := m[topKey].(map[string]any)
 	if !ok {
@@ -407,7 +424,8 @@ func mergeServerEntry(m map[string]any, topKey string, entry map[string]any) map
 	return m
 }
 
-// serverEntry builds the build82 entry in the given shape.
+// serverEntry builds the build82 entry for the given shape, launching `binaryPath` with
+// BUILD82_MOODLE_PATH set to `moodlePath`. It returns nil for shapes with no JSON entry.
 func serverEntry(shape configShape, binaryPath, moodlePath string) map[string]any {
 	env := map[string]any{"BUILD82_MOODLE_PATH": moodlePath}
 	switch shape {
@@ -423,9 +441,10 @@ func serverEntry(shape configShape, binaryPath, moodlePath string) map[string]an
 	return nil
 }
 
-// writeConfig merges a build82 entry into one config file, in the target's shape, never
-// overwriting the whole file. A file with comments or trailing commas is left untouched and the
-// error carries the snippet to add by hand.
+// writeConfig merges a build82 entry into the config file at `path`, in the shape of target `t`,
+// preserving every other key. A file with comments or trailing commas is left untouched and the
+// returned error carries the snippet to add by hand. It also fails when the file cannot be read,
+// parsed or written.
 func writeConfig(t target, path, binaryPath, moodlePath string) error {
 	topKey := t.Shape.topKey()
 	if topKey == "" {
@@ -453,6 +472,8 @@ func runCLI(bin string, args []string) error {
 	return nil
 }
 
+// cliError builds the error for a failed tool CLI command from its output, falling back to `err`
+// when the output is empty.
 func cliError(bin string, args []string, out []byte, err error) error {
 	msg := strings.TrimSpace(string(out))
 	if msg == "" {
@@ -566,6 +587,7 @@ func reportInstall(t target, replaced bool, warnings []string, err error) {
 	printWarnings(warnings)
 }
 
+// printWarnings prints each warning as an indented "Warning:" line.
 func printWarnings(warnings []string) {
 	for _, w := range warnings {
 		fmt.Printf("  Warning: %s\n", w)
@@ -574,42 +596,57 @@ func printWarnings(warnings []string) {
 
 // --- interactive prompts -------------------------------------------------------------------------
 
-func promptMoodlePath(in *bufio.Reader) string {
+// promptMoodlePath asks for the Moodle root, offering the working directory when it is one, and
+// repeats until the answer is a valid Moodle root. An empty answer selects the working directory.
+// It returns the absolute path, or an error when the input ends before a valid root is given.
+func promptMoodlePath(in *bufio.Reader) (string, error) {
 	cwd, _ := os.Getwd()
 	if extractors.IsMoodleRoot(cwd) {
 		fmt.Printf("Detected a Moodle installation at %s. Correct? [Y/n] ", cwd)
-		answer := readLine(in)
+		answer, _ := readLine(in)
 		if !strings.EqualFold(strings.TrimSpace(answer), "n") {
-			return cwd
+			return cwd, nil
 		}
 	}
 	for {
 		fmt.Print("Moodle root path: ")
-		answer := strings.TrimSpace(readLine(in))
+		line, eof := readLine(in)
+		answer := strings.TrimSpace(line)
+		if eof && answer == "" {
+			return "", errors.New("no Moodle path provided (stdin closed)")
+		}
 		if answer == "" {
 			answer = cwd
 		}
 		abs, err := filepath.Abs(answer)
 		if err == nil && extractors.IsMoodleRoot(abs) {
-			return abs
+			return abs, nil
+		}
+		if eof {
+			return "", fmt.Errorf("%q is not a Moodle root and stdin is closed", answer)
 		}
 		fmt.Printf("%q does not look like a Moodle root (expected version.php, lib/, and config.php or config-dist.php). Try again.\n", answer)
 	}
 }
 
+// confirm prints `prompt` and reports whether the answer read from `in` is "y" (case-insensitive).
 func confirm(in *bufio.Reader, prompt string) bool {
 	fmt.Print(prompt)
-	answer := strings.ToLower(strings.TrimSpace(readLine(in)))
-	return answer == "y"
+	line, _ := readLine(in)
+	return strings.ToLower(strings.TrimSpace(line)) == "y"
 }
 
-func readLine(in *bufio.Reader) string {
-	line, _ := in.ReadString('\n')
-	return line
+// readLine reads one line from `in`, including its newline; a read error yields what was read so
+// far. eof is true when the input ended or failed before a newline was read.
+func readLine(in *bufio.Reader) (line string, eof bool) {
+	line, err := in.ReadString('\n')
+	return line, err != nil
 }
 
 // --- top-level flow -------------------------------------------------------------------------------
 
+// targetByID looks up an install target by its ID. found is false when no target has that ID; the
+// error is non-nil only when the target table cannot be built.
 func targetByID(id string) (target, bool, error) {
 	ts, err := targets()
 	if err != nil {
@@ -623,6 +660,7 @@ func targetByID(id string) (target, bool, error) {
 	return target{}, false, nil
 }
 
+// supportedIDs returns the IDs of all install targets, in table order.
 func supportedIDs() ([]string, error) {
 	ts, err := targets()
 	if err != nil {
@@ -635,7 +673,10 @@ func supportedIDs() ([]string, error) {
 	return ids, nil
 }
 
-// Run is the top-level `build82 install [target]` flow.
+// Run is the top-level `build82 install [target]` flow. With a non-empty `targetID` it installs
+// into that target only (skipping it when unsupported or not detected); otherwise it lists the
+// detected tools and installs into all of them after confirmation. It returns an error for an
+// unknown target, an unresolvable binary path or home directory, or a failed single-target install.
 func Run(targetID string) error {
 	binaryPath, err := binpath.Resolve()
 	if err != nil {
@@ -664,7 +705,10 @@ func Run(targetID string) error {
 			fmt.Printf("Skipped: %s not detected.\n", t.Label)
 			return nil
 		}
-		moodlePath := promptMoodlePath(in)
+		moodlePath, err := promptMoodlePath(in)
+		if err != nil {
+			return err
+		}
 		replaced, warnings, err := installTarget(t, binaryPath, moodlePath)
 		reportInstall(t, replaced, warnings, err)
 		return err
@@ -694,7 +738,10 @@ func Run(targetID string) error {
 		fmt.Printf("  - %s\n", t.Label)
 	}
 
-	moodlePath := promptMoodlePath(in)
+	moodlePath, err := promptMoodlePath(in)
+	if err != nil {
+		return err
+	}
 	if !confirm(in, fmt.Sprintf("Install build82 into all %d detected tool(s)? [y/N] ", len(detected))) {
 		return nil
 	}

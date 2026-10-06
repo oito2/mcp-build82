@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,9 +27,8 @@ import (
 )
 
 // captureStderr redirects os.Stderr for the duration of fn and returns everything written to it.
-// logMigrationFailures writes directly to os.Stderr, matching every other "best-effort warning" in
-// this codebase (e.g. cache.Save()'s own warning) — there's no injectable io.Writer seam for it, so
-// capturing the real os.Stderr is the only way to assert on it.
+// logMigrationFailures writes directly to os.Stderr and has no injectable writer, so the real
+// os.Stderr is swapped for a pipe.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -50,14 +49,10 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(out)
 }
 
-// veryOldMtime backdates a legacy fixture file so it is unambiguously older than every source file
-// copyFixtureMoodleTree just wrote — the real "installation upgrading from a previous build82
-// version" scenario, where the legacy file was last generated long ago and the mtime-based
-// staleness check (internal/cache) must correctly find it stale relative to current sources after
-// migration relocates it. os.Rename (what migration uses) preserves mtime, so without backdating,
-// a legacy file written moments ago in a test would look *newer* than the sources and be (rightly,
-// for that scenario) left untouched by the cache — which would make this test assert the wrong
-// thing.
+// setVeryOldMtime backdates the file at `path` by 24 hours so it is older than every source file
+// written by copyFixtureMoodleTree. Migration uses os.Rename, which preserves mtime, so without
+// backdating a freshly written legacy file would look newer than the sources and be treated as
+// up to date by the cache.
 func setVeryOldMtime(t *testing.T, path string) {
 	t.Helper()
 	old := time.Now().Add(-24 * time.Hour)
@@ -66,10 +61,8 @@ func setVeryOldMtime(t *testing.T, path string) {
 	}
 }
 
-// TestGenerateAll_MigratesLegacyGlobalFilesEndToEnd verifies that MigrateLegacyGlobalFiles and
-// MigrateLegacyPluginFiles, as called from inside GenerateAll/GenerateAllForPlugin, migrate real
-// legacy files left at the root by an older layout, with the migration → cache → generation
-// ordering intact.
+// TestGenerateAll_MigratesLegacyGlobalFilesEndToEnd verifies that GenerateAll moves a stale legacy
+// root-level file into ContextDir and then regenerates it, in migration, cache, generation order.
 func TestGenerateAll_MigratesLegacyGlobalFilesEndToEnd(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	legacyPath := filepath.Join(moodlePath, "AI_CONTEXT.md")
@@ -94,18 +87,14 @@ func TestGenerateAll_MigratesLegacyGlobalFilesEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected the legacy content to have been moved into %s: %v", ContextDir, err)
 	}
-	// Backdated relative to the fixture's sources, so the normal mtime-staleness check (not a
-	// migration-specific special case) must have found it stale and regenerated it for real.
+	// The file was backdated, so the normal staleness check must have regenerated it.
 	if string(migrated) == "stale legacy global content" {
 		t.Error("expected the backdated legacy file to be detected stale and regenerated after migration, not left as the stale placeholder")
 	}
 }
 
-// TestGenerateAll_MigratedFileNewerThanSourcesIsLeftAsIs confirms migration itself never forces
-// regeneration — it only relocates the file. If the legacy content is still fresher than every
-// source (the common case: nothing about the plugin changed since it was last
-// generated), the normal cache rules correctly skip regenerating it, and the migrated content is
-// exactly what was on disk before migration.
+// TestGenerateAll_MigratedFileNewerThanSourcesIsLeftAsIs verifies that migration only relocates a
+// file: a legacy file newer than every source is skipped by the cache and keeps its content.
 func TestGenerateAll_MigratedFileNewerThanSourcesIsLeftAsIs(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	legacyPath := filepath.Join(moodlePath, "AI_CONTEXT.md")
@@ -126,9 +115,8 @@ func TestGenerateAll_MigratedFileNewerThanSourcesIsLeftAsIs(t *testing.T) {
 	}
 }
 
-// TestGenerateAllForPlugin_MigratesLegacyPluginFilesEndToEnd is TestGenerateAll_
-// MigratesLegacyGlobalFilesEndToEnd's per-plugin counterpart, covering MigrateLegacyPluginFiles as
-// actually invoked by GenerateAllForPlugin.
+// TestGenerateAllForPlugin_MigratesLegacyPluginFilesEndToEnd is the per-plugin counterpart of the
+// global migration test: GenerateAllForPlugin migrates and regenerates a stale legacy plugin file.
 func TestGenerateAllForPlugin_MigratesLegacyPluginFilesEndToEnd(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
@@ -159,9 +147,9 @@ func TestGenerateAllForPlugin_MigratesLegacyPluginFilesEndToEnd(t *testing.T) {
 	}
 }
 
-// legacySymlinkFixture creates a legacy-named symlink at root/filename pointing outside root —
-// MigrateLegacyFiles always refuses to migrate a symlink, giving a portable, deterministic way to
-// force a MigrationResult.Error without touching filesystem permissions.
+// legacySymlinkFixture creates a symlink at root/filename pointing outside `root`. Because
+// MigrateLegacyFiles refuses symlinks, this forces a MigrationResult.Error without changing
+// filesystem permissions.
 func legacySymlinkFixture(t *testing.T, root, filename string) {
 	t.Helper()
 	outside := t.TempDir()
@@ -172,8 +160,8 @@ func legacySymlinkFixture(t *testing.T, root, filename string) {
 	}
 }
 
-// TestGenerateAll_LogsLegacyGlobalMigrationFailureToStderr verifies that GenerateAll logs to stderr
-// a failed legacy migration (e.g. a legacy file build82 refuses to move).
+// TestGenerateAll_LogsLegacyGlobalMigrationFailureToStderr verifies that GenerateAll logs a failed
+// legacy migration (a refused symlink) to stderr.
 func TestGenerateAll_LogsLegacyGlobalMigrationFailureToStderr(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	legacySymlinkFixture(t, moodlePath, "AI_CONTEXT.md")
@@ -189,24 +177,20 @@ func TestGenerateAll_LogsLegacyGlobalMigrationFailureToStderr(t *testing.T) {
 	}
 }
 
-// TestGenerateAllForPlugin_LogsStaleDuplicateRemovalFailureToStderr verifies that a failed
-// os.Remove of a stale legacy duplicate is logged to stderr as an error, not reported as a
-// successful "removed-stale-duplicate" migration action.
+// TestGenerateAllForPlugin_LogsStaleDuplicateRemovalFailureToStderr verifies that a failed removal
+// of a stale legacy duplicate is logged to stderr and the stale file stays in place.
 func TestGenerateAllForPlugin_LogsStaleDuplicateRemovalFailureToStderr(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
 
-	// Destination already migrated, so MigrateLegacyFiles takes the "stale duplicate" branch
-	// (attempts to remove the legacy copy at src), not the "moved" branch.
+	// The destination already exists, so MigrateLegacyFiles takes the stale-duplicate branch.
 	mustMkdirAll(t, filepath.Join(pluginPath, ContextDir))
 	mustWriteFile(t, PluginOutputPath(pluginPath, "PLUGIN_CONTEXT.md"), "already migrated content")
 	legacyPath := filepath.Join(pluginPath, "PLUGIN_CONTEXT.md")
 	mustWriteFile(t, legacyPath, "stale legacy plugin content")
 
-	// Removing a file requires write permission on its *parent* directory, not the file itself —
-	// making pluginPath read-only forces os.Remove(legacyPath) to fail with permission denied,
-	// without affecting writes inside pluginPath/.build82/ (a separate, still-writable directory
-	// that already exists from the mustWriteFile call above).
+	// Removing a file needs write permission on its parent directory, so a read-only pluginPath
+	// makes the removal fail while the separate ContextDir stays writable.
 	if err := os.Chmod(pluginPath, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -226,9 +210,8 @@ func TestGenerateAllForPlugin_LogsStaleDuplicateRemovalFailureToStderr(t *testin
 	}
 }
 
-// TestGenerateAllForPlugin_LogsLegacyPluginMigrationFailureToStderr is
-// TestGenerateAll_LogsLegacyGlobalMigrationFailureToStderr's per-plugin counterpart, covering
-// MigrateLegacyPluginFiles as actually invoked by GenerateAllForPlugin.
+// TestGenerateAllForPlugin_LogsLegacyPluginMigrationFailureToStderr is the per-plugin counterpart
+// of the global migration-failure test.
 func TestGenerateAllForPlugin_LogsLegacyPluginMigrationFailureToStderr(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")

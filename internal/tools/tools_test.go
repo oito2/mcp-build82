@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
+// mustMkdirAll creates the directory `path` and its parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -40,6 +41,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes `content` to the file `path`, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -47,6 +49,7 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// freshCache replaces the process-wide cache with an empty one for the duration of the test.
 func freshCache(t *testing.T) {
 	t.Helper()
 	old := cache.Global
@@ -76,11 +79,10 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(out)
 }
 
-// TestProcessPlugin_NeverAbortsOnBadPlugin is the single most important behavior in plugin_batch:
-// one plugin's failure must never stop the batch, nor panic past the caller. A genuinely broken
-// plugin here is a path that exists as a *file*, not a directory — every generator's write() call
-// (os.MkdirAll into a path component that's already a file) will hard-fail, unlike a merely
-// nonexistent directory, which the extractors treat as "no source data" and generate successfully.
+// TestProcessPlugin_NeverAbortsOnBadPlugin verifies one plugin's failure never stops the batch
+// nor panics past the caller. The broken plugin is a path that exists as a file rather than a
+// directory, which makes every generator write fail; a merely nonexistent directory would be
+// treated as having no source data and generate successfully.
 func TestProcessPlugin_NeverAbortsOnBadPlugin(t *testing.T) {
 	freshCache(t)
 	moodlePath := t.TempDir()
@@ -95,6 +97,8 @@ func TestProcessPlugin_NeverAbortsOnBadPlugin(t *testing.T) {
 	// Reaching this line at all (no panic escaping processPlugin) is itself part of the assertion.
 }
 
+// TestProcessPlugin_ContinuesAfterOneBadPlugin verifies a valid plugin is still processed
+// successfully after an invalid one.
 func TestProcessPlugin_ContinuesAfterOneBadPlugin(t *testing.T) {
 	freshCache(t)
 	moodlePath := t.TempDir()
@@ -123,6 +127,8 @@ func TestProcessPlugin_ContinuesAfterOneBadPlugin(t *testing.T) {
 	}
 }
 
+// TestResolveBatchPlugins_ListMode_UnresolvedIsError verifies list mode returns an error result
+// for an identifier that cannot be resolved.
 func TestResolveBatchPlugins_ListMode_UnresolvedIsError(t *testing.T) {
 	moodlePath := t.TempDir()
 	_, _, errResult := resolveBatchPlugins(BatchInput{Mode: BatchModeList, Plugins: []string{"local_nonexistent"}}, moodlePath)
@@ -131,9 +137,8 @@ func TestResolveBatchPlugins_ListMode_UnresolvedIsError(t *testing.T) {
 	}
 }
 
-// TestResolveBatchPlugins_ListMode_TooManyPluginsIsError verifies that mode="list" caps len(Plugins)
-// at maxListPlugins, so a single request cannot force thousands of
-// DetectPlugin/GenerateAllForPlugin calls.
+// TestResolveBatchPlugins_ListMode_TooManyPluginsIsError verifies that mode "list" rejects more
+// than maxListPlugins entries.
 func TestResolveBatchPlugins_ListMode_TooManyPluginsIsError(t *testing.T) {
 	moodlePath := t.TempDir()
 	plugins := make([]string, maxListPlugins+1)
@@ -146,6 +151,8 @@ func TestResolveBatchPlugins_ListMode_TooManyPluginsIsError(t *testing.T) {
 	}
 }
 
+// TestResolveBatchPlugins_DevMode_EmptyIsInformationalNotError verifies dev mode with no dev
+// plugins returns an informational, non-error result.
 func TestResolveBatchPlugins_DevMode_EmptyIsInformationalNotError(t *testing.T) {
 	moodlePath := t.TempDir()
 	dirs, _, result := resolveBatchPlugins(BatchInput{Mode: BatchModeDev}, moodlePath)
@@ -158,8 +165,7 @@ func TestResolveBatchPlugins_DevMode_EmptyIsInformationalNotError(t *testing.T) 
 }
 
 // TestWithRecover_ConvertsPanicToErrorResult verifies that withRecover converts a panic inside a
-// handler (most likely from an extractor/generator hitting malformed plugin source) into a normal
-// IsError result instead of letting the panic escape.
+// handler into an IsError result instead of letting it escape.
 func TestWithRecover_ConvertsPanicToErrorResult(t *testing.T) {
 	panicky := func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, struct{}, error) {
 		panic("boom: simulated extractor failure")
@@ -182,8 +188,8 @@ func TestWithRecover_ConvertsPanicToErrorResult(t *testing.T) {
 	}
 }
 
-// TestWithRecover_PassesThroughNormalResults confirms the wrapper is transparent when the handler
-// doesn't panic — it must return exactly what the handler returned, not swallow or alter it.
+// TestWithRecover_PassesThroughNormalResults verifies the wrapper returns exactly what the
+// handler returned when it does not panic.
 func TestWithRecover_PassesThroughNormalResults(t *testing.T) {
 	normal := func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, struct{}, error) {
 		return textResult(false, "all good"), struct{}{}, nil
@@ -225,6 +231,8 @@ func TestClassifyResults_RelativizesAndPreservesErrorMessage(t *testing.T) {
 	}
 }
 
+// TestFilterFunctionLines_VisibilityMarker verifies only API index function lines are kept,
+// including deprecated ones.
 func TestFilterFunctionLines_VisibilityMarker(t *testing.T) {
 	lines := []string{
 		"- `public_fn()` — does a thing",
@@ -238,40 +246,8 @@ func TestFilterFunctionLines_VisibilityMarker(t *testing.T) {
 	}
 }
 
-func TestSearchApiVisibilityFilter(t *testing.T) {
-	lines := []string{
-		"- `public_fn()` — a public function",
-		"- `deprecated_fn()` ~~**@deprecated**: old~~",
-	}
-	var publicOnly, deprecatedOnly, all []string
-	for _, l := range lines {
-		hasDeprecated := len(l) > 0 && containsDeprecatedMarker(l)
-		if !hasDeprecated {
-			publicOnly = append(publicOnly, l)
-		} else {
-			deprecatedOnly = append(deprecatedOnly, l)
-		}
-		all = append(all, l)
-	}
-	if len(publicOnly) != 1 || len(deprecatedOnly) != 1 || len(all) != 2 {
-		t.Errorf("visibility partition mismatch: public=%d deprecated=%d all=%d", len(publicOnly), len(deprecatedOnly), len(all))
-	}
-}
-
-func containsDeprecatedMarker(line string) bool {
-	return len(line) > 0 && (indexOfDeprecated(line) != -1)
-}
-
-func indexOfDeprecated(s string) int {
-	const marker = "@deprecated"
-	for i := 0; i+len(marker) <= len(s); i++ {
-		if s[i:i+len(marker)] == marker {
-			return i
-		}
-	}
-	return -1
-}
-
+// TestReleasePlugin_ExcludedNamesIncludesContextDirAndLegacyFiles verifies the exclusion set
+// contains the legacy and configuration entries and has a minimum size.
 func TestReleasePlugin_ExcludedNamesIncludesContextDirAndLegacyFiles(t *testing.T) {
 	if _, ok := excludedNames["PLUGIN_AI_CONTEXT.md"]; !ok {
 		t.Error("expected PLUGIN_AI_CONTEXT.md in the exclusion set")
@@ -287,17 +263,15 @@ func TestReleasePlugin_ExcludedNamesIncludesContextDirAndLegacyFiles(t *testing.
 	}
 }
 
-// TestCreateZip_ExcludesBuildignoreItself confirms .buildignore is excluded from the archive:
-// .buildignore is build82's own config file, not part of the plugin, so it is never shipped
-// inside the release ZIP, without needing to list it inside .buildignore itself. Opens the actual produced archive and asserts no entry is
-// .buildignore.
+// TestCreateZip_ExcludesBuildignoreItself verifies .buildignore is excluded from the archive
+// without being listed in itself, by opening the produced ZIP and checking its entries.
 func TestCreateZip_ExcludesBuildignoreItself(t *testing.T) {
 	pluginPath := t.TempDir()
 	mustWriteFile(t, filepath.Join(pluginPath, "lib.php"), "<?php\n")
 	mustWriteFile(t, filepath.Join(pluginPath, ".buildignore"), "# comment\n")
 
 	dest := filepath.Join(t.TempDir(), "out.zip")
-	if _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
+	if _, _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
 		t.Fatalf("createZip: %v", err)
 	}
 
@@ -321,11 +295,9 @@ func TestCreateZip_ExcludesBuildignoreItself(t *testing.T) {
 	}
 }
 
-// writeFailCloser wraps a real *os.File so its Close() still actually releases the file
-// descriptor (no fd leak), but its Write() always fails — simulating a destination that goes bad
-// partway through (e.g. a full disk or another I/O error), specifically so the failure surfaces
-// while zip.Writer.Close() is flushing the central directory rather than during an earlier
-// zw.Create/io.Copy call.
+// writeFailCloser wraps an *os.File so that Close still releases the file descriptor but Write
+// always fails. It simulates a destination that fails while zip.Writer.Close flushes the central
+// directory.
 type writeFailCloser struct {
 	*os.File
 }
@@ -335,12 +307,9 @@ func (w writeFailCloser) Write([]byte) (int, error) {
 }
 
 // TestCreateZip_PropagatesCloseError verifies that createZip returns the error from closing the
-// zip writer or destination file, and leaves no partial archive behind. If zip.Writer.Close()
-// fails while flushing the ZIP's central directory (e.g. a full disk or another I/O error), the
-// error must reach the caller. The plugin fixture is empty on purpose: with no files to walk, the
-// only Write() call the destination sees is the one zip.Writer.Close() makes to write the (empty)
-// central directory and end-of-central-directory record, so a Write failure here can only be
-// observed via the Close() error path, never via the walk's own error path.
+// zip writer or destination file, and leaves no partial archive behind. The plugin fixture is
+// empty on purpose: the only write the destination sees is the central directory flushed by
+// zip.Writer.Close, so a write failure can only surface through the close error path.
 func TestCreateZip_PropagatesCloseError(t *testing.T) {
 	pluginPath := t.TempDir() // deliberately empty: forces the only Write() to happen inside zw.Close()
 	dest := filepath.Join(t.TempDir(), "out.zip")
@@ -355,11 +324,13 @@ func TestCreateZip_PropagatesCloseError(t *testing.T) {
 		return writeFailCloser{File: f}, nil
 	}
 
-	if _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err == nil {
+	if _, _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err == nil {
 		t.Fatal("expected createZip to return an error when the ZIP writer's Close() fails, got nil")
 	}
 }
 
+// TestMergeBuildIgnore_AdditiveNotReplacing verifies .buildignore entries are added to the fixed
+// exclusion set without replacing it.
 func TestMergeBuildIgnore_AdditiveNotReplacing(t *testing.T) {
 	pluginPath := t.TempDir()
 	mustWriteFile(t, filepath.Join(pluginPath, ".buildignore"), "# comment\ndocs\n\ntests\n")
@@ -376,6 +347,8 @@ func TestMergeBuildIgnore_AdditiveNotReplacing(t *testing.T) {
 	}
 }
 
+// validReleaseInfo returns plugin metadata that satisfies every metadata check of
+// validateForRelease.
 func validReleaseInfo() extractors.PluginInfo {
 	return extractors.PluginInfo{
 		Component: "local_test",
@@ -385,9 +358,8 @@ func validReleaseInfo() extractors.PluginInfo {
 	}
 }
 
-// writeValidReleaseFixture creates everything validateForRelease requires when nothing is being
-// deliberately left out — a valid lang file and a Privacy API provider — so tests targeting one
-// specific missing requirement don't also trip over unrelated ones.
+// writeValidReleaseFixture creates the files validateForRelease requires (a language file and a
+// Privacy API provider) so tests targeting one missing requirement do not trip over others.
 func writeValidReleaseFixture(t *testing.T, pluginPath string) {
 	t.Helper()
 	mustMkdirAll(t, filepath.Join(pluginPath, "lang", "en"))
@@ -403,6 +375,7 @@ class provider implements \core_privacy\local\metadata\null_provider {
 `)
 }
 
+// TestValidateForRelease_ValidPluginHasNoIssues verifies a complete plugin yields no issues.
 func TestValidateForRelease_ValidPluginHasNoIssues(t *testing.T) {
 	pluginPath := t.TempDir()
 	writeValidReleaseFixture(t, pluginPath)
@@ -412,6 +385,8 @@ func TestValidateForRelease_ValidPluginHasNoIssues(t *testing.T) {
 	}
 }
 
+// TestValidateForRelease_ComponentMismatch verifies a mismatch between the requested and
+// declared component is reported.
 func TestValidateForRelease_ComponentMismatch(t *testing.T) {
 	pluginPath := t.TempDir()
 	info := validReleaseInfo()
@@ -423,6 +398,8 @@ func TestValidateForRelease_ComponentMismatch(t *testing.T) {
 	}
 }
 
+// TestValidateForRelease_MissingRequiresAndMaturity verifies missing requires and maturity
+// values are reported.
 func TestValidateForRelease_MissingRequiresAndMaturity(t *testing.T) {
 	pluginPath := t.TempDir()
 	info := validReleaseInfo()
@@ -435,6 +412,7 @@ func TestValidateForRelease_MissingRequiresAndMaturity(t *testing.T) {
 	}
 }
 
+// TestValidateForRelease_UnrecognizedMaturity verifies an unknown maturity value is reported.
 func TestValidateForRelease_UnrecognizedMaturity(t *testing.T) {
 	pluginPath := t.TempDir()
 	info := validReleaseInfo()
@@ -446,6 +424,7 @@ func TestValidateForRelease_UnrecognizedMaturity(t *testing.T) {
 	}
 }
 
+// TestValidateForRelease_MissingLangFile verifies a missing English language file is reported.
 func TestValidateForRelease_MissingLangFile(t *testing.T) {
 	pluginPath := t.TempDir()
 	issues := validateForRelease(pluginPath, "local_test", validReleaseInfo())
@@ -454,6 +433,8 @@ func TestValidateForRelease_MissingLangFile(t *testing.T) {
 	}
 }
 
+// TestValidateForRelease_GitDirectoryPresent verifies a .git directory inside the plugin is
+// reported.
 func TestValidateForRelease_GitDirectoryPresent(t *testing.T) {
 	pluginPath := t.TempDir()
 	writeValidReleaseFixture(t, pluginPath)
@@ -465,9 +446,8 @@ func TestValidateForRelease_GitDirectoryPresent(t *testing.T) {
 	}
 }
 
-// TestValidateForRelease_MissingPrivacyProvider covers the new Privacy API check: every plugin
-// must declare classes/privacy/provider.php since Moodle 3.9, even one implementing null_provider
-// because it stores no personal data at all.
+// TestValidateForRelease_MissingPrivacyProvider verifies a missing
+// classes/privacy/provider.php is reported.
 func TestValidateForRelease_MissingPrivacyProvider(t *testing.T) {
 	pluginPath := t.TempDir()
 	mustMkdirAll(t, filepath.Join(pluginPath, "lang", "en"))
@@ -479,8 +459,8 @@ func TestValidateForRelease_MissingPrivacyProvider(t *testing.T) {
 	}
 }
 
-// TestValidateForRelease_ThirdpartyLibsWithoutDeclaration covers the new thirdpartylibs.xml check:
-// required whenever a plugin bundles a thirdparty/ directory.
+// TestValidateForRelease_ThirdpartyLibsWithoutDeclaration verifies a thirdparty/ directory without
+// thirdpartylibs.xml is reported.
 func TestValidateForRelease_ThirdpartyLibsWithoutDeclaration(t *testing.T) {
 	pluginPath := t.TempDir()
 	writeValidReleaseFixture(t, pluginPath)
@@ -505,6 +485,7 @@ func TestValidateForRelease_ThirdpartyLibsDeclared(t *testing.T) {
 	}
 }
 
+// anyContains reports whether any string in `issues` contains `substr`.
 func anyContains(issues []string, substr string) bool {
 	for _, issue := range issues {
 		if strings.Contains(issue, substr) {
@@ -514,9 +495,8 @@ func anyContains(issues []string, substr string) bool {
 	return false
 }
 
-// TestHandleGenerateContext_LogsAiIndexFailureToStderr confirms GenerateAiIndex's result is not
-// discarded: a failure writing MOODLE_AI_INDEX.md must be logged, not left invisible to both the
-// caller's report and any log.
+// TestHandleGenerateContext_LogsAiIndexFailureToStderr verifies a failure writing
+// MOODLE_AI_INDEX.md is logged to stderr while the tool call itself still succeeds.
 func TestHandleGenerateContext_LogsAiIndexFailureToStderr(t *testing.T) {
 	freshCache(t)
 	moodlePath := t.TempDir()
@@ -526,10 +506,8 @@ func TestHandleGenerateContext_LogsAiIndexFailureToStderr(t *testing.T) {
 	mustMkdirAll(t, pluginPath)
 	mustWriteFile(t, filepath.Join(pluginPath, "version.php"), "<?php\n$plugin->component = 'local_demo';\n$plugin->version = 2024010100;\n")
 
-	// Force MOODLE_AI_INDEX.md's write to fail: pre-create the *global* .build82/ directory
-	// read-only. This is a separate directory from the plugin's own pluginPath/.build82/, so
-	// generate_plugin_context's own plugin-scoped work still succeeds — isolating the failure to
-	// just the AI index update.
+	// Make the MOODLE_AI_INDEX.md write fail by creating the global .build82/ directory read-only;
+	// the plugin's own .build82/ is separate, so only the AI index update fails.
 	globalContextDir := filepath.Join(moodlePath, generators.ContextDir)
 	mustMkdirAll(t, globalContextDir)
 	if err := os.Chmod(globalContextDir, 0o555); err != nil {
@@ -555,10 +533,9 @@ func TestHandleGenerateContext_LogsAiIndexFailureToStderr(t *testing.T) {
 }
 
 // TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError verifies that a failure to resolve the
-// user's home directory is returned by requireConfig as a real error, and that tools guarding on
-// requireConfig (handleGenerateContext stands in for all of them, since they share the same
-// two-step guard) render it as an explicit IsError tool result instead of falling through to
-// NotInitialized or a wrong config path.
+// user's home directory is returned by requireConfig as an error, and that a tool guarded by it
+// (handleGenerateContext stands in for all of them) renders it as an IsError result instead of
+// the not-initialized response.
 func TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
 	t.Setenv("BUILD82_MOODLE_PATH", "")
 	t.Setenv("BUILD82_MOODLE_VERSION", "")
@@ -579,9 +556,8 @@ func TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
 	}
 }
 
-// TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr confirms a failed config.Save when
-// resyncing a changed Moodle version is logged to stderr; ~/.build82 then keeps reporting the old
-// version.
+// TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr verifies a failed config.Save when
+// persisting a changed Moodle version is logged to stderr.
 func TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr(t *testing.T) {
 	freshCache(t)
 	home := t.TempDir()
@@ -592,15 +568,12 @@ func TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr(t *testing.T) {
 	mustWriteFile(t, filepath.Join(moodlePath, "version.php"),
 		"<?php\n$version = 2024100700.00;\n$release = '4.5';\n$branch = '405';\n")
 
-	// BUILD82_MOODLE_PATH takes priority over the file-based config (config.Load's own documented
-	// precedence), so this is enough to make requireConfig() succeed without ever writing to
-	// ~/.build82 first — but it means the stored MoodleVersion/MoodleFullVersion are empty,
-	// guaranteeing the version-resync branch triggers (real version.php content != "").
+	// BUILD82_MOODLE_PATH takes priority over the stored config, so requireConfig succeeds without
+	// a saved file, and the empty stored version guarantees the version update path runs.
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
 
-	// config.Save writes to ~/.build82 — making HOME read-only forces the save to fail with
-	// permission denied (fsutil.WriteAtomic creates its temp file inside the target's own
-	// directory, which is HOME itself here).
+	// config.Save writes under HOME; making HOME read-only forces the save to fail with a
+	// permission error.
 	if err := os.Chmod(home, 0o555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -621,11 +594,9 @@ func TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr(t *testing.T) {
 	}
 }
 
-// TestToolInputs_UseSnakeCaseJsonTags confirms ReleasePluginInput.OutputDir and
-// CreatePluginSkeletonInput.DisplayName serialize in snake_case, like every other tool input field
-// (moodle_path, plugin_path, mark_as_dev, ...). Marshals each struct and asserts on the actual
-// wire-format JSON keys, not just the source-level json tag, since that's what an MCP client
-// actually sees.
+// TestToolInputs_UseSnakeCaseJsonTags verifies ReleasePluginInput.OutputDir and
+// CreatePluginSkeletonInput.DisplayName serialize with snake_case JSON keys, by marshaling each
+// struct and checking the resulting keys.
 func TestToolInputs_UseSnakeCaseJsonTags(t *testing.T) {
 	releaseJSON, err := json.Marshal(ReleasePluginInput{OutputDir: "x"})
 	if err != nil {
@@ -650,23 +621,18 @@ func TestToolInputs_UseSnakeCaseJsonTags(t *testing.T) {
 	}
 }
 
-// TestFuzzySearchInFile_MissingFileReturnsNil confirms fuzzySearchInFile's missing-file behavior:
-// a leftover os.Stat call was removed from it (dead code — its result was immediately discarded
-// via `_ = info`), leaving os.ReadFile's own error as the sole existence check. Asserts the
-// missing-file behavior is unchanged by that simplification.
+// TestFuzzySearchInFile_MissingFileReturnsNil verifies fuzzySearchInFile returns nil for a file
+// that does not exist.
 func TestFuzzySearchInFile_MissingFileReturnsNil(t *testing.T) {
 	if got := fuzzySearchInFile(filepath.Join(t.TempDir(), "does-not-exist.md"), "anything"); got != nil {
 		t.Errorf("expected nil for a nonexistent file, got %v", got)
 	}
 }
 
-// TestFuzzySearchInFile_SharesMtimeCacheWithSearchInFile confirms fuzzySearchInFile caches by
-// mtime like searchInFile: both use the same cachedLines helper and the same underlying cache
-// map. searchInFile first populates the
-// cache for path; the file is then overwritten with different content but its mtime pinned back
-// to the pre-overwrite value via os.Chtimes — a cache keyed correctly on mtime must still serve
-// the stale-but-cached lines. Only reading through the shared cache (not straight from disk on
-// every call) can produce that result.
+// TestFuzzySearchInFile_SharesMtimeCacheWithSearchInFile verifies fuzzySearchInFile uses the same
+// modification-time cache as searchInFile. searchInFile populates the cache, then the file is
+// overwritten with its modification time restored; only a read through the shared cache can still
+// return the old content.
 func TestFuzzySearchInFile_SharesMtimeCacheWithSearchInFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.md")
 	mustWriteFile(t, path, "widget_helper_function\n")
@@ -692,10 +658,9 @@ func TestFuzzySearchInFile_SharesMtimeCacheWithSearchInFile(t *testing.T) {
 	}
 }
 
-// TestHandleReleasePlugin_RejectsIdentifierEscapingMoodleRoot confirms that, since release_plugin
-// accepts relative and absolute paths as well as components, an identifier that
-// resolves outside the Moodle root — even to a real plugin directory with a version.php — is
-// rejected by the containment check and never packaged.
+// TestHandleReleasePlugin_RejectsIdentifierEscapingMoodleRoot verifies an identifier resolving
+// outside the Moodle root, even to a real plugin directory with a version.php, is rejected and
+// never packaged.
 func TestHandleReleasePlugin_RejectsIdentifierEscapingMoodleRoot(t *testing.T) {
 	freshCache(t)
 	base := t.TempDir()
@@ -726,12 +691,10 @@ func TestHandleReleasePlugin_RejectsIdentifierEscapingMoodleRoot(t *testing.T) {
 	}
 }
 
-// TestHandleReleasePlugin_ZipNameUsesExtractedComponentNotRaw confirms the
-// release ZIP's filename is built from info.Component (extracted and validated from the
-// plugin's own version.php by resolveAndValidatePlugin), not from the raw in.Component the MCP
-// client supplied. Sets up a plugin directory whose version.php declares a *different* component
-// than the identifier used to resolve it, so the two can't agree by coincidence: the ZIP name
-// must start with "local_other_", not "local_test_".
+// TestHandleReleasePlugin_ZipNameUsesExtractedComponentNotRaw verifies the ZIP file name uses the
+// component declared in the plugin's version.php, not the identifier supplied by the client. The
+// plugin declares a different component than the identifier, so the ZIP name must start with
+// "local_other_", not "local_test_".
 func TestHandleReleasePlugin_ZipNameUsesExtractedComponentNotRaw(t *testing.T) {
 	freshCache(t)
 	moodlePath := t.TempDir()
@@ -763,9 +726,8 @@ func TestHandleReleasePlugin_ZipNameUsesExtractedComponentNotRaw(t *testing.T) {
 	}
 }
 
-// TestCreateZip_ExcludesGitDirectoryEvenWithoutStrict confirms a plugin's
-// .git directory (common during development) never ends up inside the release ZIP, regardless of
-// strict mode.
+// TestCreateZip_ExcludesGitDirectoryEvenWithoutStrict verifies a plugin's .git directory is never
+// archived, regardless of strict mode.
 func TestCreateZip_ExcludesGitDirectoryEvenWithoutStrict(t *testing.T) {
 	pluginPath := t.TempDir()
 	mustWriteFile(t, filepath.Join(pluginPath, "lib.php"), "<?php\n")
@@ -774,7 +736,7 @@ func TestCreateZip_ExcludesGitDirectoryEvenWithoutStrict(t *testing.T) {
 	mustWriteFile(t, filepath.Join(pluginPath, ".git", "objects", "deadbeef"), "not really a git object")
 
 	dest := filepath.Join(t.TempDir(), "out.zip")
-	if _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
+	if _, _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
 		t.Fatalf("createZip: %v", err)
 	}
 
@@ -798,14 +760,16 @@ func TestCreateZip_ExcludesGitDirectoryEvenWithoutStrict(t *testing.T) {
 	}
 }
 
-// TestBuildExcludedNames_IncludesGitUnconditionally confirms .git is part of the fixed exclusion
-// set itself, not just something createZip happens to skip in the fixture above.
+// TestBuildExcludedNames_IncludesGitUnconditionally verifies .git is part of the fixed exclusion
+// set.
 func TestBuildExcludedNames_IncludesGitUnconditionally(t *testing.T) {
 	if _, ok := excludedNames[".git"]; !ok {
 		t.Error("expected .git in the unconditional exclusion set")
 	}
 }
 
+// TestMergeBuildIgnore_MissingFileIsNotAnError verifies a missing .buildignore leaves the
+// exclusion set unchanged.
 func TestMergeBuildIgnore_MissingFileIsNotAnError(t *testing.T) {
 	pluginPath := t.TempDir()
 	merged := mergeBuildIgnore(pluginPath, excludedNames)

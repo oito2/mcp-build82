@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@ import (
 	"testing"
 )
 
+// hooksFixtureCallbacks is a db/hooks.php with one callback.
 const hooksFixtureCallbacks = `<?php
 $callbacks = [
     [
@@ -32,6 +33,7 @@ $callbacks = [
     ],
 ];`
 
+// hooksFixtureLegacyLib is a lib.php with one legacy hook callback and one unrelated function.
 const hooksFixtureLegacyLib = `<?php
 function local_test_before_footer() {
     // legacy callback
@@ -41,6 +43,7 @@ function local_test_some_other_function() {
 }
 `
 
+// TestExtractPluginHooks_Callbacks verifies the hook name, priority and enabled flag of a registered callback.
 func TestExtractPluginHooks_Callbacks(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -61,6 +64,8 @@ func TestExtractPluginHooks_Callbacks(t *testing.T) {
 	}
 }
 
+// TestExtractPluginHooks_CallbackHookNameFallsBackToLegacyHookKey verifies that the "hook" key is used when "hookname" is absent and that
+// defaultenabled defaults to true.
 func TestExtractPluginHooks_CallbackHookNameFallsBackToLegacyHookKey(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -82,6 +87,7 @@ $callbacks = [
 	}
 }
 
+// TestExtractPluginHooks_LegacyWarnings verifies that a declared legacy callback produces one warning naming its replacement.
 func TestExtractPluginHooks_LegacyWarnings(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), hooksFixtureLegacyLib)
@@ -102,10 +108,8 @@ func TestExtractPluginHooks_LegacyWarnings(t *testing.T) {
 	}
 }
 
-// TestExtractPluginHooks_MultipleLegacyWarningsAreSorted verifies that a plugin with 2+ legacy
-// callbacks gets its LegacyWarnings in a stable sorted order across runs, even though
-// detectLegacyCallbacks builds them from legacyhooks.Map (a Go map). "cron" and "before_footer"
-// are both entries in legacy_hooks.json.
+// TestExtractPluginHooks_MultipleLegacyWarningsAreSorted verifies that several legacy callbacks
+// produce warnings sorted by function name, although they are derived from a map.
 func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\n"+
@@ -125,6 +129,7 @@ func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 	}
 }
 
+// TestExtractPluginHooks_Definitions verifies the class name, description, tags and replaced callback of a hook definition.
 func TestExtractPluginHooks_Definitions(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
@@ -174,10 +179,11 @@ class data_submitted {
 	}
 }
 
+// TestExtractPluginHooks_DefinitionSkippedWithoutFQN verifies that a hook class without a resolvable FQN is skipped.
 func TestExtractPluginHooks_DefinitionSkippedWithoutFQN(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
-	// No namespace declaration -> no resolvable FQN -> must be skipped.
+	// Without a namespace declaration there is no FQN, so the class must be skipped.
 	mustWriteFile(t, filepath.Join(dir, "classes", "hook", "broken.php"), "<?php\nclass broken {}\n")
 
 	result, err := ExtractPluginHooks(dir, "local_test")
@@ -189,9 +195,8 @@ func TestExtractPluginHooks_DefinitionSkippedWithoutFQN(t *testing.T) {
 	}
 }
 
-// TestExtractPluginHooks_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend across all three sub-scans for well-formed
-// fixtures (callbacks, hook-definition class, legacy lib.php).
+// TestExtractPluginHooks_TreesitterBackendParity verifies that both backends return the same
+// callbacks, definitions and legacy warnings for well-formed fixtures.
 func TestExtractPluginHooks_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -252,8 +257,9 @@ class data_submitted {
 	}
 }
 
-// TestExtractPluginHooks_TreesitterBackendParity_RealFiles runs both backends against every real
-// plugin with a db/hooks.php across all 4 real Moodle installations and confirms they agree.
+// TestExtractPluginHooks_TreesitterBackendParity_RealFiles verifies that both backends agree on
+// every plugin with a db/hooks.php in the available Moodle installations. The test is skipped when
+// none is found.
 func TestExtractPluginHooks_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
@@ -298,11 +304,9 @@ func TestExtractPluginHooks_TreesitterBackendParity_RealFiles(t *testing.T) {
 }
 
 // TestExtractPluginHooks_DescriptionAndTagsDoNotLeakFromLaterMethod verifies that when
-// get_hook_description()/get_hook_tags() computes a value instead of returning a literal directly,
-// the return-literal search stays scoped to that method's own brace-balanced body (via
-// phparray.FindBalancedEnd) and does not capture the first literal `return` found later in the
-// file — here, get_replaces()'s and other_helper()'s unrelated return values. Description falls back
-// to the class's own docblock summary, and Tags stays empty.
+// get_hook_description() and get_hook_tags() return computed values, the search for a literal
+// `return` stays within each method body and does not pick up a later method's return value. The
+// description then falls back to the class docblock summary and the tags stay empty.
 func TestExtractPluginHooks_DescriptionAndTagsDoNotLeakFromLaterMethod(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
@@ -350,9 +354,8 @@ class computed_hook {
 	}
 }
 
-// TestExtractPluginHooks_DocblockPicksClassSummaryNotFileHeader verifies that a file-header
-// docblock (license/@package) placed before the class's own docblock is not used as the summary:
-// the docblock search is anchored to the class declaration line and scans backward.
+// TestExtractPluginHooks_DocblockPicksClassSummaryNotFileHeader verifies that the description comes
+// from the docblock directly above the class, not from a file-header docblock before it.
 func TestExtractPluginHooks_DocblockPicksClassSummaryNotFileHeader(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
@@ -390,6 +393,8 @@ class no_literal_return {
 	}
 }
 
+// TestPluginUsesHookApi verifies that only callbacks and definitions, not legacy warnings, count as Hook API
+// usage.
 func TestPluginUsesHookApi(t *testing.T) {
 	if PluginUsesHookApi(HooksExtraction{LegacyWarnings: []LegacyCallbackWarning{{LegacyFunction: "x"}}}) {
 		t.Error("expected legacy warnings alone to not count as using the Hook API")

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,8 +21,8 @@ import (
 	"testing"
 )
 
-// classifyVisibility's logic is implemented in internal/phpdoc and tested there, not here.
-
+// apiFixtureLib is a lib file with one public, one deprecated, one private and one undocumented
+// function. Visibility classification itself is tested in internal/phpdoc.
 const apiFixtureLib = `<?php
 /**
  * Returns the number of widgets configured for a course.
@@ -60,6 +60,8 @@ function local_test_no_doc_at_all($x) {
 }
 `
 
+// TestExtractFunctionsFromPhpFile_Api verifies that every function in the fixture is returned
+// with the expected visibility.
 func TestExtractFunctionsFromPhpFile_Api(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -82,12 +84,15 @@ func TestExtractFunctionsFromPhpFile_Api(t *testing.T) {
 	}
 }
 
+// TestExtractFunctionsFromPhpFile_MissingFile verifies that a missing file yields nil.
 func TestExtractFunctionsFromPhpFile_MissingFile(t *testing.T) {
 	if got := ExtractFunctionsFromPhpFile("/nonexistent/lib.php"); got != nil {
 		t.Errorf("expected nil for a missing file, got %+v", got)
 	}
 }
 
+// TestExtractFunctionsFromPhpFile_SkipsMagicMethods verifies that names starting with "__" are
+// skipped.
 func TestExtractFunctionsFromPhpFile_SkipsMagicMethods(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -99,6 +104,8 @@ func TestExtractFunctionsFromPhpFile_SkipsMagicMethods(t *testing.T) {
 	}
 }
 
+// TestExtractFunctionsFromPhpFile_IndentedFunctionsNotMatched verifies that indented (nested)
+// function declarations are not matched.
 func TestExtractFunctionsFromPhpFile_IndentedFunctionsNotMatched(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -110,6 +117,8 @@ func TestExtractFunctionsFromPhpFile_IndentedFunctionsNotMatched(t *testing.T) {
 	}
 }
 
+// TestExtractMoodleApi verifies that only public and deprecated functions are returned, ordered
+// public first, while Counts covers every visibility.
 func TestExtractMoodleApi(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "lib"))
@@ -119,7 +128,7 @@ func TestExtractMoodleApi(t *testing.T) {
 	if len(result.Functions) != 2 {
 		t.Fatalf("expected 2 functions (public+deprecated only), got %d: %+v", len(result.Functions), result.Functions)
 	}
-	// public sorts before deprecated per the visibility ordinal.
+	// Public sorts before deprecated.
 	if result.Functions[0].Visibility != VisPublic || result.Functions[1].Visibility != VisDeprecated {
 		t.Errorf("expected public before deprecated in sort order, got %+v", result.Functions)
 	}
@@ -128,8 +137,8 @@ func TestExtractMoodleApi(t *testing.T) {
 	}
 }
 
-// TestExtractFunctionsFromPhpFile_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for the exact fixture.
+// TestExtractFunctionsFromPhpFile_TreesitterBackendParity verifies that the tree-sitter backend
+// returns the same names, visibilities, lines and files as the regex backend for the fixture.
 func TestExtractFunctionsFromPhpFile_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lib.php")
@@ -159,11 +168,9 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles verifies that both backends
-// agree on a large real corpus: it runs both across every real top-level lib/*.php file (matching
-// ExtractMoodleApi's non-recursive scan) in the available Moodle installations and compares
-// Visibility per function, keyed by (file, name) since the same function name could appear in
-// different files.
+// TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles compares both backends on
+// every top-level lib/*.php file of the available Moodle installations, keyed by (file, name).
+// Differences are logged rather than failed. The test is skipped when no file is found.
 func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *testing.T) {
 	type key struct{ file, name string }
 
@@ -194,10 +201,9 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *tes
 				tsByKey[key{f.File, f.Name}] = f
 			}
 
-			// Disagreements here are expected cases where tree-sitter is more correct than the regex
-			// backend: reference-return functions, PHP 8 attributes between a docblock and its function,
-			// malformed doc continuation lines, and non-standard closing markers. They are logged, not
-			// failed.
+			// Disagreements are expected where tree-sitter is more accurate than the regex backend:
+			// reference-return functions, PHP 8 attributes between a docblock and its function,
+			// malformed doc continuation lines and non-standard closing markers.
 			for k, rf := range regexByKey {
 				totalChecked++
 				tf, ok := tsByKey[k]
@@ -206,12 +212,12 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *tes
 					continue
 				}
 				if rf.Visibility != tf.Visibility {
-					t.Logf("%s: function %q visibility mismatch (expected per KNOWN_DIVERGENCES.md #8-#11): regex=%v treesitter=%v", path, k.name, rf.Visibility, tf.Visibility)
+					t.Logf("%s: function %q visibility differs (the backends classify docblock edge cases differently): regex=%v treesitter=%v", path, k.name, rf.Visibility, tf.Visibility)
 				}
 			}
 			for k := range tsByKey {
 				if _, ok := regexByKey[k]; !ok {
-					t.Logf("%s: function %q found by treesitter but not regex (expected per KNOWN_DIVERGENCES.md #8 — e.g. a reference-return function)", path, k.name)
+					t.Logf("%s: function %q found by treesitter but not regex (the regex backend misses some declarations, e.g. reference-return functions)", path, k.name)
 				}
 			}
 		}
@@ -222,17 +228,18 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *tes
 	t.Logf("checked %d functions across all real lib/*.php files", totalChecked)
 }
 
+// TestExtractMoodleApi_PriorityFileOrdering verifies that getPhpFiles lists priority files in
+// PriorityFiles order before any other file.
 func TestExtractMoodleApi_PriorityFileOrdering(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "lib"))
-	// accesslib.php is earlier in PriorityFiles than moodlelib.php... actually moodlelib is first;
-	// use a non-priority file to confirm it's appended after every present priority file.
+	// A non-priority file must come after every priority file that is present.
 	mustWriteFile(t, filepath.Join(dir, "lib", "accesslib.php"), "<?php\nfunction acc_fn() {}\n")
 	mustWriteFile(t, filepath.Join(dir, "lib", "moodlelib.php"), "<?php\nfunction moo_fn() {}\n")
 	mustWriteFile(t, filepath.Join(dir, "lib", "zzz_not_priority.php"), "<?php\nfunction zzz_fn() {}\n")
 
 	files := getPhpFiles(filepath.Join(dir, "lib"))
-	// moodlelib.php precedes accesslib.php in PriorityFiles, both precede the non-priority file.
+	// moodlelib.php precedes accesslib.php in PriorityFiles, and both precede the other file.
 	idxMoodle, idxAccess, idxZzz := -1, -1, -1
 	for i, f := range files {
 		switch filepath.Base(f) {
@@ -244,7 +251,7 @@ func TestExtractMoodleApi_PriorityFileOrdering(t *testing.T) {
 			idxZzz = i
 		}
 	}
-	if !(idxMoodle < idxAccess && idxAccess < idxZzz) {
+	if idxMoodle >= idxAccess || idxAccess >= idxZzz {
 		t.Errorf("expected priority-file ordering moodlelib < accesslib < non-priority, got %v", files)
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,11 +25,14 @@ import (
 	"fmt"
 )
 
+// data is the embedded legacy_hooks.json content.
+//
 //go:embed legacy_hooks.json
 var data []byte
 
 // Map is the legacy lib.php callback suffix (e.g. "before_footer") to its Hook API replacement FQN
-// (e.g. \core\hook\output\before_footer).
+// (e.g. \core\hook\output\before_footer). It is decoded from the embedded JSON at package
+// initialization, which panics if that JSON is malformed.
 var Map = func() map[string]string {
 	var m map[string]string
 	if err := json.Unmarshal(data, &m); err != nil {

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,19 +20,20 @@ import (
 	"testing"
 )
 
-// malformedPhpFixtures are deliberately broken .php snippets standing in for arbitrary files on a
-// user's filesystem that this pipeline reads without ever validating well-formedness first: an
-// unclosed brace, an unterminated string, and a non-UTF8 byte. Both backends (regex and
-// tree-sitter) must degrade gracefully — no panic. The exact empty-vs-partial shape of the result
-// differs per extractor and per fixture and isn't asserted here, only survival is.
+// malformedPhpFixtures are deliberately broken PHP snippets (an unclosed brace, an unterminated
+// string and a non-UTF8 byte) for arbitrary files that are read without validation. Both backends
+// must handle them without panicking; the shape of the result is not asserted.
 var malformedPhpFixtures = map[string]string{
 	"unclosed_brace":      "<?php\n$observers = [\n    ['eventname' => '\\core\\event\\x', 'callback' => 'y::z'\n",
 	"unterminated_string": "<?php\nfunction xmldb_local_test_upgrade($oldversion) {\n    if ($oldversion < 2024010100) {\n        $s = 'unterminated\n    }\n",
 	"non_utf8_byte":       "<?php\nclass local_test_\xffclass {}\n",
 }
 
+// extractorBackends lists the values of BUILD82_EXTRACTOR_BACKEND selecting the regex backend
+// (empty) and the tree-sitter backend.
 var extractorBackends = []string{"", "treesitter"}
 
+// TestParseEventsPhp_MalformedInputDoesNotPanic verifies that malformed input does not panic ParseEventsPhp on either backend.
 func TestParseEventsPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -50,6 +51,7 @@ func TestParseEventsPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestParseUpgradePhp_MalformedInputDoesNotPanic verifies that malformed input does not panic ParseUpgradePhp on either backend.
 func TestParseUpgradePhp_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -67,6 +69,7 @@ func TestParseUpgradePhp_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestExtractClasses_MalformedInputDoesNotPanic verifies that malformed input does not panic ExtractClasses on either backend.
 func TestExtractClasses_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -84,6 +87,7 @@ func TestExtractClasses_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
+// backendLabel returns a subtest label for the BUILD82_EXTRACTOR_BACKEND value `backend`.
 func backendLabel(backend string) string {
 	if backend == "" {
 		return "regex"
@@ -91,6 +95,7 @@ func backendLabel(backend string) string {
 	return backend
 }
 
+// TestParseAccessPhp_MalformedInputDoesNotPanic verifies that malformed input does not panic ParseAccessPhp on either backend.
 func TestParseAccessPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -108,6 +113,7 @@ func TestParseAccessPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestParseServicesPhp_MalformedInputDoesNotPanic verifies that malformed input does not panic ParseServicesPhp on either backend.
 func TestParseServicesPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -125,6 +131,7 @@ func TestParseServicesPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_MalformedInputDoesNotPanic verifies that malformed input does not panic ParseTasksPhp on either backend.
 func TestParseTasksPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -142,9 +149,9 @@ func TestParseTasksPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestParseSettingsPhp_MalformedInputDoesNotPanic has no backend loop: ParseSettingsPhp always uses
-// its own regex scan regardless of BUILD82_EXTRACTOR_BACKEND, so looping over extractorBackends
-// here would just run the identical code path twice.
+// TestParseSettingsPhp_MalformedInputDoesNotPanic verifies that malformed input does not panic
+// ParseSettingsPhp. It does not loop over backends because ParseSettingsPhp always uses a regex
+// scan.
 func TestParseSettingsPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		t.Run(name, func(t *testing.T) {
@@ -158,10 +165,8 @@ func TestParseSettingsPhp_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestExtractPluginHooks_MalformedInputDoesNotPanic exercises all three sub-scans
-// ExtractPluginHooks combines (parseHookCallbacks over db/hooks.php, parseHookDefinitions over
-// classes/hook/*.php, detectLegacyCallbacks over lib.php) with the same malformed-PHP fixtures used
-// elsewhere in this file, on both backends.
+// TestExtractPluginHooks_MalformedInputDoesNotPanic verifies that malformed input in db/hooks.php,
+// classes/hook/*.php and lib.php does not panic ExtractPluginHooks on either backend.
 func TestExtractPluginHooks_MalformedInputDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		for _, backend := range extractorBackends {
@@ -200,9 +205,8 @@ func TestExtractPluginHooks_MalformedInputDoesNotPanic(t *testing.T) {
 	}
 }
 
-// malformedSubpluginsJSONFixtures are deliberately broken db/subplugins.json contents:
-// ExtractSubplugins parses JSON (not PHP) for the modern path, so it gets its own malformed-input
-// fixture set instead of reusing malformedPhpFixtures.
+// malformedSubpluginsJSONFixtures are deliberately broken db/subplugins.json contents, kept
+// separate from the PHP fixtures because that file is parsed as JSON.
 var malformedSubpluginsJSONFixtures = map[string]string{
 	"empty_file":           "",
 	"truncated_object":     `{"plugintypes": {"workshopform": "mod/workshop/form"`,
@@ -211,6 +215,7 @@ var malformedSubpluginsJSONFixtures = map[string]string{
 	"non_json_garbage":     "<?php not even json {{{",
 }
 
+// TestExtractSubplugins_MalformedJsonDoesNotPanic verifies that malformed db/subplugins.json content does not panic ExtractSubplugins.
 func TestExtractSubplugins_MalformedJsonDoesNotPanic(t *testing.T) {
 	for name, content := range malformedSubpluginsJSONFixtures {
 		t.Run(name, func(t *testing.T) {
@@ -224,9 +229,8 @@ func TestExtractSubplugins_MalformedJsonDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestExtractSubplugins_MalformedLegacyPhpDoesNotPanic covers the other parsing path
-// ExtractSubplugins has: when db/subplugins.json is absent, it falls back to the legacy
-// db/subplugins.php PHP array, so that path gets the same malformed-PHP fixtures used elsewhere.
+// TestExtractSubplugins_MalformedLegacyPhpDoesNotPanic verifies that malformed db/subplugins.php
+// content, read when db/subplugins.json is absent, does not panic ExtractSubplugins.
 func TestExtractSubplugins_MalformedLegacyPhpDoesNotPanic(t *testing.T) {
 	for name, content := range malformedPhpFixtures {
 		t.Run(name, func(t *testing.T) {

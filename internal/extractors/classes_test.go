@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,9 +18,12 @@ package extractors
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
+// TestExtractClasses_Basic verifies names, FQNs, kinds, extends, implements and root-relative file paths of classes
+// found in a classes directory.
 func TestExtractClasses_Basic(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "task"))
@@ -42,7 +45,7 @@ class event_observer implements \some\iface {
 		t.Fatalf("expected 2 classes, got %d: %+v", len(result.Classes), result.Classes)
 	}
 
-	// Sorted by namespace then name: "" (event_observer) sorts before "local_test\task" (send_reminders).
+	// Classes are sorted by namespace and then name, so the empty namespace comes first.
 	first, second := result.Classes[0], result.Classes[1]
 	if first.Name != "event_observer" || first.FQN != `\event_observer` {
 		t.Errorf("first class mismatch: %+v", first)
@@ -62,6 +65,7 @@ class event_observer implements \some\iface {
 	}
 }
 
+// TestExtractClasses_MultiLineDeclaration verifies that extends and implements clauses split across lines are resolved.
 func TestExtractClasses_MultiLineDeclaration(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -87,6 +91,7 @@ class foo extends
 	}
 }
 
+// TestExtractClasses_AllKinds verifies that abstract classes, interfaces, traits and enums are all detected.
 func TestExtractClasses_AllKinds(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -111,6 +116,7 @@ enum my_enum {}
 	}
 }
 
+// TestParseRenamedClassesPhp verifies that `::class` references and quoted strings are normalized to class names.
 func TestParseRenamedClassesPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -133,12 +139,14 @@ $renamedclasses = [
 	}
 }
 
+// TestParseRenamedClassesPhp_MissingFile verifies that a missing file yields nil.
 func TestParseRenamedClassesPhp_MissingFile(t *testing.T) {
 	if got := ParseRenamedClassesPhp("/nonexistent/db/renamedclasses.php"); got != nil {
 		t.Errorf("expected nil for a missing file, got %+v", got)
 	}
 }
 
+// TestExtractPluginClasses_IncludesRenamedClasses verifies that the renamed-class map is attached to the plugin extraction.
 func TestExtractPluginClasses_IncludesRenamedClasses(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -152,10 +160,8 @@ $renamedclasses = ['local_test_old' => \local_test\helper::class];`)
 	}
 }
 
-// TestExtractClasses_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for well-formed fixtures, including the
-// multi-line-declaration case (both backends must reach the same answer even though only the
-// regex backend needs special-case logic to get there).
+// TestExtractClasses_TreesitterBackendParity verifies that both backends return the same class for
+// a namespaced abstract class with a multi-line extends/implements declaration.
 func TestExtractClasses_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -183,8 +189,8 @@ abstract class foo extends
 	}
 }
 
-// phpClassEqual compares two PhpClass values field-by-field (PhpClass isn't comparable with == due
-// to its []string Implements field).
+// phpClassEqual reports whether `a` and `b` are equal field by field; PhpClass cannot be compared
+// with == because of its Implements slice.
 func phpClassEqual(a, b PhpClass) bool {
 	if a.Name != b.Name || a.Namespace != b.Namespace || a.FQN != b.FQN || a.Kind != b.Kind ||
 		a.File != b.File || a.Extends != b.Extends || len(a.Implements) != len(b.Implements) {
@@ -198,10 +204,9 @@ func phpClassEqual(a, b PhpClass) bool {
 	return true
 }
 
-// assertPhpClassParity compares one class's fields, with an exception for Implements: the regex
-// backend's line-anchored implements pattern truncates a multi-line implements clause to its first
-// interface, while tree-sitter returns the full list; the difference is logged, not failed. Every
-// other field is asserted exactly.
+// assertPhpClassParity fails the test unless the regex class `regex` and the tree-sitter class `ts`
+// with FQN `fqn` agree on every field. An Implements difference is only logged, because the regex
+// backend can truncate a multi-line implements clause.
 func assertPhpClassParity(t *testing.T, fqn string, regex, ts PhpClass) {
 	t.Helper()
 	if regex.Name != ts.Name || regex.Namespace != ts.Namespace || regex.FQN != ts.FQN ||
@@ -219,14 +224,14 @@ func assertPhpClassParity(t *testing.T, fqn string, regex, ts PhpClass) {
 		}
 	}
 	if !implementsEqual {
-		t.Logf("class %q Implements differs (expected per KNOWN_DIVERGENCES.md #5): regex=%v treesitter=%v", fqn, regex.Implements, ts.Implements)
+		t.Logf("class %q Implements differs (the backends parse the implements list differently): regex=%v treesitter=%v", fqn, regex.Implements, ts.Implements)
 	}
 }
 
-// TestExtractClasses_TreesitterBackendParity_RealFiles runs both backends against a real,
-// class-heavy corpus (Moodle core's own lib/classes/ tree) and confirms they agree, matched by
-// FQN rather than positional index (a class inside a comment, or a "final class" the regex
-// backend's line-anchored kindPattern might miss, could make counts legitimately differ).
+// TestExtractClasses_TreesitterBackendParity_RealFiles compares both backends on Moodle core's
+// lib/classes tree. Classes are matched by FQN because the backends can legitimately find
+// different sets (e.g. a "final class" is missed by the regex backend). The test is skipped when
+// the tree is not available.
 func TestExtractClasses_TreesitterBackendParity_RealFiles(t *testing.T) {
 	root := "/srv/workspace/www/html/mdle/dev-500/lib/classes"
 	if _, err := os.Stat(root); err != nil {
@@ -257,13 +262,14 @@ func TestExtractClasses_TreesitterBackendParity_RealFiles(t *testing.T) {
 	}
 	for fqn := range tsByFQN {
 		if _, ok := regexByFQN[fqn]; !ok {
-			t.Logf("class %q found by treesitter but not regex (expected per KNOWN_DIVERGENCES.md #7 — e.g. a \"final class\" the regex backend's line-anchored pattern never detects at all)", fqn)
+			t.Logf("class %q found by treesitter but not regex (e.g. a \"final class\" the regex backend's line-anchored pattern never detects at all)", fqn)
 		}
 	}
 }
 
-// TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles runs both backends against every
-// real db/renamedclasses.php across all 4 real Moodle installations.
+// TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles compares both backends on every
+// db/renamedclasses.php of the available Moodle installations. The test is skipped when none is
+// found.
 func TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
@@ -282,9 +288,8 @@ func TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles(t *testing.T) 
 			t.Setenv("BUILD82_EXTRACTOR_BACKEND", "treesitter")
 			tsResult := ParseRenamedClassesPhp(path)
 
-			// Compare by OldName, not count/position: the regex backend's key pattern can't match an old
-			// class name containing a namespace separator, so tree-sitter finding strictly more entries here
-			// is expected.
+			// Compare by OldName rather than by position: the regex key pattern cannot match an old
+			// class name containing a namespace separator, so tree-sitter may find more entries.
 			regexByOld := make(map[string]RenamedClass, len(regexResult))
 			for _, r := range regexResult {
 				regexByOld[r.OldName] = r
@@ -305,7 +310,7 @@ func TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles(t *testing.T) 
 			}
 			for old := range tsByOld {
 				if _, ok := regexByOld[old]; !ok {
-					t.Logf("%s: renamed class %q found by treesitter but not regex (expected per KNOWN_DIVERGENCES.md #6)", path, old)
+					t.Logf("%s: renamed class %q found by treesitter but not regex (the backends differ on renamed-class detection)", path, old)
 				}
 			}
 			return nil
@@ -316,10 +321,8 @@ func TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles(t *testing.T) 
 	}
 }
 
-// TestExtractClasses_SkipsSymlinkedFiles verifies that symlinked files are skipped:
-// os.ReadFile follows a symlink to wherever it points, so a symlinked "*.php" file planted inside a
-// scanned directory would otherwise get its target's content parsed and included in the generated
-// classes index — even when the target lives entirely outside the plugin (or Moodle) tree.
+// TestExtractClasses_SkipsSymlinkedFiles verifies, for each backend, that a symlinked *.php file
+// is skipped even when its target lies outside the scanned tree.
 func TestExtractClasses_SkipsSymlinkedFiles(t *testing.T) {
 	for _, backend := range extractorBackends {
 		t.Run(backendLabel(backend), func(t *testing.T) {
@@ -352,6 +355,7 @@ func TestExtractClasses_SkipsSymlinkedFiles(t *testing.T) {
 	}
 }
 
+// containsStr reports whether `needle` is an element of `haystack`.
 func containsStr(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {
@@ -361,10 +365,8 @@ func containsStr(haystack []string, needle string) bool {
 	return false
 }
 
-// TestExtractClasses_IgnoresClassesInsideBlockCommentsAndHeredocs verifies that a line starting
-// with "class Foo {" inside a /* ... */ block comment or inside a heredoc/nowdoc body is not
-// reported as a declaration. The fixture has 1 real class, 1 lookalike inside a block comment, and
-// 1 lookalike inside a heredoc body — only the real one must be found.
+// TestExtractClasses_IgnoresClassesInsideBlockCommentsAndHeredocs verifies that a "class Foo {"
+// line inside a block comment or a heredoc body is not reported; only the real class is.
 func TestExtractClasses_IgnoresClassesInsideBlockCommentsAndHeredocs(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -397,10 +399,9 @@ PHP;
 	}
 }
 
-// TestExtractClasses_BlockCommentAndHeredocStrippingPreservesUnrelatedCode confirms
-// stripCommentsAndHeredocs doesn't disturb ordinary code, quoted strings containing lookalike
-// sequences ("/*", "<<<"), or a class declaration that legitimately follows a comment/heredoc in
-// the same file.
+// TestExtractClasses_BlockCommentAndHeredocStrippingPreservesUnrelatedCode verifies that strings
+// containing "/*" or "<<<" do not start a comment or heredoc, so a class declared after a
+// comment and a heredoc is still found.
 func TestExtractClasses_BlockCommentAndHeredocStrippingPreservesUnrelatedCode(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -424,9 +425,23 @@ class after_all {
 	}
 }
 
+// TestGetClassFQNs_Sorted verifies that FQNs are returned in sorted order.
 func TestGetClassFQNs_Sorted(t *testing.T) {
 	fqns := GetClassFQNs(ClassesExtraction{Classes: []PhpClass{{FQN: `\z`}, {FQN: `\a`}}})
 	if fqns[0] != `\a` || fqns[1] != `\z` {
 		t.Errorf("expected sorted FQNs, got %v", fqns)
+	}
+}
+
+// TestStripCommentsAndHeredocs_Attributes verifies that a PHP 8 attribute is not treated as a
+// comment: a quote inside it keeps string tracking in sync, and real comments are still blanked.
+func TestStripCommentsAndHeredocs_Attributes(t *testing.T) {
+	in := "#[Attr('it')]\nclass A {}\n// class B {}\n# class C {}\n"
+	got := stripCommentsAndHeredocs(in)
+	if !strings.Contains(got, "#[Attr('it')]") || !strings.Contains(got, "class A {}") {
+		t.Errorf("attribute or class lost: %q", got)
+	}
+	if strings.Contains(got, "class B") || strings.Contains(got, "class C") {
+		t.Errorf("comments not blanked: %q", got)
 	}
 }

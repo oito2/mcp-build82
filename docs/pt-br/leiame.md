@@ -6,10 +6,10 @@
 
 [![CI](https://github.com/oito2/mcp-build82/actions/workflows/ci.yml/badge.svg)](https://github.com/oito2/mcp-build82/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/oito2/mcp-build82.svg)](https://pkg.go.dev/github.com/oito2/mcp-build82)
-[![Go Report Card](https://goreportcard.com/badge/github.com/oito2/mcp-build82)](https://goreportcard.com/report/github.com/oito2/mcp-build82)
 [![Go Version](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](../../go.mod)
 [![Release](https://img.shields.io/github/v/release/oito2/mcp-build82?sort=semver)](https://github.com/oito2/mcp-build82/releases)
 [![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](../../LICENSE)
+[![Código: assistido por IA](https://img.shields.io/badge/Code-AI--Assisted-blueviolet)](#uso-de-ia-no-projeto)
 
 🌐 **Idioma:** [English](../../README.md) · Português
 
@@ -24,6 +24,7 @@ plugins seguindo as convenções reais dele. Distribuído como um único binári
 - [Configuração dos clientes](#configuração-dos-clientes)
 - [Atualização e manutenção](#atualização-e-manutenção)
 - [Documentação](#documentação)
+- [Uso de IA no Projeto](#uso-de-ia-no-projeto)
 - [Licença](#licença)
 
 ## Visão geral
@@ -202,6 +203,14 @@ O site de documentação completo está em [`index.md`](index.md) (também em
 
 Contribuindo: veja [`contribuindo.md`](contribuindo.md) para o fluxo de desenvolvimento e o
 processo de release, e o [Código de Conduta](codigo-de-conduta.md).
+
+## Uso de IA no Projeto
+
+Este projeto contou com o auxílio de ferramentas de IA generativa:
+
+- **Escopo:** Geração de boilerplate, testes unitários e refatoração de funções auxiliares.
+
+- **Supervisão:** Todo o código gerado foi revisado, testado e validado manualmente antes da integração.
 
 ## Licença
 

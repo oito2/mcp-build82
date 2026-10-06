@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -54,6 +54,8 @@ func buildTinyDarwin(t *testing.T, dir, goarch string) string {
 	return out
 }
 
+// TestWriteUniversalMachO_ProducesValidFatBinary verifies the output is a valid fat Mach-O with
+// aligned, byte-for-byte slices and the executable bit set.
 func TestWriteUniversalMachO_ProducesValidFatBinary(t *testing.T) {
 	dir := t.TempDir()
 	amd64 := buildTinyDarwin(t, dir, "amd64")
@@ -105,6 +107,8 @@ func TestWriteUniversalMachO_ProducesValidFatBinary(t *testing.T) {
 	}
 }
 
+// TestWriteUniversalMachO_RejectsBadInput verifies a single slice, duplicate CPU types and a
+// non-Mach-O input are each rejected.
 func TestWriteUniversalMachO_RejectsBadInput(t *testing.T) {
 	dir := t.TempDir()
 	amd64 := buildTinyDarwin(t, dir, "amd64")
@@ -126,6 +130,8 @@ func TestWriteUniversalMachO_RejectsBadInput(t *testing.T) {
 	}
 }
 
+// TestBuildServerJSON_MatchesRegistrySchema verifies the server.json fields against the registry
+// constraints, including that every advertised icon exists with its declared dimensions.
 func TestBuildServerJSON_MatchesRegistrySchema(t *testing.T) {
 	const sum = "fe333e598595000ae021bd27117db32ec69af6987f507ba7a63c90638ff633ce"
 	doc := buildServerJSON("v1.2.3", sum)
@@ -189,6 +195,8 @@ func TestBuildServerJSON_MatchesRegistrySchema(t *testing.T) {
 	}
 }
 
+// assertPNGSize reports a test error unless the PNG at `path` is readable and has the dimensions
+// `size`, written as "WxH".
 func assertPNGSize(t *testing.T, path, size string) {
 	t.Helper()
 	f, err := os.Open(path)
@@ -207,6 +215,8 @@ func assertPNGSize(t *testing.T, path, size string) {
 	}
 }
 
+// TestServerTools_ListsEveryRegisteredTool verifies serverTools returns the expected number of
+// tools, each with a name and a single-line description.
 func TestServerTools_ListsEveryRegisteredTool(t *testing.T) {
 	tools, err := serverTools()
 	if err != nil {
@@ -222,6 +232,8 @@ func TestServerTools_ListsEveryRegisteredTool(t *testing.T) {
 	}
 }
 
+// TestWriteMCPB_BundleIsCompleteAndReproducible verifies the bundle is byte-identical across runs,
+// contains every file the manifest references with the right modes, and has a valid manifest.
 func TestWriteMCPB_BundleIsCompleteAndReproducible(t *testing.T) {
 	dir := t.TempDir()
 	bins := bundleBinaries{}
@@ -387,6 +399,8 @@ func runLauncher(t *testing.T, arch string, args ...string) (stdout, stderr stri
 	return out.String(), errBuf.String(), code
 }
 
+// TestLinuxLauncher_ExecsBinaryForArchitecture verifies the launcher runs the binary matching the
+// reported CPU architecture and passes its arguments through unchanged.
 func TestLinuxLauncher_ExecsBinaryForArchitecture(t *testing.T) {
 	cases := map[string]string{"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 	for arch, want := range cases {
@@ -400,6 +414,8 @@ func TestLinuxLauncher_ExecsBinaryForArchitecture(t *testing.T) {
 	}
 }
 
+// TestLinuxLauncher_RejectsUnsupportedArchitecture verifies an unsupported architecture yields a
+// non-zero exit, an error on stderr and nothing on stdout.
 func TestLinuxLauncher_RejectsUnsupportedArchitecture(t *testing.T) {
 	stdout, stderr, code := runLauncher(t, "riscv64")
 	if code == 0 {

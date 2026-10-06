@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@ package extractors
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -24,37 +25,40 @@ import (
 	"github.com/oito2/mcp-build82/internal/phparray"
 )
 
-// Subplugin is one subplugin-type registration: a plugin declaring that it hosts subplugins of
-// its own, keyed by a type prefix and rooted at a path relative to the Moodle install (e.g.
-// "workshopform" -> "mod/workshop/form").
+// Subplugin is one subplugin-type registration: a plugin declaring that it hosts subplugins of its
+// own, as a type prefix and a directory relative to the Moodle root (e.g. "workshopform" to
+// "mod/workshop/form").
 type Subplugin struct {
 	Type string
 	Path string
 }
 
-// subpluginsJSON mirrors db/subplugins.json's shape. Both "plugintypes" (the older key) and
-// "subplugintypes" (the newer key) are read and merged, so a plugin declaring either or both
-// is handled.
+// subpluginsJSON mirrors the shape of db/subplugins.json. The "plugintypes" and "subplugintypes"
+// keys are both read and merged.
 type subpluginsJSON struct {
 	PluginTypes    map[string]string `json:"plugintypes"`
 	SubpluginTypes map[string]string `json:"subplugintypes"`
 }
 
-// legacySubpluginEntryPattern matches one 'prefix' => 'path' entry inside db/subplugins.php's
-// legacy $subplugins array, a flat string-to-string shape.
+// legacySubpluginEntryPattern matches one 'prefix' => 'path' entry of the $subplugins array in
+// db/subplugins.php.
 var legacySubpluginEntryPattern = regexp.MustCompile(`'([a-zA-Z0-9_]+)'\s*=>\s*'([^']+)'`)
 
-// ExtractSubplugins reads pluginPath's subplugin-type declaration, preferring db/subplugins.json
-// and falling back to the legacy db/subplugins.php array only when the JSON file doesn't exist;
-// the JSON file is authoritative when both are present. Returns nil if the plugin declares no
-// subplugins at all, the common case.
+// ExtractSubplugins returns the subplugin types declared by the plugin at `pluginPath`, sorted by
+// type. db/subplugins.json is authoritative when the file exists: if it is unreadable or invalid
+// no subplugins are returned and db/subplugins.php is not consulted. db/subplugins.php is used only
+// when db/subplugins.json does not exist. It returns nil when the plugin declares no subplugins.
 func ExtractSubplugins(pluginPath string) []Subplugin {
-	if types, ok := parseSubpluginsJSON(filepath.Join(pluginPath, "db", "subplugins.json")); ok {
+	jsonPath := filepath.Join(pluginPath, "db", "subplugins.json")
+	if _, err := os.Stat(jsonPath); err == nil {
+		types, _ := parseSubpluginsJSON(jsonPath)
 		return sortedSubplugins(types)
 	}
 	return sortedSubplugins(parseLegacySubpluginsPhp(filepath.Join(pluginPath, "db", "subplugins.php")))
 }
 
+// parseSubpluginsJSON reads the type-to-path map from the JSON file at `path`. The boolean is false
+// when the file cannot be read or decoded.
 func parseSubpluginsJSON(path string) (map[string]string, bool) {
 	content, err := readFileCapped(path)
 	if err != nil {
@@ -74,6 +78,8 @@ func parseSubpluginsJSON(path string) (map[string]string, bool) {
 	return types, true
 }
 
+// parseLegacySubpluginsPhp reads the type-to-path map from the $subplugins array of the PHP file at
+// `path`. It returns nil when the file cannot be read or has no such array.
 func parseLegacySubpluginsPhp(path string) map[string]string {
 	content, err := readFileCapped(path)
 	if err != nil {
@@ -90,6 +96,8 @@ func parseLegacySubpluginsPhp(path string) map[string]string {
 	return types
 }
 
+// sortedSubplugins converts the type-to-path map `types` into a slice sorted by type, or nil when
+// the map is empty.
 func sortedSubplugins(types map[string]string) []Subplugin {
 	if len(types) == 0 {
 		return nil

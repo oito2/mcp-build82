@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@ import (
 	"testing"
 )
 
+// TestExtractArrayBody_SquareBrackets verifies the body of a `[...]` array assignment is returned.
 func TestExtractArrayBody_SquareBrackets(t *testing.T) {
 	content := `<?php
 $observers = [
@@ -37,6 +38,7 @@ $observers = [
 	}
 }
 
+// TestExtractArrayBody_ArrayKeyword verifies the body of an `array(...)` assignment is returned.
 func TestExtractArrayBody_ArrayKeyword(t *testing.T) {
 	content := `<?php
 $tasks = array(
@@ -52,12 +54,14 @@ $tasks = array(
 	}
 }
 
+// TestExtractArrayBody_NotFound verifies a missing variable yields ok=false.
 func TestExtractArrayBody_NotFound(t *testing.T) {
 	if _, ok := ExtractArrayBody(`<?php $other = [];`, "observers"); ok {
 		t.Error("expected ok=false when the variable isn't assigned")
 	}
 }
 
+// TestExtractArrayBody_UnclosedBracket verifies an array whose bracket never closes yields ok=false.
 func TestExtractArrayBody_UnclosedBracket(t *testing.T) {
 	if _, ok := ExtractArrayBody(`<?php $observers = [ 'a' => 1,`, "observers"); ok {
 		t.Error("expected ok=false for a never-closed bracket")
@@ -110,6 +114,7 @@ $functions = [
 	}
 }
 
+// TestSplitIntoBlocks verifies a sequential array body is split into its top-level blocks, keeping nested arrays intact.
 func TestSplitIntoBlocks(t *testing.T) {
 	body := `['a' => 1], ['b' => ['nested' => true]], ['c' => 3]`
 	blocks := SplitIntoBlocks(body)
@@ -134,6 +139,7 @@ func TestSplitIntoBlocks_BracketInsideStringValue(t *testing.T) {
 	}
 }
 
+// TestExtractString_Basic verifies a quoted value is extracted for a key.
 func TestExtractString_Basic(t *testing.T) {
 	block := `'classname' => 'send_reminders'`
 	if got := ExtractString(block, "classname"); got != "send_reminders" {
@@ -141,6 +147,7 @@ func TestExtractString_Basic(t *testing.T) {
 	}
 }
 
+// TestExtractString_NotFound verifies a missing key yields an empty string.
 func TestExtractString_NotFound(t *testing.T) {
 	if got := ExtractString(`'other' => 'x'`, "classname"); got != "" {
 		t.Errorf("expected empty string, got %q", got)
@@ -157,18 +164,17 @@ func TestExtractString_BackslashUnescaping(t *testing.T) {
 	}
 }
 
-// TestExtractString_ValueTruncatesAtEmbeddedQuote verifies that the value capture group [^'"]+
-// excludes the quote character itself, so the value always terminates at the first bare quote it
-// encounters, even one immediately preceded by a backslash. Consequently the `\' -> '` unescaping
-// step is never reached for this function; only the `\\ -> \` step (doubled-backslash FQNs) is.
-func TestExtractString_ValueTruncatesAtEmbeddedQuote(t *testing.T) {
+// TestExtractString_EscapedQuoteInValue verifies that an escaped single quote inside a
+// single-quoted value is unescaped and does not end the value.
+func TestExtractString_EscapedQuoteInValue(t *testing.T) {
 	block := `'description' => 'it\'s a test'`
-	want := `it\` // truncated right before the embedded apostrophe, backslash retained verbatim
+	want := "it's a test"
 	if got := ExtractString(block, "description"); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
+// TestUnescapeString verifies `\\` and `\'` escape sequences are unescaped.
 func TestUnescapeString(t *testing.T) {
 	tests := []struct{ raw, want string }{
 		{`local_myplugin\\task\\my_task`, `local_myplugin\task\my_task`},
@@ -182,6 +188,7 @@ func TestUnescapeString(t *testing.T) {
 	}
 }
 
+// TestExtractInt verifies integer extraction, including negative values and the default for a missing key.
 func TestExtractInt(t *testing.T) {
 	if got := ExtractInt(`'priority' => 500`, "priority", 0); got != 500 {
 		t.Errorf("got %d, want 500", got)
@@ -194,6 +201,7 @@ func TestExtractInt(t *testing.T) {
 	}
 }
 
+// TestExtractBool verifies boolean extraction of true/false/1/0 and the default for a missing key.
 func TestExtractBool(t *testing.T) {
 	cases := []struct {
 		block string
@@ -232,6 +240,7 @@ func TestExtractBool_MultiDigitValueDoesNotFalsePositive(t *testing.T) {
 
 var testKeyPattern = regexp.MustCompile(`['"]([a-zA-Z0-9_]+)['"]\s*=>\s*(\[|array\s*\()`)
 
+// TestSplitKeyedEntries verifies keyed entries are split into key and bracket-balanced body.
 func TestSplitKeyedEntries(t *testing.T) {
 	body := `
 'core_get_data' => [
@@ -255,6 +264,7 @@ func TestSplitKeyedEntries(t *testing.T) {
 	}
 }
 
+// TestSplitKeyedEntries_NestedArrayDoesNotBreakBoundary verifies a nested array inside an entry does not end that entry early.
 func TestSplitKeyedEntries_NestedArrayDoesNotBreakBoundary(t *testing.T) {
 	body := `'archetypes' => ['editingteacher' => 'CAP_ALLOW', 'student' => 'CAP_PREVENT'],
 'other' => ['x' => 1],`
@@ -283,5 +293,20 @@ func TestSplitKeyedEntries_BracketInsideStringValue(t *testing.T) {
 	}
 	if entries[1].Key != "core_set_data" || ExtractString(entries[1].Body, "classname") != "core_external" {
 		t.Errorf("second entry corrupted by stray bracket in first entry's string value: %+v", entries[1])
+	}
+}
+
+func TestExtractString_QuotesInsideValue(t *testing.T) {
+	cases := map[string]string{
+		`'k' => 'it\'s fine',`:  `it's fine`,
+		`'k' => "say 'hi'",`:    `say 'hi'`,
+		`'k' => "say \"hi\"",`:  `say "hi"`,
+		`'k' => 'back\\slash',`: `back\slash`,
+		`'k' => 'plain',`:       `plain`,
+	}
+	for in, want := range cases {
+		if got := ExtractString(in, "k"); got != want {
+			t.Errorf("ExtractString(%s) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,16 +30,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// testServerFactory returns an empty MCP server, for tests that do not exercise MCP behavior.
 func testServerFactory() (*mcp.Server, error) {
 	return mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil), nil
 }
 
+// okHandler returns a handler that answers 200 with an empty body.
 func okHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 }
 
+// TestWithAuth_DisabledWhenTokenEmpty verifies that an empty token lets every request through.
 func TestWithAuth_DisabledWhenTokenEmpty(t *testing.T) {
 	h := withAuth("", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
@@ -50,6 +53,7 @@ func TestWithAuth_DisabledWhenTokenEmpty(t *testing.T) {
 	}
 }
 
+// TestWithAuth_RejectsMissingHeader verifies that a request without Authorization gets 401.
 func TestWithAuth_RejectsMissingHeader(t *testing.T) {
 	h := withAuth("secret", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
@@ -60,6 +64,7 @@ func TestWithAuth_RejectsMissingHeader(t *testing.T) {
 	}
 }
 
+// TestWithAuth_RejectsWrongToken verifies that a wrong Bearer token of equal length gets 401.
 func TestWithAuth_RejectsWrongToken(t *testing.T) {
 	h := withAuth("secret", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
@@ -71,8 +76,9 @@ func TestWithAuth_RejectsWrongToken(t *testing.T) {
 	}
 }
 
+// TestWithAuth_RejectsDifferentLengthToken verifies that a Bearer token of a different length gets 401.
 func TestWithAuth_RejectsDifferentLengthToken(t *testing.T) {
-	// Exercises the explicit length check before ConstantTimeCompare.
+	// A different length is rejected by the length check that precedes the constant-time comparison.
 	h := withAuth("secret", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer short")
@@ -83,6 +89,7 @@ func TestWithAuth_RejectsDifferentLengthToken(t *testing.T) {
 	}
 }
 
+// TestWithAuth_AcceptsCorrectToken verifies that the correct Bearer token is accepted.
 func TestWithAuth_AcceptsCorrectToken(t *testing.T) {
 	h := withAuth("secret", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
@@ -94,6 +101,8 @@ func TestWithAuth_AcceptsCorrectToken(t *testing.T) {
 	}
 }
 
+// TestWithHostValidation_AllowsLocalhostVariants verifies that localhost, 127.0.0.1 and [::1] Host
+// headers with a port are accepted.
 func TestWithHostValidation_AllowsLocalhostVariants(t *testing.T) {
 	h := withHostValidation(nil, "127.0.0.1", okHandler())
 	for _, host := range []string{"localhost:8080", "127.0.0.1:8080", "[::1]:8080"} {
@@ -107,6 +116,7 @@ func TestWithHostValidation_AllowsLocalhostVariants(t *testing.T) {
 	}
 }
 
+// TestWithHostValidation_RejectsUnlistedHost verifies that an unlisted Host header gets 403.
 func TestWithHostValidation_RejectsUnlistedHost(t *testing.T) {
 	h := withHostValidation(nil, "127.0.0.1", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
@@ -118,6 +128,7 @@ func TestWithHostValidation_RejectsUnlistedHost(t *testing.T) {
 	}
 }
 
+// TestWithHostValidation_AllowsCustomAllowedHost verifies that a host passed in the allowed list is accepted.
 func TestWithHostValidation_AllowsCustomAllowedHost(t *testing.T) {
 	h := withHostValidation([]string{"my.internal.host"}, "127.0.0.1", okHandler())
 	req := httptest.NewRequest("GET", "/mcp", nil)
@@ -129,6 +140,7 @@ func TestWithHostValidation_AllowsCustomAllowedHost(t *testing.T) {
 	}
 }
 
+// TestWithHostValidation_HealthBypassesHostCheck verifies that /health is served for any Host header.
 func TestWithHostValidation_HealthBypassesHostCheck(t *testing.T) {
 	h := withHostValidation(nil, "127.0.0.1", okHandler())
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -140,6 +152,7 @@ func TestWithHostValidation_HealthBypassesHostCheck(t *testing.T) {
 	}
 }
 
+// TestHealthHandler verifies that the health handler answers 200 with a JSON content type.
 func TestHealthHandler(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	rec := httptest.NewRecorder()
@@ -152,6 +165,7 @@ func TestHealthHandler(t *testing.T) {
 	}
 }
 
+// TestNotFoundHandler verifies that the fallback handler answers 404.
 func TestNotFoundHandler(t *testing.T) {
 	req := httptest.NewRequest("GET", "/nonexistent", nil)
 	rec := httptest.NewRecorder()
@@ -161,9 +175,8 @@ func TestNotFoundHandler(t *testing.T) {
 	}
 }
 
-// TestIsLoopbackHost verifies the isLoopbackHost helper: only these three
-// values (case-insensitively) may be treated as "safe to run without a token" — anything else,
-// including a wildcard bind address like 0.0.0.0, must be flagged as network-exposed.
+// TestIsLoopbackHost verifies that only 127.0.0.1, localhost and ::1 (case-insensitive) count as
+// loopback, and that anything else, including 0.0.0.0 and the empty string, does not.
 func TestIsLoopbackHost(t *testing.T) {
 	loopback := []string{"127.0.0.1", "localhost", "::1", "LOCALHOST", "Localhost"}
 	for _, h := range loopback {
@@ -179,8 +192,7 @@ func TestIsLoopbackHost(t *testing.T) {
 	}
 }
 
-// TestWarnIfInsecure_TokenSetNoWarning confirms the common, correctly-configured case (a non-empty
-// token) produces no warning at all.
+// TestWarnIfInsecure_TokenSetNoWarning verifies that a non-empty token produces no warning.
 func TestWarnIfInsecure_TokenSetNoWarning(t *testing.T) {
 	var buf bytes.Buffer
 	warnIfInsecure(&buf, "secret123", "0.0.0.0")
@@ -189,10 +201,8 @@ func TestWarnIfInsecure_TokenSetNoWarning(t *testing.T) {
 	}
 }
 
-// TestWarnIfInsecure_EmptyTokenLoopbackWarnsOnce verifies that running --http with
-// no token must print a clear warning that /mcp and /sse are
-// unauthenticated, even on loopback — but the stronger "exposed to the network" warning should NOT
-// fire for a loopback-only bind.
+// TestWarnIfInsecure_EmptyTokenLoopbackWarnsOnce verifies that an empty token on a loopback host
+// produces the unauthenticated warning but not the network-exposure warning.
 func TestWarnIfInsecure_EmptyTokenLoopbackWarnsOnce(t *testing.T) {
 	var buf bytes.Buffer
 	warnIfInsecure(&buf, "", "127.0.0.1")
@@ -205,8 +215,8 @@ func TestWarnIfInsecure_EmptyTokenLoopbackWarnsOnce(t *testing.T) {
 	}
 }
 
-// TestWarnIfInsecure_EmptyTokenNonLoopbackWarnsTwice verifies that no token AND a non-loopback
-// bind host (e.g. --host 0.0.0.0) fires both warnings.
+// TestWarnIfInsecure_EmptyTokenNonLoopbackWarnsTwice verifies that an empty token on a non-loopback
+// host produces both warnings.
 func TestWarnIfInsecure_EmptyTokenNonLoopbackWarnsTwice(t *testing.T) {
 	var buf bytes.Buffer
 	warnIfInsecure(&buf, "", "0.0.0.0")
@@ -219,13 +229,9 @@ func TestWarnIfInsecure_EmptyTokenNonLoopbackWarnsTwice(t *testing.T) {
 	}
 }
 
-// TestNewHTTPServer_TimeoutsConfigured verifies that newHTTPServer sets ReadHeaderTimeout and
-// IdleTimeout (protection against Slowloris-style slow clients) by inspecting the *http.Server
-// fields directly.
-//
-// WriteTimeout is asserted to be exactly 0 (unset): net/http's WriteTimeout covers the whole
-// connection lifetime, and this server's /sse and /mcp (Streamable HTTP) endpoints intentionally
-// keep connections open far longer than any fixed value could safely allow.
+// TestNewHTTPServer_TimeoutsConfigured verifies the ReadHeaderTimeout and IdleTimeout values of
+// the server returned by newHTTPServer, and that WriteTimeout is left unset because it would sever
+// the long-lived /sse and /mcp streams.
 func TestNewHTTPServer_TimeoutsConfigured(t *testing.T) {
 	srv := newHTTPServer(context.Background(), "127.0.0.1:0", okHandler())
 
@@ -244,14 +250,10 @@ func TestNewHTTPServer_TimeoutsConfigured(t *testing.T) {
 	}
 }
 
-// TestStartHTTPServer_ReadHeaderTimeoutClosesSlowClient is a behavioral end-to-end test: it starts
-// a real server via StartHTTPServer on a discovered free port (net.Listen on :0, then release),
-// opens a raw TCP
-// connection, and sends only a partial request line (never completing the headers with the trailing
-// blank line) to simulate a Slowloris-style slow client. Without ReadHeaderTimeout, net/http would
-// wait for the rest of the headers indefinitely; with it configured, the server must close the
-// connection on its own within roughly ReadHeaderTimeout, observed here as the peer read returning
-// (EOF or reset) well before an overly generous outer bound.
+// TestStartHTTPServer_ReadHeaderTimeoutClosesSlowClient verifies that a server started by
+// StartHTTPServer closes a connection whose client sends only a partial request line and never
+// finishes the headers. The server listens on a free port, and the test expects the client read
+// to fail within a generous bound around the 10s ReadHeaderTimeout.
 func TestStartHTTPServer_ReadHeaderTimeoutClosesSlowClient(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -283,15 +285,14 @@ func TestStartHTTPServer_ReadHeaderTimeoutClosesSlowClient(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Send an incomplete request: a request line with no headers and, crucially, no terminating
-	// "\r\n\r\n" — net/http keeps waiting for more header bytes until ReadHeaderTimeout fires.
+	// Send a request line without the terminating blank line, so the server keeps waiting for
+	// headers until ReadHeaderTimeout fires.
 	if _, err := conn.Write([]byte("GET /health HTTP/1.1\r\n")); err != nil {
 		t.Fatalf("failed to write the partial request: %v", err)
 	}
 
-	// ReadHeaderTimeout is 10s; give a generous outer bound so this isn't flaky under load, while
-	// still failing loudly if the server never enforces any timeout at all (in which case this read
-	// would block until the test binary's own timeout killed it).
+	// The timeout is 10s. The 30s deadline avoids flakiness under load and still fails the test
+	// when no timeout is enforced.
 	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	start := time.Now()
 	buf := make([]byte, 16)
@@ -306,10 +307,9 @@ func TestStartHTTPServer_ReadHeaderTimeoutClosesSlowClient(t *testing.T) {
 	}
 }
 
-// TestStartHTTPServer_BindErrorReturnsSynchronously verifies that a bind failure (port already in
-// use, permission denied) is returned synchronously from StartHTTPServer. It occupies a port first,
-// then asks StartHTTPServer to bind the very same port and requires the error to come back from the
-// call itself (not via a channel, callback, or a background goroutine).
+// TestStartHTTPServer_BindErrorReturnsSynchronously verifies that StartHTTPServer returns a bind
+// failure from the call itself, with a nil shutdown function. It occupies a port and then asks
+// StartHTTPServer to bind the same one.
 func TestStartHTTPServer_BindErrorReturnsSynchronously(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -335,13 +335,10 @@ func TestStartHTTPServer_BindErrorReturnsSynchronously(t *testing.T) {
 	}
 }
 
-// TestStartHTTPServer_ShutdownTimeoutReturnsWithLongLivedConnection verifies that the returned
-// cleanup function honors its context deadline. net/http.Server.Shutdown blocks until all active
-// connections become idle, and this server's /sse endpoint intentionally holds the underlying
-// connection open until the request's context is done or the transport is closed. This opens a raw
-// SSE connection that is deliberately never closed by the test, then calls
-// cleanup with a short-timeout context and requires it to return promptly with a deadline error
-// instead of blocking for the test's (or the process's) lifetime.
+// TestStartHTTPServer_ShutdownTimeoutReturnsWithLongLivedConnection verifies that the shutdown
+// function returned by StartHTTPServer honors its context deadline. Graceful shutdown waits for
+// open connections, so the test opens an SSE connection and never closes it, calls the function
+// with a short timeout and expects a prompt non-nil (deadline) error.
 func TestStartHTTPServer_ShutdownTimeoutReturnsWithLongLivedConnection(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -373,9 +370,8 @@ func TestStartHTTPServer_ShutdownTimeoutReturnsWithLongLivedConnection(t *testin
 		t.Fatalf("failed to write the SSE request: %v", err)
 	}
 
-	// Read the response headers plus the initial "endpoint" SSE event to confirm the GET is being
-	// held open by the handler (not merely still in flight), then deliberately stop reading and
-	// leave the connection open — this is the long-lived, never-closed connection the test needs.
+	// Read the response headers and the first SSE line to confirm the handler holds the stream
+	// open, then stop reading and leave the connection open.
 	reader := bufio.NewReader(conn)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	resp, err := http.ReadResponse(reader, nil)
@@ -388,7 +384,7 @@ func TestStartHTTPServer_ShutdownTimeoutReturnsWithLongLivedConnection(t *testin
 	if _, err := reader.ReadString('\n'); err != nil {
 		t.Fatalf("failed to read the initial SSE event: %v", err)
 	}
-	_ = conn.SetReadDeadline(time.Time{}) // clear the deadline; we're done reading for this test
+	_ = conn.SetReadDeadline(time.Time{}) // clear the deadline
 
 	const shutdownTimeout = 500 * time.Millisecond
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -404,9 +400,7 @@ func TestStartHTTPServer_ShutdownTimeoutReturnsWithLongLivedConnection(t *testin
 		if shutdownErr == nil {
 			t.Fatal("expected Shutdown to return a deadline error given the still-open SSE connection, got nil")
 		}
-		// Generous upper bound: it must return close to the requested timeout, not hang
-		// indefinitely (i.e. not for as long as the still-open SSE connection would otherwise
-		// require, which is never, since the test intentionally never closes it).
+		// It must return close to the requested timeout instead of waiting for the open connection.
 		if elapsed > shutdownTimeout+5*time.Second {
 			t.Errorf("expected Shutdown to return within roughly %v, took %v", shutdownTimeout, elapsed)
 		}

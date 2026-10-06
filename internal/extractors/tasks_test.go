@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,10 +21,11 @@ import (
 	"testing"
 )
 
-// realMoodleRoots are the entries under /srv/workspace/www/html/mdle/ that are full
-// Moodle installations (root-level version.php present).
+// realMoodleRoots lists the entries under /srv/workspace/www/html/mdle/ that are full Moodle
+// installations, used by the parity tests that compare both backends on real files.
 var realMoodleRoots = []string{"dev-401", "dev-402", "dev-500", "dev-uvv"}
 
+// tasksFixtureWellFormed is a tasks.php with two scheduled tasks.
 const tasksFixtureWellFormed = `<?php
 $tasks = [
     [
@@ -38,6 +39,7 @@ $tasks = [
     ],
 ];`
 
+// TestParseTasksPhp verifies the class name, blocking flag and cron fields parsed from a well-formed file.
 func TestParseTasksPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -62,6 +64,7 @@ func TestParseTasksPhp(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_MissingClassnameSkipsEntry verifies that an entry without a classname is skipped.
 func TestParseTasksPhp_MissingClassnameSkipsEntry(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -73,6 +76,7 @@ func TestParseTasksPhp_MissingClassnameSkipsEntry(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_CronFieldsDefaultToAsterisk verifies that omitted cron fields default to "*".
 func TestParseTasksPhp_CronFieldsDefaultToAsterisk(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -88,8 +92,8 @@ func TestParseTasksPhp_CronFieldsDefaultToAsterisk(t *testing.T) {
 	}
 }
 
-// TestParseTasksPhp_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for a normal, well-formed tasks.php.
+// TestParseTasksPhp_TreesitterBackendParity verifies that both backends return identical tasks for
+// a well-formed tasks.php.
 func TestParseTasksPhp_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -111,8 +115,8 @@ func TestParseTasksPhp_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// TestParseTasksPhp_TreesitterBackendParity_RealFiles runs both backends against every real
-// db/tasks.php across all 4 real Moodle installations and confirms they agree.
+// TestParseTasksPhp_TreesitterBackendParity_RealFiles verifies that both backends agree on every
+// db/tasks.php of the available Moodle installations. The test is skipped when none is found.
 func TestParseTasksPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
@@ -148,15 +152,14 @@ func TestParseTasksPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	}
 }
 
-// TestGetTaskClassnames_NilInputDoesNotPanic confirms GetTaskClassnames handles a nil
-// *TasksExtraction (a plugin with no db/tasks.php, the common case) by returning nil instead of
-// panicking on a nil pointer dereference.
+// TestGetTaskClassnames_NilInputDoesNotPanic verifies that a nil extraction yields nil.
 func TestGetTaskClassnames_NilInputDoesNotPanic(t *testing.T) {
 	if got := GetTaskClassnames(nil); got != nil {
 		t.Errorf("expected nil, got %v", got)
 	}
 }
 
+// TestGetTaskClassnames_SortedNotDeduped verifies that class names are sorted and duplicates are kept.
 func TestGetTaskClassnames_SortedNotDeduped(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))

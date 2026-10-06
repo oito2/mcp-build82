@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -48,7 +48,7 @@ type CapabilitiesExtraction struct {
 	Capabilities []Capability
 }
 
-// ClassKind is one of "class", "abstract class", "interface", "trait", "enum".
+// ClassKind is the kind of a class-like declaration: one of "class", "abstract class", "interface", "trait", "enum".
 type ClassKind string
 
 // PhpClass is one class/interface/trait/enum declaration found in a plugin or Moodle core.
@@ -62,8 +62,7 @@ type PhpClass struct {
 
 // RenamedClass is one entry in db/renamedclasses.php's autoload map. NewName has any `::class`
 // suffix, surrounding quotes, and leading backslash stripped, so it's a bare FQN comparable with
-// PhpClass.FQN (which also never carries a leading backslash for the root namespace form used
-// elsewhere in this extractor).
+// PhpClass.FQN.
 type RenamedClass struct {
 	OldName string // e.g. "block_accessreview"
 	NewName string // e.g. "block_accessreview\output\main"

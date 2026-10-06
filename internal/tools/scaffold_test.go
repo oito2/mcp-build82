@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// mustReadFile returns the content of the file `path`, failing the test on error.
 func mustReadFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile(path)
@@ -35,6 +36,8 @@ func mustReadFile(t *testing.T, path string) string {
 	return string(content)
 }
 
+// TestCreatePluginSkeleton_WritesExpectedFiles verifies a local plugin skeleton with all
+// features writes the expected files.
 func TestCreatePluginSkeleton_WritesExpectedFiles(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -76,6 +79,8 @@ func TestCreatePluginSkeleton_WritesExpectedFiles(t *testing.T) {
 	}
 }
 
+// TestCreatePluginSkeleton_RefusesIfDirectoryExists verifies an existing plugin directory is
+// never overwritten.
 func TestCreatePluginSkeleton_RefusesIfDirectoryExists(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -92,6 +97,8 @@ func TestCreatePluginSkeleton_RefusesIfDirectoryExists(t *testing.T) {
 	}
 }
 
+// TestCreatePluginSkeleton_RefusesInvalidName verifies invalid plugin names, including path
+// traversal attempts, are rejected.
 func TestCreatePluginSkeleton_RefusesInvalidName(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -112,6 +119,7 @@ func TestCreatePluginSkeleton_RefusesInvalidName(t *testing.T) {
 	}
 }
 
+// TestCreatePluginSkeleton_RefusesUnknownType verifies an unknown plugin type is rejected.
 func TestCreatePluginSkeleton_RefusesUnknownType(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -127,6 +135,8 @@ func TestCreatePluginSkeleton_RefusesUnknownType(t *testing.T) {
 	}
 }
 
+// TestCreatePluginSkeleton_RefusesInvalidMaturity verifies an unrecognized maturity constant is
+// rejected.
 func TestCreatePluginSkeleton_RefusesInvalidMaturity(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -142,10 +152,9 @@ func TestCreatePluginSkeleton_RefusesInvalidMaturity(t *testing.T) {
 	}
 }
 
-// TestCreatePluginSkeleton_EscapesDisplayNameForPhp confirms displayName is properly escaped
-// before being embedded in a single-quoted PHP string literal. Without escaping, this exact
-// payload breaks out of the string and injects eval($_GET['c']) as a second, fully-executed PHP
-// statement into the generated lang file.
+// TestCreatePluginSkeleton_EscapesDisplayNameForPhp verifies the display name is escaped before
+// being embedded in a single-quoted PHP string literal, so a payload containing eval($_GET['c'])
+// cannot break out of the literal in the generated lang file.
 func TestCreatePluginSkeleton_EscapesDisplayNameForPhp(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -166,17 +175,15 @@ func TestCreatePluginSkeleton_EscapesDisplayNameForPhp(t *testing.T) {
 	if !strings.Contains(lang, want) {
 		t.Errorf("displayName was not escaped as expected.\ngot:\n%s\nwant substring:\n%s", lang, want)
 	}
-	// A successful breakout would produce a second top-level statement after the pluginname
-	// assignment (e.g. a bare "eval(...)" call outside any string) — with escaping applied, the
-	// whole payload stays inside the one string literal, so there is exactly one statement.
+	// A breakout would add a second statement after the pluginname assignment; with escaping the
+	// whole payload stays inside the one string literal.
 	if n := strings.Count(lang, "\n$string["); n != 1 {
 		t.Fatalf("expected exactly one $string[...] assignment (payload must not break out of the string literal), found %d:\n%s", n, lang)
 	}
 }
 
-// TestCreatePluginSkeleton_RefusesNonNumericRequires confirms a non-numeric requires value is
-// rejected before being embedded, unquoted, into version.php. Without this check,
-// "0; eval($_GET['c']);" would inject eval($_GET['c']) as a second, fully executed PHP statement.
+// TestCreatePluginSkeleton_RefusesNonNumericRequires verifies a non-numeric requires value, such
+// as "0; eval($_GET['c']);", is rejected before being written unquoted into version.php.
 func TestCreatePluginSkeleton_RefusesNonNumericRequires(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -197,9 +204,8 @@ func TestCreatePluginSkeleton_RefusesNonNumericRequires(t *testing.T) {
 	}
 }
 
-// TestCreatePluginSkeleton_AcceptsDecimalRequires confirms the requires validation doesn't reject
-// Moodle's own legitimate ".NN" point-release suffix on $version (e.g. "2024100700.02"), only
-// genuinely non-numeric values.
+// TestCreatePluginSkeleton_AcceptsDecimalRequires verifies a decimal requires value such as
+// "2024100700.02" is accepted.
 func TestCreatePluginSkeleton_AcceptsDecimalRequires(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -219,6 +225,8 @@ func TestCreatePluginSkeleton_AcceptsDecimalRequires(t *testing.T) {
 	}
 }
 
+// TestCreatePluginSkeleton_ModTypeWritesMandatoryFiles verifies a mod plugin gets its mandatory
+// entry-point files.
 func TestCreatePluginSkeleton_ModTypeWritesMandatoryFiles(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -248,10 +256,9 @@ func TestCreatePluginSkeleton_ModTypeWritesMandatoryFiles(t *testing.T) {
 	}
 }
 
-// TestCreatePluginSkeleton_ModEntryPointsRequireConfigAtCorrectDepth confirms that a "mod"
-// plugin's index.php/view.php, which live at mod/{name}/index.php — only 2 directory levels below
-// the Moodle root — get a require_once that reads '/../../config.php' rather than
-// '/../../../config.php'.
+// TestCreatePluginSkeleton_ModEntryPointsRequireConfigAtCorrectDepth verifies the index.php and
+// view.php of a mod plugin, 2 directory levels below the Moodle root, require
+// '/../../config.php' rather than '/../../../config.php'.
 func TestCreatePluginSkeleton_ModEntryPointsRequireConfigAtCorrectDepth(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -278,10 +285,9 @@ func TestCreatePluginSkeleton_ModEntryPointsRequireConfigAtCorrectDepth(t *testi
 	}
 }
 
-// TestCreatePluginSkeleton_ToolEntryPointRequiresConfigAtCorrectDepth confirms the "tool" plugin
-// type (admin/tool/{name}/index.php, 3 levels below the Moodle root) gets the correct
-// '/../../../config.php' require_once — i.e. the depth is computed per plugin type rather than
-// hardcoded to a single constant shared by every type.
+// TestCreatePluginSkeleton_ToolEntryPointRequiresConfigAtCorrectDepth verifies the index.php of a
+// tool plugin (admin/tool/{name}, 3 levels below the Moodle root) requires '/../../../config.php',
+// so the depth depends on the plugin type.
 func TestCreatePluginSkeleton_ToolEntryPointRequiresConfigAtCorrectDepth(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -303,7 +309,8 @@ func TestCreatePluginSkeleton_ToolEntryPointRequiresConfigAtCorrectDepth(t *test
 	}
 }
 
-// failSkeletonWriteAfter makes the (n+1)-th scaffolded file write fail, after n real writes.
+// failSkeletonWriteAfter makes the (n+1)-th scaffolded file write fail, after `n` successful
+// writes, and restores the real writer when the test ends.
 func failSkeletonWriteAfter(t *testing.T, n int) {
 	t.Helper()
 	orig := writeSkeletonFile
@@ -318,9 +325,8 @@ func failSkeletonWriteAfter(t *testing.T, n int) {
 	}
 }
 
-// TestCreatePluginSkeleton_WriteFailureRemovesCreatedDirs confirms a write failure part-way
-// through leaves no partial plugin behind — including a type directory ("local/") that did not
-// exist before the call.
+// TestCreatePluginSkeleton_WriteFailureRemovesCreatedDirs verifies a write failure part-way
+// through leaves no partial plugin behind, including a type directory that did not exist before.
 func TestCreatePluginSkeleton_WriteFailureRemovesCreatedDirs(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -340,8 +346,8 @@ func TestCreatePluginSkeleton_WriteFailureRemovesCreatedDirs(t *testing.T) {
 	}
 }
 
-// TestCreatePluginSkeleton_WriteFailureKeepsPreexistingSiblings confirms cleanup removes only the
-// new plugin directory, never an existing type directory or the plugins already inside it.
+// TestCreatePluginSkeleton_WriteFailureKeepsPreexistingSiblings verifies cleanup removes only the
+// new plugin directory, never an existing type directory or the plugins inside it.
 func TestCreatePluginSkeleton_WriteFailureKeepsPreexistingSiblings(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -366,8 +372,8 @@ func TestCreatePluginSkeleton_WriteFailureKeepsPreexistingSiblings(t *testing.T)
 	}
 }
 
-// TestCreatePluginSkeleton_ResponsesUseRelativePaths confirms neither the success message nor
-// the "already exists" refusal reveals the absolute Moodle root.
+// TestCreatePluginSkeleton_ResponsesUseRelativePaths verifies neither the success message nor the
+// "already exists" refusal reveals the absolute Moodle root.
 func TestCreatePluginSkeleton_ResponsesUseRelativePaths(t *testing.T) {
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)

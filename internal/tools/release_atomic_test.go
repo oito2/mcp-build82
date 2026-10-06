@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -52,14 +52,14 @@ func TestCreateZip_WalkFailureLeavesNoPartialArchive(t *testing.T) {
 	if err := os.Chmod(unreadable, 0); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(unreadable, 0o644) })
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
 	if f, err := os.Open(unreadable); err == nil {
 		f.Close()
 		t.Skip("file permissions are not enforced for this user")
 	}
 
 	outDir := t.TempDir()
-	if _, err := createZip(pluginPath, filepath.Join(outDir, "out.zip"), "myplugin", excludedNames); err == nil {
+	if _, _, err := createZip(pluginPath, filepath.Join(outDir, "out.zip"), "myplugin", excludedNames); err == nil {
 		t.Fatal("expected createZip to fail on an unreadable file")
 	}
 	assertOnlyEntries(t, outDir)
@@ -83,7 +83,7 @@ func TestCreateZip_CloseFailureKeepsPreviousArchive(t *testing.T) {
 		return writeFailCloser{File: f}, nil
 	}
 
-	if _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err == nil {
+	if _, _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err == nil {
 		t.Fatal("expected createZip to fail")
 	}
 	if got := mustReadFile(t, dest); got != "previous archive" {
@@ -101,7 +101,7 @@ func TestCreateZip_SuccessLeavesOnlyFinalArchive(t *testing.T) {
 	mustMkdirAll(t, outDir)
 	dest := filepath.Join(outDir, "out.zip")
 
-	if _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
+	if _, _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
 		t.Fatalf("createZip: %v", err)
 	}
 	assertOnlyEntries(t, outDir, "out.zip")

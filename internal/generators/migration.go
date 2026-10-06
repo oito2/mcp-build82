@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,15 +27,18 @@ import (
 // ContextDir is genutil.ContextDir, re-exported for convenience within this package.
 const ContextDir = genutil.ContextDir
 
+// GlobalOutputPath is genutil.GlobalOutputPath, re-exported for convenience within this package.
 func GlobalOutputPath(moodlePath, filename string) string {
 	return genutil.GlobalOutputPath(moodlePath, filename)
 }
 
+// PluginOutputPath is genutil.PluginOutputPath, re-exported for convenience within this package.
 func PluginOutputPath(pluginPath, filename string) string {
 	return genutil.PluginOutputPath(pluginPath, filename)
 }
 
-// GlobalContextFilenames is the ordered list of the 13 global Markdown files.
+// GlobalContextFilenames is the ordered list of the 13 global Markdown files written under the
+// Moodle root's ContextDir.
 var GlobalContextFilenames = []string{
 	"AI_CONTEXT.md",
 	"MOODLE_API_INDEX.md",
@@ -52,8 +55,8 @@ var GlobalContextFilenames = []string{
 	"MOODLE_AI_INDEX.md",
 }
 
-// PluginContextFiles is the ordered list of the 12 per-plugin Markdown files — the single source
-// of truth reused by watcher, doctor, batch, update, and release_plugin's exclusion set.
+// PluginContextFiles is the ordered list of the 12 per-plugin Markdown files written under a
+// plugin's ContextDir. It is the single list of plugin context files shared across the project.
 var PluginContextFiles = []string{
 	"PLUGIN_AI_CONTEXT.md",
 	"PLUGIN_CONTEXT.md",
@@ -69,14 +72,17 @@ var PluginContextFiles = []string{
 	"PLUGIN_RUNTIME_FLOW.md",
 }
 
-// legacyGlobalFilenames lists the global context files plus "tags" that older layouts wrote
+// legacyGlobalFilenames lists the global context files plus "tags" that are migrated when found
 // directly at the Moodle root.
 var legacyGlobalFilenames = append(append([]string{}, GlobalContextFilenames...), "tags")
 
-// legacyPluginFilenames lists the plugin context files plus .indevelopment that older layouts
-// wrote directly at a plugin's root.
+// legacyPluginFilenames lists the plugin context files plus .indevelopment that are migrated when
+// found directly at a plugin's root.
 var legacyPluginFilenames = append(append([]string{}, PluginContextFiles...), ".indevelopment")
 
+// MigrationResult describes the outcome of migrating one file: `File` is the root-relative name,
+// `Action` is "moved" or "removed-stale-duplicate" on success (empty on failure), and `Error` is
+// non-empty when the file could not be migrated.
 type MigrationResult struct {
 	File   string
 	Action string // "moved" | "removed-stale-duplicate" | ""
@@ -94,12 +100,11 @@ func logMigrationFailures(results []MigrationResult) {
 	}
 }
 
-// MigrateLegacyFiles moves any of the given filenames found directly under root into
-// root/.build82/. Idempotent — a no-op on every call after the first successful migration.
-// Safe to call unconditionally at the top of every generation pass.
-//
-// filenames is validated on every call: a name that would resolve outside root (path traversal)
-// is rejected rather than renamed or removed.
+// MigrateLegacyFiles moves each of `filenames` found directly under `root` into root/.build82/
+// and returns one MigrationResult per file that was moved, removed or failed; absent files produce
+// no result. When the destination already exists, the stale source is removed instead. The call
+// is idempotent. A name that is empty, absolute, contains a path separator, is "..", resolves outside `root`, or is a
+// symlink is rejected with an Error result and left untouched. It never panics.
 func MigrateLegacyFiles(root string, filenames []string) []MigrationResult {
 	destDir := filepath.Join(root, ContextDir)
 	var results []MigrationResult
@@ -110,14 +115,14 @@ func MigrateLegacyFiles(root string, filenames []string) []MigrationResult {
 	}
 
 	for _, f := range filenames {
-		if f == "" || filepath.IsAbs(f) || strings.Contains(f, "..") {
+		if f == "" || filepath.IsAbs(f) || f == ".." || strings.ContainsAny(f, `/\\`) {
 			results = append(results, MigrationResult{File: f, Error: "invalid filename: must be a root-relative name without traversal"})
 			continue
 		}
 
 		src := filepath.Join(root, f)
 		absSrc, err := filepath.Abs(src)
-		if err != nil || !(absSrc == absRoot || strings.HasPrefix(absSrc, absRoot+string(filepath.Separator))) {
+		if err != nil || (absSrc != absRoot && !strings.HasPrefix(absSrc, absRoot+string(filepath.Separator))) {
 			results = append(results, MigrationResult{File: f, Error: "invalid filename: resolves outside root"})
 			continue
 		}
@@ -155,8 +160,8 @@ func MigrateLegacyFiles(root string, filenames []string) []MigrationResult {
 	return results
 }
 
-// DetectLegacyFiles is the read-only counterpart of MigrateLegacyFiles — used by doctor, which
-// must never mutate the filesystem as a side effect of a diagnostic run.
+// DetectLegacyFiles is the read-only counterpart of MigrateLegacyFiles. It returns the subset of
+// `filenames` that exist directly under `root`, without modifying the filesystem.
 func DetectLegacyFiles(root string, filenames []string) []string {
 	var found []string
 	for _, f := range filenames {
@@ -167,22 +172,22 @@ func DetectLegacyFiles(root string, filenames []string) []string {
 	return found
 }
 
-// MigrateLegacyGlobalFiles migrates the 13 global files + tags found at the Moodle root.
+// MigrateLegacyGlobalFiles migrates the global context files and "tags" found at `moodlePath` into its ContextDir.
 func MigrateLegacyGlobalFiles(moodlePath string) []MigrationResult {
 	return MigrateLegacyFiles(moodlePath, legacyGlobalFilenames)
 }
 
-// MigrateLegacyPluginFiles migrates the 12 plugin files + .indevelopment found at a plugin root.
+// MigrateLegacyPluginFiles migrates the plugin context files and .indevelopment found at `pluginPath` into its ContextDir.
 func MigrateLegacyPluginFiles(pluginPath string) []MigrationResult {
 	return MigrateLegacyFiles(pluginPath, legacyPluginFilenames)
 }
 
-// DetectLegacyGlobalFiles is the read-only variant for the Moodle root.
+// DetectLegacyGlobalFiles returns the legacy global files present at `moodlePath` without moving them.
 func DetectLegacyGlobalFiles(moodlePath string) []string {
 	return DetectLegacyFiles(moodlePath, legacyGlobalFilenames)
 }
 
-// DetectLegacyPluginFiles is the read-only variant for a plugin root.
+// DetectLegacyPluginFiles returns the legacy plugin files present at `pluginPath` without moving them.
 func DetectLegacyPluginFiles(pluginPath string) []string {
 	return DetectLegacyFiles(pluginPath, legacyPluginFilenames)
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// mustMkdirAll creates path and any missing parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -28,6 +29,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// TestResolvePluginPath_Component verifies a "type_name" component resolves through the plugin type directory map.
 func TestResolvePluginPath_Component(t *testing.T) {
 	dir := t.TempDir()
 	pluginDir := filepath.Join(dir, "local", "myplugin")
@@ -39,6 +41,7 @@ func TestResolvePluginPath_Component(t *testing.T) {
 	}
 }
 
+// TestResolvePluginPath_Relative verifies a Moodle-root-relative path resolves to an existing directory.
 func TestResolvePluginPath_Relative(t *testing.T) {
 	dir := t.TempDir()
 	pluginDir := filepath.Join(dir, "mod", "quiz")
@@ -50,6 +53,7 @@ func TestResolvePluginPath_Relative(t *testing.T) {
 	}
 }
 
+// TestResolvePluginPath_Absolute verifies an existing absolute path is returned as given.
 func TestResolvePluginPath_Absolute(t *testing.T) {
 	dir := t.TempDir()
 	pluginDir := filepath.Join(dir, "local", "myplugin")
@@ -61,6 +65,7 @@ func TestResolvePluginPath_Absolute(t *testing.T) {
 	}
 }
 
+// TestResolvePluginPath_AbsoluteNotFound verifies a nonexistent absolute path yields ok=false.
 func TestResolvePluginPath_AbsoluteNotFound(t *testing.T) {
 	dir := t.TempDir()
 	_, ok := ResolvePluginPath(filepath.Join(dir, "nope"), dir)
@@ -69,6 +74,7 @@ func TestResolvePluginPath_AbsoluteNotFound(t *testing.T) {
 	}
 }
 
+// TestResolvePluginPath_NotFound verifies a component whose directory does not exist yields ok=false.
 func TestResolvePluginPath_NotFound(t *testing.T) {
 	_, ok := ResolvePluginPath("local_nonexistent", "/tmp")
 	if ok {
@@ -76,6 +82,7 @@ func TestResolvePluginPath_NotFound(t *testing.T) {
 	}
 }
 
+// TestResolvePluginPath_NoSlashNoUnderscore verifies an identifier with neither a slash nor an underscore yields ok=false.
 func TestResolvePluginPath_NoSlashNoUnderscore(t *testing.T) {
 	_, ok := ResolvePluginPath("justaword", "/tmp")
 	if ok {
@@ -128,6 +135,7 @@ func TestResolvePluginPath_UnknownTypeFallsBackToLiteral(t *testing.T) {
 	}
 }
 
+// TestIsWithinMoodle verifies containment for equal, nested, sibling and parent paths.
 func TestIsWithinMoodle(t *testing.T) {
 	dir := t.TempDir()
 	moodlePath := filepath.Join(dir, "moodle")

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,13 +23,16 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/extractors"
 )
 
+// TestApiFunctionLine_DeprecatedMarkerFormat verifies deprecated functions render the literal
+// "@deprecated" marker and public ones do not.
 func TestApiFunctionLine_DeprecatedMarkerFormat(t *testing.T) {
-	// Load-bearing: search_api substring-matches "@deprecated" in this exact rendered line.
+	// search_api matches the "@deprecated" substring in the rendered line.
 	line := apiFunctionLine(extractors.ApiFunction{
 		Name:       "old_fn",
 		Visibility: extractors.VisDeprecated,
@@ -48,6 +51,7 @@ func TestApiFunctionLine_DeprecatedMarkerFormat(t *testing.T) {
 	}
 }
 
+// TestGenerateApiIndex verifies public and deprecated lib/ functions both appear in the API index.
 func TestGenerateApiIndex(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "lib"))
@@ -75,6 +79,7 @@ function test_deprecated_fn() {}
 	}
 }
 
+// TestGenerateEventsIndex_SortedAcrossPlugins verifies events from several plugins are sorted by name.
 func TestGenerateEventsIndex_SortedAcrossPlugins(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "local", "b", "db"))
@@ -96,6 +101,7 @@ func TestGenerateEventsIndex_SortedAcrossPlugins(t *testing.T) {
 	}
 }
 
+// TestGenerateDbTablesIndex verifies tables declared in db/install.xml appear in the index.
 func TestGenerateDbTablesIndex(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "local", "demo", "db"))
@@ -111,6 +117,7 @@ func TestGenerateDbTablesIndex(t *testing.T) {
 	}
 }
 
+// schemaFixtureForGeneratorTest is a minimal install.xml declaring one table.
 const schemaFixtureForGeneratorTest = `<?xml version="1.0" encoding="UTF-8" ?>
 <XMLDB PATH="local/test/db" VERSION="20240101">
   <TABLES>
@@ -122,22 +129,20 @@ const schemaFixtureForGeneratorTest = `<?xml version="1.0" encoding="UTF-8" ?>
   </TABLES>
 </XMLDB>`
 
+// TestGenerateCtags_SkipsGracefullyWithoutCtags verifies GenerateCtags never reports a result that is
+// both skipped and failed.
 func TestGenerateCtags_SkipsGracefullyWithoutCtags(t *testing.T) {
 	dir := t.TempDir()
-	// We can't guarantee ctags is absent in every CI environment, so only assert the two
-	// documented outcomes: either a graceful skip, or a real success — never a hard failure just
-	// because the binary happens to be missing.
+	// ctags may or may not be installed, so only the consistency of the result is asserted.
 	result := GenerateCtags(dir)
 	if result.Error != "" && result.Skipped {
 		t.Errorf("Skipped and Error should not both be set: %+v", result)
 	}
 }
 
-// TestGenerateCtags_PassesDoubleDashBeforeMoodlePath confirms ctags is invoked with a "--"
-// argument boundary immediately before moodlePath — without it, a moodlePath beginning with "-"
-// would be parsed as a ctags flag instead of the target directory.
-// Builds a fake "ctags" binary that records its argv, since the real ctags isn't guaranteed to be
-// installed in every environment (same reasoning as TestGenerateCtags_SkipsGracefullyWithoutCtags).
+// TestGenerateCtags_PassesDoubleDashBeforeMoodlePath verifies ctags is invoked with "--"
+// immediately before the Moodle path. It uses a fake "ctags" binary that records its arguments,
+// since the real one may not be installed.
 func TestGenerateCtags_PassesDoubleDashBeforeMoodlePath(t *testing.T) {
 	binDir := t.TempDir()
 	argvFile := filepath.Join(binDir, "argv.txt")
@@ -160,8 +165,8 @@ func TestGenerateCtags_PassesDoubleDashBeforeMoodlePath(t *testing.T) {
 	}
 }
 
-// buildFakeCtags compiles a tiny real "ctags" binary that writes its own argv (one per line) to
-// argvFile. A real subprocess exercises exec.Command's actual argument-passing behavior, which a mock can't.
+// buildFakeCtags compiles a small "ctags" executable into `dir` that writes its arguments, one per
+// line, to `argvFile`. A real subprocess exercises the actual argument passing of exec.Command.
 func buildFakeCtags(t *testing.T, dir, argvFile string) {
 	t.Helper()
 	srcDir := t.TempDir()
@@ -197,6 +202,8 @@ func main() {
 	}
 }
 
+// TestGenerateAll_Integration verifies GenerateAll over the fixture tree produces every global
+// file under ContextDir and only successful results.
 func TestGenerateAll_Integration(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	c := cache.NewMtimeCache()
@@ -204,7 +211,7 @@ func TestGenerateAll_Integration(t *testing.T) {
 	defer swapGlobalCache(old)
 
 	results := GenerateAll(moodlePath, "4.3")
-	// 12 wave-1 generators + AI index (wave 2) + tags = 14 results.
+	// 12 concurrent generators + the AI index + tags = 14 results.
 	if len(results) != 14 {
 		t.Errorf("expected 14 generator results, got %d: %+v", len(results), results)
 	}
@@ -216,7 +223,7 @@ func TestGenerateAll_Integration(t *testing.T) {
 		}
 	}
 
-	// Nothing extra left at the Moodle root — every generated file lives under .build82/.
+	// No generated file may be left at the Moodle root.
 	for _, f := range GlobalContextFilenames {
 		if _, err := os.Stat(filepath.Join(moodlePath, f)); err == nil {
 			t.Errorf("expected %s to NOT exist at the Moodle root", f)
@@ -230,6 +237,8 @@ func TestGenerateAll_Integration(t *testing.T) {
 	}
 }
 
+// TestGenerateAll_PersistentCacheRoundTrip verifies the persisted cache makes a second run with a
+// fresh in-memory cache skip every generator.
 func TestGenerateAll_PersistentCacheRoundTrip(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	c1 := cache.NewMtimeCache()
@@ -251,5 +260,95 @@ func TestGenerateAll_PersistentCacheRoundTrip(t *testing.T) {
 		if !r.Skipped {
 			t.Errorf("expected every generator to report Skipped=true on a cache hit after restart, got %+v", r)
 		}
+	}
+}
+
+// TestGenerateAll_AiIndexRefreshesWhenPluginContextAppears verifies a plugin context file created
+// after a first run invalidates the cached AI index and workspace outputs.
+func TestGenerateAll_AiIndexRefreshesWhenPluginContextAppears(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	GenerateAll(moodlePath, "4.3")
+	dirs := FindPluginDirs(moodlePath)
+	if len(dirs) == 0 {
+		t.Skip("fixture has no plugins")
+	}
+	ctxFile := PluginOutputPath(dirs[0], "PLUGIN_AI_CONTEXT.md")
+	_ = os.Remove(ctxFile)
+	GenerateAll(moodlePath, "4.3")
+
+	mustMkdirAll(t, filepath.Dir(ctxFile))
+	mustWriteFile(t, ctxFile, "# ctx\n")
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(ctxFile, future, future); err != nil {
+		t.Fatal(err)
+	}
+	GenerateAll(moodlePath, "4.3")
+
+	content, _ := os.ReadFile(GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md"))
+	rel, _ := filepath.Rel(moodlePath, ctxFile)
+	if !strings.Contains(string(content), filepath.ToSlash(rel)) {
+		t.Errorf("expected AI index to link %s, got:\n%s", rel, content)
+	}
+}
+
+// TestGenerateAll_AiIndexRefreshesWhenPluginContextDisappears verifies that deleting a plugin's
+// PLUGIN_AI_CONTEXT.md makes the next GenerateAll rewrite MOODLE_AI_INDEX.md without that link.
+func TestGenerateAll_AiIndexRefreshesWhenPluginContextDisappears(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	dirs := FindPluginDirs(moodlePath)
+	if len(dirs) == 0 {
+		t.Skip("fixture has no plugins")
+	}
+	ctxFile := PluginOutputPath(dirs[0], "PLUGIN_AI_CONTEXT.md")
+	mustMkdirAll(t, filepath.Dir(ctxFile))
+	mustWriteFile(t, ctxFile, "# ctx\n")
+	GenerateAll(moodlePath, "4.3")
+
+	index := GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md")
+	rel, _ := filepath.Rel(moodlePath, ctxFile)
+	if content, _ := os.ReadFile(index); !strings.Contains(string(content), filepath.ToSlash(rel)) {
+		t.Fatalf("precondition: expected AI index to link %s, got:\n%s", rel, content)
+	}
+
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(index, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ctxFile); err != nil {
+		t.Fatal(err)
+	}
+	GenerateAll(moodlePath, "4.3")
+
+	if content, _ := os.ReadFile(index); strings.Contains(string(content), filepath.ToSlash(rel)) {
+		t.Errorf("expected AI index to drop %s after deletion, got:\n%s", rel, content)
+	}
+}
+
+// TestGenerateEventsIndex_TieBreaksSameEvent verifies rows for one event are ordered by source
+// and then callback.
+func TestGenerateEventsIndex_TieBreaksSameEvent(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"b", "a"} {
+		mustMkdirAll(t, filepath.Join(dir, "local", p, "db"))
+		mustWriteFile(t, filepath.Join(dir, "local", p, "db", "events.php"),
+			"<?php\n$observers = [['eventname' => '\\\\core\\\\event\\\\same', 'callback' => 'x::"+p+"2'],"+
+				"['eventname' => '\\\\core\\\\event\\\\same', 'callback' => 'x::"+p+"1']];")
+	}
+	GenerateEventsIndex(dir)
+	content, _ := os.ReadFile(GlobalOutputPath(dir, "MOODLE_EVENTS_INDEX.md"))
+	s := string(content)
+	last := -1
+	for _, cb := range []string{"x::a1", "x::a2", "x::b1", "x::b2"} {
+		i := strings.Index(s, cb)
+		if i < last {
+			t.Fatalf("rows not ordered by source then callback:\n%s", s)
+		}
+		last = i
 	}
 }

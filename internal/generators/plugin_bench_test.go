@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,17 +20,17 @@ import (
 	"testing"
 )
 
-// functionExistsInContentUncached reproduces functionExistsInContent with a fresh
-// regexp.MustCompile on every call, purely as a benchmark baseline. Production code goes through
-// functionExistsInContent, which resolves the pattern via phparray.CachedPattern.
+// functionExistsInContentUncached mirrors functionExistsInContent but compiles the regex on every
+// call, serving as the benchmark baseline.
 func functionExistsInContentUncached(content []byte, name string) bool {
 	if content == nil {
 		return false
 	}
-	re := regexp.MustCompile(`(?im)^\s*function\s+` + regexp.QuoteMeta(name) + `\s*\(`)
+	re := regexp.MustCompile(`(?im)^function\s+` + regexp.QuoteMeta(name) + `\s*\(`)
 	return re.Match(content)
 }
 
+// benchLibPhpContent is a small lib.php sample used as benchmark input.
 var benchLibPhpContent = []byte(`<?php
 defined('MOODLE_INTERNAL') || die();
 
@@ -43,9 +43,7 @@ function local_test_other_thing() {
 }
 `)
 
-// BenchmarkFunctionExistsInContent_Uncached is the baseline: recompiling the regex from scratch on
-// every call — the cost incurred once per legacy callback suffix x file x plugin in
-// GenerateAllForPluginCore/batch generation.
+// BenchmarkFunctionExistsInContent_Uncached is the baseline that recompiles the regex on every call.
 func BenchmarkFunctionExistsInContent_Uncached(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -53,9 +51,8 @@ func BenchmarkFunctionExistsInContent_Uncached(b *testing.B) {
 	}
 }
 
-// BenchmarkFunctionExistsInContent_Cached measures functionExistsInContent, which resolves
-// the pattern through phparray.CachedPattern, compiling once and reusing the cached *regexp.Regexp
-// on every subsequent call with the same name.
+// BenchmarkFunctionExistsInContent_Cached measures functionExistsInContent, which reuses the
+// regex cached by phparray.CachedPattern for repeated calls with the same name.
 func BenchmarkFunctionExistsInContent_Cached(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

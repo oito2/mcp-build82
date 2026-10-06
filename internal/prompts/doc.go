@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -14,4 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // Package prompts implements the scaffold_plugin, review_plugin, and debug_plugin MCP prompts.
+//
+// Each prompt renders a context-rich request for an AI client: a few-shot example followed by the
+// user's request enriched with plugin metadata and generated context files read from disk.
 package prompts

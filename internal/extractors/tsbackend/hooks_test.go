@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -65,6 +65,7 @@ class data_submitted {
 }
 `
 
+// mustMkdirAll creates path and any missing parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -72,6 +73,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes content to path, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -79,6 +81,7 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// TestExtractPluginHooks_Callbacks verifies db/hooks.php callbacks are parsed with their priority and default-enabled flag.
 func TestExtractPluginHooks_Callbacks(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -99,6 +102,7 @@ func TestExtractPluginHooks_Callbacks(t *testing.T) {
 	}
 }
 
+// TestExtractPluginHooks_CallbackHookNameFallsBackToLegacyHookKey verifies the legacy "hook" key is used as the hook name when "hookname" is absent.
 func TestExtractPluginHooks_CallbackHookNameFallsBackToLegacyHookKey(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -120,6 +124,7 @@ $callbacks = [
 	}
 }
 
+// TestExtractPluginHooks_LegacyWarnings verifies legacy lib.php callbacks produce warnings naming their Hook API replacement.
 func TestExtractPluginHooks_LegacyWarnings(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), hooksFixtureLegacyLib)
@@ -162,6 +167,7 @@ func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 	}
 }
 
+// TestExtractPluginHooks_Definitions verifies hook definition classes are parsed into FQN, description, tags and replaced callback.
 func TestExtractPluginHooks_Definitions(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
@@ -189,6 +195,7 @@ func TestExtractPluginHooks_Definitions(t *testing.T) {
 	}
 }
 
+// TestExtractPluginHooks_DefinitionSkippedWithoutFQN verifies a hook definition file without a namespaced class is skipped.
 func TestExtractPluginHooks_DefinitionSkippedWithoutFQN(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
@@ -224,6 +231,7 @@ class no_ns implements \some\iface {
 	}
 }
 
+// TestParseHookCallbacks_MissingFile verifies a plugin without db/hooks.php yields no callbacks.
 func TestParseHookCallbacks_MissingFile(t *testing.T) {
 	if got := ParseHookCallbacks("/nonexistent/plugin"); got != nil {
 		t.Errorf("expected nil, got %+v", got)

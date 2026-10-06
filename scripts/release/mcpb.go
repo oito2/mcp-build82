@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/server"
 )
 
+// Name of the bundle file and the short description shared by the manifest and server.json.
 const (
 	bundleName  = binary + ".mcpb"
 	description = "MCP server for Moodle plugin development: structural context of a Moodle install for AI agents."
@@ -80,7 +81,9 @@ var bundleIcons = []bundleIcon{
 	{"docs/img/icons/icon-build82-512.png", "icon.png", "512x512"},
 }
 
-// mcpbManifest mirrors the subset of the MCPB manifest (manifest_version 0.3) build82 uses.
+// mcpbManifest mirrors the subset of the MCPB manifest (manifest_version 0.3) build82 uses. The
+// nested mcpb* types below describe its author, repository, icon, server, tool, compatibility and
+// user-configuration entries.
 type mcpbManifest struct {
 	ManifestVersion string             `json:"manifest_version"`
 	Name            string             `json:"name"`
@@ -152,7 +155,10 @@ type mcpbOpt struct {
 	Required    bool   `json:"required"`
 }
 
-// buildManifest assembles the MCPB manifest for version (a "vX.Y.Z" tag) with the given tool list.
+// buildManifest assembles the MCPB manifest for `version` (a "vX.Y.Z" tag) listing `tools`. The
+// server runs the Linux launcher by default, with per-platform command overrides for darwin and
+// windows, and receives the Moodle root through the BUILD82_MOODLE_PATH variable taken from the
+// required moodle_path user setting.
 func buildManifest(version string, tools []mcpbTool) mcpbManifest {
 	repoURL := fmt.Sprintf("https://github.com/%s/%s", repoOrg, repoName)
 	icons := make([]mcpbIcon, 0, len(bundleIcons))
@@ -205,8 +211,9 @@ func buildManifest(version string, tools []mcpbTool) mcpbManifest {
 	}
 }
 
-// serverTools lists the tools the build82 server registers, by connecting an in-memory client to
-// it, so the manifest always matches the shipped server.
+// serverTools returns the name and one-sentence description of every tool the build82 server
+// registers, obtained by connecting an in-memory client to it, so the manifest always matches the
+// shipped server. It returns an error when the server cannot start or tools cannot be listed.
 func serverTools() ([]mcpbTool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -232,8 +239,8 @@ func serverTools() ([]mcpbTool, error) {
 	return tools, nil
 }
 
-// firstSentence returns s up to and including its first ". " boundary (or all of s), with
-// newlines collapsed, keeping manifest tool descriptions to a single short line.
+// firstSentence returns `s` up to and including the period of its first ". " boundary, or all of
+// `s` when there is none, with runs of whitespace (including newlines) collapsed to single spaces.
 func firstSentence(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if i := strings.Index(s, ". "); i >= 0 {
@@ -246,7 +253,11 @@ func firstSentence(s string) string {
 // inputs twice produces a byte-identical archive (and thus the same fileSha256).
 var zipEntryTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// writeMCPB writes the MCPB bundle (a ZIP archive with manifest.json at its root) to out.
+// writeMCPB writes the MCPB bundle, a ZIP archive with manifest.json at its root, to `out`. It
+// contains the JSON of `manifest`, the embedded Linux launcher, the binaries listed in `bins`
+// (mode 0755) and the bundleIcons files read from under `repoRoot`. Every entry has a fixed
+// modification time, so identical inputs yield an identical archive. It returns the first error
+// from reading an input or writing the archive.
 func writeMCPB(out, repoRoot string, manifest mcpbManifest, bins bundleBinaries) (err error) {
 	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

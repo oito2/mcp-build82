@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,5 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package extractors parses Moodle PHP/XML source into structured data, with no MCP dependency.
+// Package extractors parses Moodle PHP and XML source into structured data: plugin metadata,
+// capabilities, events, hooks, services, settings, scheduled tasks, language strings, classes,
+// upgrade steps and core API functions. It has no dependency on the MCP layer. Each extractor uses
+// a regex/bracket-depth backend by default, or the tree-sitter backend when
+// BUILD82_EXTRACTOR_BACKEND is "treesitter".
 package extractors

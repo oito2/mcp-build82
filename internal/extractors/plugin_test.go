@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@ import (
 	"testing"
 )
 
+// pluginFixtureVersionPhp is a version.php declaring component, version, requires, maturity and
+// release.
 const pluginFixtureVersionPhp = `<?php
 defined('MOODLE_INTERNAL') || die();
 $plugin->component = 'local_test';
@@ -31,10 +33,13 @@ $plugin->maturity  = MATURITY_STABLE;
 $plugin->release   = '1.0.0';
 `
 
+// pluginFixtureLangFile is an English lang file that defines the plugin name.
 const pluginFixtureLangFile = `<?php
 $string['pluginname'] = 'Test Plugin';
 `
 
+// TestDetectPlugin verifies the component, version, requirement, maturity and display name read from
+// version.php and the lang file.
 func TestDetectPlugin(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "lang", "en"))
@@ -51,6 +56,7 @@ func TestDetectPlugin(t *testing.T) {
 	}
 }
 
+// TestDetectPlugin_NotFound verifies that a missing directory yields a "not found" error.
 func TestDetectPlugin_NotFound(t *testing.T) {
 	_, err := DetectPlugin("/nonexistent/plugin")
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
@@ -58,6 +64,8 @@ func TestDetectPlugin_NotFound(t *testing.T) {
 	}
 }
 
+// TestDetectPlugin_ComponentFallsBackToInferredTypeAndDirName verifies that the component falls back to type_name and the display name to
+// the directory name when version.php and the lang file do not provide them.
 func TestDetectPlugin_ComponentFallsBackToInferredTypeAndDirName(t *testing.T) {
 	dir := t.TempDir()
 	pluginDir := filepath.Join(dir, "local", "noname")
@@ -76,11 +84,9 @@ func TestDetectPlugin_ComponentFallsBackToInferredTypeAndDirName(t *testing.T) {
 	}
 }
 
-// TestDetectPlugin_AmbiguousParentDirPrefersExactMatch verifies that a plugin whose literal parent
-// directory is "report" resolves deterministically to the exact entry ("report" -> "report") rather
-// than a suffix entry ("gradereport" -> "grade/report", "scormreport" -> "mod/scorm/report"),
-// regardless of map iteration order, so Type (and, when $plugin->component is also absent,
-// Component) is the same across runs.
+// TestDetectPlugin_AmbiguousParentDirPrefersExactMatch verifies that a plugin whose parent
+// directory is "report" resolves to the exact "report" type rather than a suffix match such as
+// "gradereport", on every run.
 func TestDetectPlugin_AmbiguousParentDirPrefersExactMatch(t *testing.T) {
 	dir := t.TempDir()
 	pluginDir := filepath.Join(dir, "report", "noname")
@@ -98,11 +104,9 @@ func TestDetectPlugin_AmbiguousParentDirPrefersExactMatch(t *testing.T) {
 	}
 }
 
+// TestDetectPlugin_CommentedOutComponentStillMatches verifies that the regex backend also reads a commented-out component line.
 func TestDetectPlugin_CommentedOutComponentStillMatches(t *testing.T) {
-	// Imprecision of the *regex* backend specifically: no comment-stripping pass, so a commented-out
-	// $plugin->component line is read. Pin the backend explicitly — the tree-sitter backend sees a
-	// comment as a comment — so this test is not sensitive to whichever backend the environment
-	// selects.
+	// Only the regex backend reads commented-out lines, so it is selected explicitly.
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "")
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n// $plugin->component = 'old_name';\n")
@@ -116,9 +120,9 @@ func TestDetectPlugin_CommentedOutComponentStillMatches(t *testing.T) {
 	}
 }
 
-// TestDetectPlugin_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter produces
-// identical DetectPlugin output to the regex backend for a normal, well-formed plugin. A
-// commented-out $plugin->component line is not covered here, since the backends differ on it.
+// TestDetectPlugin_TreesitterBackendParity verifies that both backends return the same plugin
+// info for a well-formed plugin. A commented-out component line is not covered because the
+// backends differ on it.
 func TestDetectPlugin_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "lang", "en"))
@@ -142,8 +146,8 @@ func TestDetectPlugin_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// TestDetectPlugin_TreesitterBackendParity_RealPlugins runs both backends against real plugins
-// from the available Moodle installations and confirms they agree.
+// TestDetectPlugin_TreesitterBackendParity_RealPlugins verifies that both backends agree on real
+// plugins from the available Moodle installations.
 func TestDetectPlugin_TreesitterBackendParity_RealPlugins(t *testing.T) {
 	root := "/srv/workspace/www/html/mdle/dev-500/mod"
 	entries, err := os.ReadDir(root)
@@ -182,6 +186,7 @@ func TestDetectPlugin_TreesitterBackendParity_RealPlugins(t *testing.T) {
 	}
 }
 
+// TestIsPlugin verifies that IsPlugin reports a directory containing version.php.
 func TestIsPlugin(t *testing.T) {
 	dir := t.TempDir()
 	if IsPlugin(dir) {

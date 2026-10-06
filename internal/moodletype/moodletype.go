@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,7 +21,8 @@ import (
 	"strings"
 )
 
-// PluginTypeToDir is the canonical Moodle plugin type -> directory map (37 entries).
+// PluginTypeToDir maps a Moodle plugin type (the part of a component name before the first
+// underscore) to its directory relative to the Moodle root.
 var PluginTypeToDir = map[string]string{
 	"mod":                "mod",
 	"block":              "blocks",
@@ -97,10 +98,11 @@ func IsWithinMoodle(absolutePath, moodlePath string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-// ResolvePluginPath resolves a plugin identifier — an absolute path, a moodle-root-relative path
-// containing "/", or a component string ("type_name") — to an absolute path on disk. Returns
-// ("", false) if the identifier can't be resolved to an existing path. The returned path is
-// always filepath.Clean-ed, so it can be passed straight into IsWithinMoodle.
+// ResolvePluginPath resolves `identifier` — an absolute path, a path relative to `moodlePath`
+// containing "/", or a component string ("type_name") — to a path on disk. A component whose
+// type is missing from PluginTypeToDir uses the type itself as the directory. Returns ("", false)
+// if the identifier can't be resolved to an existing path. The returned path is cleaned, so it can
+// be passed straight into IsWithinMoodle.
 func ResolvePluginPath(identifier, moodlePath string) (string, bool) {
 	if filepath.IsAbs(identifier) {
 		return existsOrEmpty(filepath.Clean(identifier))
@@ -120,6 +122,7 @@ func ResolvePluginPath(identifier, moodlePath string) (string, bool) {
 	return "", false
 }
 
+// existsOrEmpty returns path and true when it exists on disk, or ("", false) otherwise.
 func existsOrEmpty(path string) (string, bool) {
 	if _, err := os.Stat(path); err != nil {
 		return "", false

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -108,11 +108,10 @@ function local_test_check($context) {
 }
 
 // TestCheckCapabilityUsage_ModPluginUsesSlashPrefix confirms a mod plugin's own capability checks
-// are cross-referenced against the "mod/{name}:" prefix, not "mod_{name}:" (CapabilityPrefix's own
-// documented mod/block special case).
+// are compared against the "mod/{name}:" prefix, not "mod_{name}:".
 func TestCheckCapabilityUsage_ModPluginUsesSlashPrefix(t *testing.T) {
-	// extractors.DetectPlugin infers Type from the parent directory name (inferTypeFromPath) —
-	// needs a real "mod/" parent directory here for info.Type to resolve to "mod".
+	// DetectPlugin infers the type from the parent directory name, so a real "mod/" parent is
+	// needed for the type to resolve to "mod".
 	pluginDir := filepath.Join(t.TempDir(), "mod", "widget")
 	mustMkdirAll(t, filepath.Join(pluginDir, "db"))
 	mustWriteFile(t, filepath.Join(pluginDir, "version.php"), `<?php
@@ -142,6 +141,7 @@ function mod_widget_check($context) {
 	}
 }
 
+// TestCheckCapabilityUsage_NoDevPlugins verifies nil is returned when there are no dev plugins.
 func TestCheckCapabilityUsage_NoDevPlugins(t *testing.T) {
 	if results := checkCapabilityUsage(nil); results != nil {
 		t.Errorf("expected nil with no dev plugins, got %+v", results)

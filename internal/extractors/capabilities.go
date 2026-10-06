@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,33 +25,36 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// Capability and CapabilitiesExtraction are aliases for phptypes' types.
+// Capability and CapabilitiesExtraction alias the phptypes types of the same name.
 type Capability = phptypes.Capability
 type CapabilitiesExtraction = phptypes.CapabilitiesExtraction
 
-// capabilityKeyPattern is single-quote only (no double-quote alternative); Moodle capability
-// keys are conventionally single-quoted, and this asymmetry is deliberate.
+// capabilityKeyPattern matches a single-quoted capability key followed by the opening of its array.
+// Double-quoted keys are intentionally not matched.
 var capabilityKeyPattern = regexp.MustCompile(`'([a-zA-Z0-9_/]+:[a-zA-Z0-9_]+)'\s*=>\s*(\[|array\s*\()`)
 
+// archetypeKeyPattern matches the opening of a capability's "archetypes" array, and
+// archetypeEntryPattern matches one `'role' => CAP_*` entry inside it.
 var (
 	archetypeKeyPattern   = regexp.MustCompile(`['"](archetypes)['"]\s*=>\s*(\[|array\s*\()`)
 	archetypeEntryPattern = regexp.MustCompile(`'([a-zA-Z_]+)'\s*=>\s*([A-Z_0-9]+)`)
 )
 
-// capabilityStringPatterns pre-compiles the string/constant pattern pair for each of the fixed
-// set of keys extractCapabilityString is ever called with (captype, contextlevel, riskbitmask),
-// instead of recompiling both regexes on every call — avoiding 6 regexp compiles per capability
-// entry.
+// capabilityStringPatternPair holds the quoted-string and bare-constant regexes for one array key.
 type capabilityStringPatternPair struct {
 	str, constPattern *regexp.Regexp
 }
 
+// capabilityStringPatterns caches the compiled pattern pair for each key extractCapabilityString
+// is called with (captype, contextlevel, riskbitmask), avoiding recompilation on every call.
 var capabilityStringPatterns = map[string]capabilityStringPatternPair{
 	"captype":      newCapabilityStringPatternPair("captype"),
 	"contextlevel": newCapabilityStringPatternPair("contextlevel"),
 	"riskbitmask":  newCapabilityStringPatternPair("riskbitmask"),
 }
 
+// newCapabilityStringPatternPair compiles the quoted-string and bare-constant patterns that
+// extract the value of the array key `key`.
 func newCapabilityStringPatternPair(key string) capabilityStringPatternPair {
 	quoted := regexp.QuoteMeta(key)
 	return capabilityStringPatternPair{
@@ -60,9 +63,9 @@ func newCapabilityStringPatternPair(key string) capabilityStringPatternPair {
 	}
 }
 
-// extractCapabilityString is a local variant of phparray.ExtractString: it first tries a
-// quoted-string value, and if that fails, falls back to a bare PHP constant
-// (CONTEXT_COURSE, CAP_ALLOW, etc — capabilities files commonly use constants for these fields).
+// extractCapabilityString returns the value of the array key `key` inside the capability entry
+// `block`. It first tries a quoted-string value and falls back to a bare PHP constant such as
+// CONTEXT_COURSE, which access.php files commonly use. It returns "" when neither is found.
 func extractCapabilityString(block, key string) string {
 	pair, ok := capabilityStringPatterns[key]
 	if !ok {
@@ -77,6 +80,8 @@ func extractCapabilityString(block, key string) string {
 	return ""
 }
 
+// extractArchetypes returns the role-to-permission map (e.g. "manager" to CAP_ALLOW) from the
+// "archetypes" array of the capability entry `block`; the map is empty when there is none.
 func extractArchetypes(block string) map[string]string {
 	result := map[string]string{}
 	entries := phparray.SplitKeyedEntries(block, archetypeKeyPattern)
@@ -89,7 +94,9 @@ func extractArchetypes(block string) map[string]string {
 	return result
 }
 
-// ParseAccessPhp parses a db/access.php file. Returns nil if the file can't be read.
+// ParseAccessPhp parses the db/access.php file at `filePath` into its declared capabilities. The
+// captype defaults to "read" when omitted. It returns nil when the file cannot be read, and an
+// empty extraction when the file has no $capabilities array.
 func ParseAccessPhp(filePath string) *CapabilitiesExtraction {
 	if useTreesitter() {
 		return tsbackend.ParseAccessPhp(filePath)
@@ -116,13 +123,14 @@ func ParseAccessPhp(filePath string) *CapabilitiesExtraction {
 	return &CapabilitiesExtraction{File: filePath, Capabilities: caps}
 }
 
-// ExtractPluginCapabilities parses pluginPath/db/access.php.
+// ExtractPluginCapabilities parses `pluginPath`/db/access.php. It returns nil when that file
+// cannot be read.
 func ExtractPluginCapabilities(pluginPath string) *CapabilitiesExtraction {
 	return ParseAccessPhp(filepath.Join(pluginPath, "db", "access.php"))
 }
 
-// GetCapabilityNames returns the sorted list of capability names. Safe to call with a nil e (the
-// plugin has no db/access.php, the common case) — returns nil rather than panicking.
+// GetCapabilityNames returns the capability names of `e` in sorted order. It returns nil when `e`
+// is nil, which is the case for a plugin without db/access.php.
 func GetCapabilityNames(e *CapabilitiesExtraction) []string {
 	if e == nil {
 		return nil

@@ -7,10 +7,11 @@ on:
 
 env:
   MCP_PUBLISHER_VERSION: v1.8.1
+  GOLANGCI_LINT_VERSION: v2.14.0
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -32,6 +33,11 @@ jobs:
 
       - name: go vet
         run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
 
       - name: go build
         run: go build ./...
@@ -76,7 +82,7 @@ jobs:
   # without re-creating the release.
   publish-registry:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write # GitHub OIDC login to the MCP Registry

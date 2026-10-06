@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,8 +26,9 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
-// ExtractPluginHooks combines all three sub-scans, mirroring the regex backend's own
-// ExtractPluginHooks exactly.
+// ExtractPluginHooks combines the three hook scans for the plugin at `pluginPath`: db/hooks.php
+// callbacks, classes/hook/*.php definitions and legacy lib.php callbacks (matched using
+// `component`, the plugin's frankenstyle name). The returned error is always nil.
 func ExtractPluginHooks(pluginPath, component string) (phptypes.HooksExtraction, error) {
 	return phptypes.HooksExtraction{
 		Callbacks:      ParseHookCallbacks(pluginPath),
@@ -67,6 +68,8 @@ func ParseHookCallbacks(pluginPath string) []phptypes.HookCallback {
 	return callbacks
 }
 
+// parseHookCallback reads one $callbacks entry's keyed fields. DefaultEnabled defaults to true,
+// and the legacy "hook" key is used as the hook name when "hookname" is absent or empty.
 func parseHookCallback(inner *gotreesitter.Node, src []byte) phptypes.HookCallback {
 	cb := phptypes.HookCallback{DefaultEnabled: true}
 	var hookname, legacyHook string
@@ -122,6 +125,10 @@ func ParseHookDefinitions(pluginPath string) []phptypes.HookDefinition {
 	return defs
 }
 
+// parseHookDefinitionFile builds a hook definition from a parsed classes/hook file. The boolean
+// is false when no namespaced class FQN can be resolved. The description comes from
+// get_hook_description() or, failing that, the class docblock summary; tags come from
+// get_hook_tags(); the replaced callback comes from a `replaces` key or DEPRECATED_CALLBACK.
 func parseHookDefinitionFile(root *gotreesitter.Node, src []byte) (phptypes.HookDefinition, bool) {
 	fqn := extractFQN(root, src)
 	if fqn == "" {
@@ -168,6 +175,8 @@ func extractFQN(root *gotreesitter.Node, src []byte) string {
 	return `\` + nsNameNode.Text(src) + `\` + nameNode.Text(src)
 }
 
+// findMethod returns the method_declaration node named methodName inside classNode, or nil when
+// classNode is nil or has no such method.
 func findMethod(classNode *gotreesitter.Node, src []byte, methodName string) *gotreesitter.Node {
 	if classNode == nil {
 		return nil
@@ -210,6 +219,8 @@ func methodReturnStringArray(classNode *gotreesitter.Node, src []byte, methodNam
 	return tags
 }
 
+// firstReturnExpression returns the expression of the first return statement found in
+// methodName's body, or nil when the class, method, body or a returned expression is missing.
 func firstReturnExpression(classNode *gotreesitter.Node, src []byte, methodName string) *gotreesitter.Node {
 	method := findMethod(classNode, src, methodName)
 	if method == nil {
@@ -303,6 +314,7 @@ func DetectLegacyCallbacks(pluginPath, component string) []phptypes.LegacyCallba
 	return warnings
 }
 
+// hasTopLevelFunction reports whether the file root declares a top-level function called name.
 func hasTopLevelFunction(root *gotreesitter.Node, src []byte, name string) bool {
 	for i := 0; i < root.NamedChildCount(); i++ {
 		c := root.NamedChild(i)

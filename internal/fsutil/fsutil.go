@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,10 +24,10 @@ import (
 	"path/filepath"
 )
 
-// ReadOptional reads path, returning (nil, false, nil) if it doesn't exist — the common "not
-// configured/cached yet" case every caller here treats as empty state, not an error — and
-// (nil, false, err) for any other read failure (e.g. permission denied), which callers should
-// generally treat differently from a simple absence.
+// ReadOptional reads the file at `path`. It returns (content, true, nil) on success and
+// (nil, false, nil) when the file does not exist, so absence is reported as empty state rather
+// than an error. Any other read failure (e.g. permission denied) returns (nil, false, err).
+// The `ok` result reports whether the file was found.
 func ReadOptional(path string) (content []byte, ok bool, err error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -39,13 +39,13 @@ func ReadOptional(path string) (content []byte, ok bool, err error) {
 	return b, true, nil
 }
 
-// WriteAtomic creates path's parent directory if needed, then writes data to path atomically: to a
-// temp file in the same directory (so the final rename is same-filesystem and instantaneous), then
-// renamed into place. This avoids ever leaving a truncated/corrupt file at path if the process
-// dies mid-write (a crash, kill -9, power loss).
+// WriteAtomic writes `data` to `path` with permissions `perm`, creating the parent directory
+// (mode derived from `perm`: execute bits added wherever read bits are set) if needed. The data goes to a temp file in the same directory, which is then renamed
+// into place, so `path` never holds a truncated file if the process dies mid-write. It returns an
+// error if directory creation, writing, chmod or rename fails; the temp file is removed on failure.
 func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, perm.Perm()|(perm.Perm()&0o444)>>2); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".tmp-*")

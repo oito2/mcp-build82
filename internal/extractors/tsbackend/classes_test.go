@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
+// TestExtractClasses_Basic verifies classes are extracted with namespace, FQN, kind, parent and interfaces, sorted by namespace then name.
 func TestExtractClasses_Basic(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "task"))
@@ -116,6 +117,7 @@ class foo extends
 	}
 }
 
+// TestExtractClasses_AllKinds verifies class, abstract class, interface, trait and enum declarations are all recognized.
 func TestExtractClasses_AllKinds(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes"))
@@ -140,6 +142,7 @@ enum my_enum {}
 	}
 }
 
+// TestParseRenamedClassesPhp verifies renamed-class entries given as quoted strings or `::class` references are normalized to bare FQNs.
 func TestParseRenamedClassesPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -162,6 +165,7 @@ $renamedclasses = [
 	}
 }
 
+// TestParseRenamedClassesPhp_MissingFile verifies a nonexistent file yields nil.
 func TestParseRenamedClassesPhp_MissingFile(t *testing.T) {
 	if got := ParseRenamedClassesPhp("/nonexistent/db/renamedclasses.php"); got != nil {
 		t.Errorf("expected nil for a missing file, got %+v", got)

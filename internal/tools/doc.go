@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,5 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package tools implements the 13 MCP tools exposed by build82.
+// Package tools implements the MCP tools exposed by build82. Each tool has a RegisterXxxTool
+// function that adds it to an MCP server, wrapped so that a panic in a handler becomes an error
+// result instead of terminating the process.
 package tools

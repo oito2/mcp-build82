@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -31,11 +31,16 @@ import (
 )
 
 const (
-	debounce          = 500 * time.Millisecond
+	// debounce is the quiet period after a file event before regeneration starts; further events
+	// for the same plugin restart it.
+	debounce = 500 * time.Millisecond
+	// maxWatchedPlugins caps how many dev-marked plugins are watched at once.
 	maxWatchedPlugins = 20
 )
 
-// WatchEvent describes one completed regeneration triggered by a file change.
+// WatchEvent describes one completed regeneration triggered by a file change. PluginPath is the
+// plugin root directory, Component its Moodle component name, File the changed source file that
+// triggered the run, and Timestamp the completion time.
 type WatchEvent struct {
 	PluginPath, Component, File, Timestamp string
 }
@@ -43,8 +48,9 @@ type WatchEvent struct {
 // WatchCallback is invoked with the details of each completed regeneration.
 type WatchCallback func(WatchEvent)
 
-// MoodleWatcher watches every .indevelopment-marked plugin's source files and regenerates that
-// plugin's context on change, debounced per plugin directory.
+// MoodleWatcher watches the source files of every plugin carrying an .indevelopment marker and
+// regenerates that plugin's context when one changes, debounced per plugin directory. It is safe
+// for concurrent use.
 type MoodleWatcher struct {
 	moodlePath, moodleVersion string
 
@@ -53,41 +59,50 @@ type MoodleWatcher struct {
 	watchedPaths map[string]string // absolute file path -> owning plugin dir
 	timers       map[string]*time.Timer
 	regenerating map[string]bool
+	pending      map[string]string // plugin dir -> last changed file that arrived during an in-flight regeneration
 	callbacks    []WatchCallback
 	running      bool
-	watchedCount int // count returned by the Start() call currently in effect; reused by a no-op re-Start()
+	watchedCount int // file count returned by the Start call in effect; reused when Start is called again while running
 }
 
-// NewMoodleWatcher creates a MoodleWatcher for the given Moodle installation path and version.
-// Call Start to begin watching.
+// NewMoodleWatcher returns a MoodleWatcher for the Moodle installation at `moodlePath`, whose
+// version string `moodleVersion` is passed to the AI index generation. It does not watch anything
+// until Start is called.
 func NewMoodleWatcher(moodlePath, moodleVersion string) *MoodleWatcher {
 	return &MoodleWatcher{moodlePath: moodlePath, moodleVersion: moodleVersion}
 }
 
+// logf writes a line to stderr prefixed with the watcher tag, using fmt.Fprintf formatting.
 func (w *MoodleWatcher) logf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "[build82 watcher] "+format+"\n", args...)
 }
 
-// OnChange registers a callback fired after every completed regeneration.
+// OnChange registers `cb` to be called, synchronously on the regeneration goroutine, after every
+// completed regeneration. A panic in a callback is recovered and logged.
 func (w *MoodleWatcher) OnChange(cb WatchCallback) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.callbacks = append(w.callbacks, cb)
 }
 
-// Running reports whether the watcher is actively watching at least one file.
+// Running reports whether the watcher was started and is watching at least one file.
 func (w *MoodleWatcher) Running() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.running
 }
 
-// findMarkersDelayHook, when non-nil, is invoked once at the very start of findMarkers. It exists
-// solely so tests can simulate a slow filepath.WalkDir — the kind a real Moodle installation's tens
-// of thousands of files would cause — without actually creating that many files on disk. Production
-// code never sets it.
+// findMarkersDelayHook, when non-nil, is called once at the start of findMarkers. Tests use it to
+// simulate a slow directory walk; production code leaves it nil.
 var findMarkersDelayHook func()
 
+// newFSWatcher creates the fsnotify watcher used by Start. Tests replace it to observe the watcher
+// Start creates.
+var newFSWatcher = fsnotify.NewWatcher
+
+// findMarkers walks `moodlePath` and returns the paths of all .indevelopment marker files located
+// directly inside a genutil.ContextDir directory. Directories named vendor or node_modules below
+// the root are skipped, and entries that cannot be read are ignored.
 func findMarkers(moodlePath string) []string {
 	if findMarkersDelayHook != nil {
 		findMarkersDelayHook()
@@ -112,29 +127,22 @@ func findMarkers(moodlePath string) []string {
 	return matches
 }
 
-// Start begins watching every dev-marked plugin's source files and returns the count of files
-// actually watched. Zero markers found is a valid, common state (returns 0, not an error). Note
-// running ends up count > 0, not len(markers) > 0 — a plugin can be marked .indevelopment yet have
-// none of cache.PluginSourceFileNames present.
+// Start finds the plugins marked .indevelopment under the Moodle path and begins watching their
+// source files (cache.PluginSourceFileNames, at most the first maxWatchedPlugins plugins in path
+// order). The parent directories of those files are registered with fsnotify and events are
+// filtered to the tracked files, so editors that save through a temporary file and a rename keep
+// being observed. It returns the number of files being watched. Finding no markers, or no watchable
+// files, is a normal state and returns 0 without an error; failures to create the watcher or to
+// watch an individual file are logged. The watcher counts as running only when the result is
+// greater than zero.
 //
-// Start is a no-op if the watcher is already running: calling it twice without an intervening
-// Stop() never creates a second fsnotify.Watcher, so the first one's goroutine, file descriptors,
-// and inotify watches are never orphaned. A no-op call returns the count from the Start() currently
-// in effect.
+// Start does nothing when the watcher is already running and returns the count of the active
+// run, so a second call never leaks a second fsnotify watcher.
 //
-// findMarkers (a filepath.WalkDir over the whole Moodle tree) and the fsnotify.Watcher setup that
-// follows it run WITHOUT holding w.mu: on a real Moodle installation (tens of thousands of files)
-// the walk alone can take seconds, and holding the lock for that whole time would block any
-// concurrent Running()/OnChange()/Stop() call on this same instance for just as long. w.mu
-// is only held (a) briefly at the top, to read w.running, and (b) again at the very end, to commit
-// the freshly-built state.
-//
-// Because two Start() calls can race between (a) and (b) — both observing w.running == false and
-// both performing their own walk concurrently — the commit at the end re-checks w.running before
-// writing anything: if another Start() already won the race and is running, this call discards its
-// own redundant fsnotify.Watcher instead of replacing a live watcher. A second Start() call that
-// arrives once the first has already committed is caught by the first w.running check and never
-// performs a walk at all.
+// The directory walk and watcher setup run without holding the mutex, so Running, OnChange and
+// Stop are not blocked by a slow walk. Two concurrent Start calls may both walk. The first to
+// commit its state wins, and the other discards its own fsnotify watcher and returns the
+// winner's count.
 func (w *MoodleWatcher) Start() int {
 	w.mu.Lock()
 	if w.running {
@@ -159,13 +167,14 @@ func (w *MoodleWatcher) Start() int {
 		limited = limited[:maxWatchedPlugins]
 	}
 
-	fsWatcher, err := fsnotify.NewWatcher()
+	fsWatcher, err := newFSWatcher()
 	if err != nil {
 		w.logf("failed to create watcher: %v", err)
 		return 0
 	}
 
 	watchedPaths := map[string]string{}
+	watchedDirs := map[string]bool{}
 	count := 0
 	for _, marker := range limited {
 		pluginDir := filepath.Dir(filepath.Dir(marker)) // grandparent: out of .build82/, to the plugin root
@@ -174,9 +183,13 @@ func (w *MoodleWatcher) Start() int {
 			if _, statErr := os.Stat(path); statErr != nil {
 				continue
 			}
-			if addErr := fsWatcher.Add(path); addErr != nil {
-				w.logf("failed to watch %s: %v", path, addErr)
-				continue
+			dir := filepath.Dir(path)
+			if !watchedDirs[dir] {
+				if addErr := fsWatcher.Add(dir); addErr != nil {
+					w.logf("failed to watch %s: %v", dir, addErr)
+					continue
+				}
+				watchedDirs[dir] = true
 			}
 			watchedPaths[path] = pluginDir
 			count++
@@ -192,24 +205,29 @@ func (w *MoodleWatcher) Start() int {
 		return w.watchedCount
 	}
 
+	if count == 0 {
+		w.mu.Unlock()
+		_ = fsWatcher.Close()
+		w.logf("dev plugins found but nothing watchable (none of the watched files are present)")
+		return 0
+	}
+
 	w.fsWatcher = fsWatcher
 	w.watchedPaths = watchedPaths
 	w.timers = map[string]*time.Timer{}
 	w.regenerating = map[string]bool{}
-	w.running = count > 0
+	w.pending = map[string]string{}
+	w.running = true
 	w.watchedCount = count
 	w.mu.Unlock()
-
-	if count == 0 {
-		w.logf("dev plugins found but nothing watchable (none of the watched files are present)")
-		return 0
-	}
 
 	w.logf("watching %d file(s) across %d plugin(s)", count, len(limited))
 	go w.consumeEvents(fsWatcher)
 	return count
 }
 
+// consumeEvents forwards events from `fsWatcher` to onFileChange and logs its errors. It returns
+// when the watcher's channels are closed, which happens when the watcher is closed.
 func (w *MoodleWatcher) consumeEvents(fsWatcher *fsnotify.Watcher) {
 	for {
 		select {
@@ -227,9 +245,15 @@ func (w *MoodleWatcher) consumeEvents(fsWatcher *fsnotify.Watcher) {
 	}
 }
 
+// onFileChange handles one filesystem event. Events for files that are not being watched, and
+// events other than write, create or rename, are ignored. Otherwise it restarts the plugin's debounce timer, so regeneratePlugin runs only after
+// the plugin's files have been quiet for the debounce period.
 func (w *MoodleWatcher) onFileChange(event fsnotify.Event) {
+	if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) && !event.Has(fsnotify.Rename) {
+		return
+	}
 	w.mu.Lock()
-	pluginDir, ok := w.watchedPaths[event.Name]
+	pluginDir, ok := w.watchedPaths[filepath.Clean(event.Name)]
 	if !ok {
 		w.mu.Unlock()
 		return
@@ -244,10 +268,11 @@ func (w *MoodleWatcher) onFileChange(event fsnotify.Event) {
 	w.mu.Unlock()
 }
 
-// regeneratePlugin invalidates the plugin's cached context and regenerates it. A regeneration
-// already in progress for this plugin dir causes this call to be dropped, not queued — the next
-// file-change event after the in-flight one completes triggers a fresh regeneration reflecting
-// everything changed in the meantime, so no information is permanently lost, just coalesced.
+// regeneratePlugin invalidates the cached context files of the plugin at `pluginDir`, regenerates
+// them and the AI index, then notifies the registered callbacks with an event naming
+// `changedFile`. If a regeneration is already running for the plugin, the change is recorded and
+// the plugin is regenerated once more after the running one finishes. If the watcher was stopped,
+// the call is dropped.
 func (w *MoodleWatcher) regeneratePlugin(pluginDir, changedFile string) {
 	w.mu.Lock()
 	if w.regenerating == nil { // Stop() ran between this timer firing and acquiring the lock
@@ -255,21 +280,35 @@ func (w *MoodleWatcher) regeneratePlugin(pluginDir, changedFile string) {
 		return
 	}
 	if w.regenerating[pluginDir] {
+		w.pending[pluginDir] = changedFile
 		w.mu.Unlock()
-		w.logf("regeneration already in progress for %s — skipping", pluginDir)
+		w.logf("regeneration already in progress for %s — queued one more run", pluginDir)
 		return
 	}
 	w.regenerating[pluginDir] = true
 	w.mu.Unlock()
 
-	defer func() {
-		w.mu.Lock()
-		if w.regenerating != nil { // Stop() may have run while this regeneration was in flight
-			w.regenerating[pluginDir] = false
-		}
-		w.mu.Unlock()
-	}()
+	for {
+		w.runRegeneration(pluginDir, changedFile)
 
+		w.mu.Lock()
+		next, again := w.pending[pluginDir]
+		if w.regenerating == nil || !again { // Stop() may have run while this regeneration was in flight
+			if w.regenerating != nil {
+				w.regenerating[pluginDir] = false
+			}
+			w.mu.Unlock()
+			return
+		}
+		delete(w.pending, pluginDir)
+		w.mu.Unlock()
+		changedFile = next
+	}
+}
+
+// runRegeneration performs one regeneration of the plugin at `pluginDir` and notifies the
+// callbacks with an event naming `changedFile`.
+func (w *MoodleWatcher) runRegeneration(pluginDir, changedFile string) {
 	for _, f := range generators.PluginContextFiles {
 		cache.Global.Invalidate(generators.PluginOutputPath(pluginDir, f))
 	}
@@ -302,6 +341,8 @@ func (w *MoodleWatcher) regeneratePlugin(pluginDir, changedFile string) {
 	}
 }
 
+// invokeCallback calls `cb` with `evt`, recovering and logging any panic so one faulty callback
+// cannot crash the watcher or block the others.
 func (w *MoodleWatcher) invokeCallback(cb WatchCallback, evt WatchEvent) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -311,8 +352,9 @@ func (w *MoodleWatcher) invokeCallback(cb WatchCallback, evt WatchEvent) {
 	cb(evt)
 }
 
-// Stop closes the shared fsnotify.Watcher, cancels all pending debounce timers, clears internal
-// state, and sets running to false.
+// Stop closes the fsnotify watcher, cancels all pending debounce timers, clears the watch state
+// and marks the watcher as not running. It is safe to call when the watcher is not running, and
+// Start can be called again afterwards. A regeneration already in progress is not interrupted.
 func (w *MoodleWatcher) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -327,6 +369,7 @@ func (w *MoodleWatcher) Stop() {
 	w.watchedPaths = nil
 	w.timers = nil
 	w.regenerating = nil
+	w.pending = nil
 	w.running = false
 	w.watchedCount = 0
 	w.logf("stopped")

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -47,6 +47,7 @@ func TestLegacyCallbackSuffixesForIndex_MatchesLegacyhooksMap(t *testing.T) {
 	}
 }
 
+// TestBuildDirectoryTree_ExcludesDotfilesVendorNodeModules verifies the directory tree omits dot-directories, vendor and node_modules.
 func TestBuildDirectoryTree_ExcludesDotfilesVendorNodeModules(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, ContextDir))
@@ -92,11 +93,13 @@ func TestFunctionExistsInContent_SpaceBeforeParenAndCaseInsensitive(t *testing.T
 	}
 }
 
+// testPluginInfo returns the PluginInfo detected at `path`, ignoring detection errors.
 func testPluginInfo(path string) extractors.PluginInfo {
 	info, _ := extractors.DetectPlugin(path)
 	return info
 }
 
+// TestGeneratePluginContext verifies PLUGIN_CONTEXT.md is generated successfully for a plugin.
 func TestGeneratePluginContext(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -117,6 +120,7 @@ func TestGeneratePluginContext(t *testing.T) {
 	}
 }
 
+// TestGeneratePluginDependencies_HookApiConditionalSections verifies the Hook API note and the legacy warning are rendered independently.
 func TestGeneratePluginDependencies_HookApiConditionalSections(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
@@ -139,6 +143,7 @@ func TestGeneratePluginDependencies_HookApiConditionalSections(t *testing.T) {
 	}
 }
 
+// TestGeneratePluginDependencies_RegisteredCallbacksSection verifies registered hook callbacks appear in the Hook API section.
 func TestGeneratePluginDependencies_RegisteredCallbacksSection(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -157,8 +162,8 @@ $callbacks = [['hookname' => '\\core\\hook\\output\\before_footer', 'callback' =
 	}
 }
 
-// TestGeneratePluginDependencies_SubpluginsFromJson confirms a modern db/subplugins.json
-// declaration (preferred since Moodle 3.8) shows up in the generated Subplugins section.
+// TestGeneratePluginDependencies_SubpluginsFromJson verifies a db/subplugins.json declaration
+// appears in the generated Subplugins section.
 func TestGeneratePluginDependencies_SubpluginsFromJson(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -184,8 +189,8 @@ func TestGeneratePluginDependencies_SubpluginsFromJson(t *testing.T) {
 	}
 }
 
-// TestGeneratePluginDependencies_SubpluginsFromLegacyPhp confirms the pre-3.8 db/subplugins.php
-// array format is still read as a fallback when subplugins.json doesn't exist.
+// TestGeneratePluginDependencies_SubpluginsFromLegacyPhp verifies the db/subplugins.php array
+// format is read as a fallback when subplugins.json does not exist.
 func TestGeneratePluginDependencies_SubpluginsFromLegacyPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -207,9 +212,8 @@ $subplugins = array(
 	}
 }
 
-// TestGeneratePluginDependencies_NoSubpluginsShowsPlaceholder confirms the common case (a plugin
-// that doesn't host subplugins) renders the explicit "does not host" placeholder, matching the
-// Hook API section's own empty-state convention.
+// TestGeneratePluginDependencies_NoSubpluginsShowsPlaceholder verifies a plugin without subplugins
+// renders the explicit "does not host" placeholder.
 func TestGeneratePluginDependencies_NoSubpluginsShowsPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
@@ -224,10 +228,8 @@ func TestGeneratePluginDependencies_NoSubpluginsShowsPlaceholder(t *testing.T) {
 	}
 }
 
-// TestGenerateAllForPlugin_SettingsPhpChangeTriggersRegeneration verifies that
-// cache.GetPluginSourceFiles (the fixed list gating per-plugin generator staleness) includes
-// settings.php: a settings.php-only change after the first generation is detected and regenerates
-// PLUGIN_SETTINGS.md specifically.
+// TestGenerateAllForPlugin_SettingsPhpChangeTriggersRegeneration verifies that a settings.php-only
+// change after the first generation is detected by the cache and regenerates PLUGIN_SETTINGS.md.
 func TestGenerateAllForPlugin_SettingsPhpChangeTriggersRegeneration(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
@@ -246,9 +248,8 @@ func TestGenerateAllForPlugin_SettingsPhpChangeTriggersRegeneration(t *testing.T
 		}
 	}
 
-	// Add settings.php, backdating its mtime an hour into the future relative to real time so it's
-	// unambiguously newer than the mark IsStale compares against, avoiding filesystem mtime-
-	// resolution flakiness.
+	// Add settings.php with an mtime one hour in the future so it is unambiguously newer than the
+	// cache mark, avoiding mtime-resolution flakiness.
 	settingsPath := filepath.Join(pluginPath, "settings.php")
 	mustWriteFile(t, settingsPath, "<?php\n$settings->add(new admin_setting_configtext('local_demo/x', '', '', ''));\n")
 	future := time.Now().Add(time.Hour)
@@ -275,6 +276,7 @@ func TestGenerateAllForPlugin_SettingsPhpChangeTriggersRegeneration(t *testing.T
 	}
 }
 
+// TestGeneratePluginSettings_ReflectsDeclaredSettings verifies declared admin settings appear in PLUGIN_SETTINGS.md.
 func TestGeneratePluginSettings_ReflectsDeclaredSettings(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
@@ -295,6 +297,7 @@ if ($hassiteconfig) {
 	}
 }
 
+// TestGeneratePluginSettings_NoSettingsShowsPlaceholder verifies a plugin without settings renders the placeholder text.
 func TestGeneratePluginSettings_NoSettingsShowsPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
@@ -309,6 +312,7 @@ func TestGeneratePluginSettings_NoSettingsShowsPlaceholder(t *testing.T) {
 	}
 }
 
+// TestGeneratePluginStructure_KeyFilesTable verifies the key-files table marks only the files that exist.
 func TestGeneratePluginStructure_KeyFilesTable(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -325,13 +329,14 @@ func TestGeneratePluginStructure_KeyFilesTable(t *testing.T) {
 		t.Errorf("expected db/install.xml marked present, got:\n%s", s)
 	}
 	if !strings.Contains(s, "`settings.php` | \n") && !strings.Contains(s, "`settings.php` | |") {
-		// settings.php doesn't exist — row present but unmarked; just confirm the row exists at all.
+		// settings.php does not exist, so the row is present but unmarked.
 		if !strings.Contains(s, "settings.php") {
 			t.Errorf("expected settings.php row present even though absent, got:\n%s", s)
 		}
 	}
 }
 
+// TestGenerateAllForPlugin_Integration verifies GenerateAllForPlugin writes every plugin context file with successful results.
 func TestGenerateAllForPlugin_Integration(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
@@ -375,9 +380,8 @@ func TestGenerateAllForPlugin_Integration(t *testing.T) {
 	}
 }
 
-// TestGenerateAllForPlugin_MinimalPlugin verifies that every generator reading Tasks/
-// Services/Capabilities/Events/Upgrade handles gracefully the nil pointer (not an error) that
-// extractors return when a plugin lacks a given db/*.php file.
+// TestGenerateAllForPlugin_MinimalPlugin verifies every generator copes with the nil extraction
+// results returned when a plugin lacks the db/*.php files.
 func TestGenerateAllForPlugin_MinimalPlugin(t *testing.T) {
 	moodlePath := t.TempDir()
 	pluginPath := filepath.Join(moodlePath, "local", "bare")
@@ -425,6 +429,7 @@ func TestGenerateAllForPlugin_LogsIndevelopmentMarkerWriteFailureToStderr(t *tes
 	}
 }
 
+// TestGenerateAllForPlugin_MarkAsDevFalse verifies no .indevelopment marker is written when markAsDev is false.
 func TestGenerateAllForPlugin_MarkAsDevFalse(t *testing.T) {
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
@@ -436,5 +441,16 @@ func TestGenerateAllForPlugin_MarkAsDevFalse(t *testing.T) {
 	GenerateAllForPlugin(pluginPath, moodlePath, false, nil)
 	if _, err := os.Stat(PluginOutputPath(pluginPath, ".indevelopment")); err == nil {
 		t.Error("expected no .indevelopment marker when markAsDev=false")
+	}
+}
+
+// TestFunctionExistsInContent_IgnoresIndentedMethods verifies only top-level declarations match.
+func TestFunctionExistsInContent_IgnoresIndentedMethods(t *testing.T) {
+	src := []byte("<?php\nclass x {\n    public function local_a_cron() {}\n}\nfunction local_b_cron() {}\n")
+	if functionExistsInContent(src, "local_a_cron") {
+		t.Error("indented method must not match")
+	}
+	if !functionExistsInContent(src, "local_b_cron") {
+		t.Error("top-level function must match")
 	}
 }

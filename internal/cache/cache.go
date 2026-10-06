@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,10 +27,13 @@ import (
 )
 
 // ContextDirName is the name of the per-Moodle-root directory (".build82") that holds the cache
-// file. It mirrors genutil.ContextDir's value; the literal is duplicated because genutil depends on
-// cache, so importing genutil here would create an import cycle.
+// file. It equals genutil.ContextDir; the literal is duplicated because genutil imports this
+// package, so importing it here would create an import cycle.
 const ContextDirName = ".build82"
 
+// CacheStats counts IsStale outcomes since the cache was last bound to a Moodle root: Hits are
+// outputs confirmed fresh through their recorded mark, Misses are outputs reported stale, and
+// Skips are outputs found fresh by comparing file mtimes.
 type CacheStats struct {
 	Hits, Misses, Skips int
 }
@@ -42,18 +45,18 @@ type MtimeCache struct {
 	marked map[string]time.Time // outputPath -> when it was marked fresh (persisted across restarts)
 	stats  CacheStats           // in-memory only, always resets on restart
 
-	// forced holds outputs explicitly invalidated (e.g. by force: true or a watcher event). A
-	// forced output is reported stale unconditionally, regardless of any mtime comparison, until
-	// it is regenerated and Mark'd again. Keys are absolute output paths, so the set is naturally
-	// scoped per Moodle root and is deliberately left untouched by EnsureLoaded: an invalidation
-	// issued before the cache is bound (or re-bound) to a root must still apply once it loads.
-	// In-memory only, never persisted.
+	// forced holds outputs explicitly invalidated (for example by a forced run or a watcher
+	// event). A forced output is reported stale regardless of any mtime comparison until it is
+	// marked again. Keys are absolute output paths, so the set is naturally scoped per Moodle
+	// root. EnsureLoaded leaves it untouched so that an invalidation issued before the cache is
+	// bound to a root still applies afterwards. It is never persisted.
 	forced map[string]struct{}
 
 	loadedRoot string // moodlePath this cache is currently bound to; "" until EnsureLoaded succeeds
 	dirty      bool   // true if marked/loadedRoot changed since the last Save
 }
 
+// NewMtimeCache returns an empty cache that is not yet bound to any Moodle root.
 func NewMtimeCache() *MtimeCache {
 	return &MtimeCache{marked: map[string]time.Time{}, forced: map[string]struct{}{}}
 }
@@ -61,16 +64,16 @@ func NewMtimeCache() *MtimeCache {
 // Global is the process-wide cache instance shared by every generator orchestrator.
 var Global = NewMtimeCache()
 
-// IsStale returns true when outputFile needs regeneration, comparing against the given source
-// files. The decision steps are:
-//  0. Output was explicitly invalidated (Invalidate/InvalidateAll) and not regenerated since ->
-//     always stale (miss), whatever the mtimes say.
-//  1. Output file doesn't exist -> always stale (miss).
-//  2. Output was Mark'd fresh this session: compare source mtimes against the mark's timestamp
-//     (not the output file's mtime). If nothing changed since the mark, it's a hit. If something
-//     did change, delete the mark and fall through to step 3.
-//  3. Compare every source file's mtime against the output file's mtime. Any source newer -> miss.
-//     All sources older -> skip.
+// IsStale reports whether `outputFile` must be regenerated, given the `sourceFiles` it is derived
+// from. Source files that cannot be stat'ed are ignored. It updates the hit, miss and skip
+// counters. The decision steps are:
+//  0. The output was invalidated (Invalidate/InvalidateAll) and not marked since: stale (miss).
+//  1. The output file does not exist: stale (miss).
+//  2. The output has a mark: compare the source mtimes with the mark time, not with the output's
+//     mtime. If no source is newer, it is fresh (hit). Otherwise the mark is dropped and the
+//     check continues with step 3.
+//  3. Compare every source mtime with the output's mtime. If any source is newer, it is stale
+//     (miss); otherwise it is fresh (skip).
 func (c *MtimeCache) IsStale(outputFile string, sourceFiles []string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -113,7 +116,8 @@ func (c *MtimeCache) IsStale(outputFile string, sourceFiles []string) bool {
 	return false
 }
 
-// Mark records outputFile as freshly generated now, clearing any pending forced invalidation.
+// Mark records `outputFile` as freshly generated at the current time and clears any pending
+// invalidation for it. The mark is persisted by the next Save.
 func (c *MtimeCache) Mark(outputFile string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -122,9 +126,9 @@ func (c *MtimeCache) Mark(outputFile string) {
 	c.dirty = true
 }
 
-// Invalidate forces outputFile to be reported stale by IsStale until it is regenerated and Mark'd
-// again, even when its mtime is newer than every source file. Safe to call before EnsureLoaded:
-// loading persisted marks never cancels a pending invalidation.
+// Invalidate makes IsStale report `outputFile` as stale until it is marked again, even when its
+// mtime is newer than every source file, and drops its recorded mark. It may be called before
+// EnsureLoaded, because loading persisted marks does not cancel a pending invalidation.
 func (c *MtimeCache) Invalidate(outputFile string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -135,10 +139,9 @@ func (c *MtimeCache) Invalidate(outputFile string) {
 	c.forced[outputFile] = struct{}{}
 }
 
-// InvalidateAll forces every output currently recorded in the cache to be reported stale until
-// regenerated, exactly as Invalidate does for a single path. It only knows the outputs present in
-// the loaded map, so call EnsureLoaded first; callers that know their output paths should prefer
-// Invalidate per path, which also covers outputs that have no recorded mark at all.
+// InvalidateAll invalidates, as Invalidate does for one path, every output that currently has a
+// recorded mark. It cannot affect outputs without a mark, so call EnsureLoaded first. Callers that
+// know their output paths should use Invalidate per path, which covers unmarked outputs too.
 func (c *MtimeCache) InvalidateAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -151,34 +154,39 @@ func (c *MtimeCache) InvalidateAll() {
 	}
 }
 
+// Stats returns a copy of the hit, miss and skip counters. They are kept in memory only and reset
+// when the cache is bound to a different Moodle root.
 func (c *MtimeCache) Stats() CacheStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stats
 }
 
+// cacheFileVersion is the on-disk format version; files with another version are ignored.
 const cacheFileVersion = 1
 
+// cacheFile is the JSON document persisted to .cache.json: the format version and the mark time
+// of each output path.
 type cacheFile struct {
 	Version int                  `json:"version"`
 	Entries map[string]time.Time `json:"entries"`
 }
 
+// cachePath returns the location of the cache file for the Moodle root `moodlePath`.
 func cachePath(moodlePath string) string {
 	return filepath.Join(moodlePath, ContextDirName, ".cache.json")
 }
 
-// EnsureLoaded binds the cache to moodlePath and loads persisted state from disk, if not already
-// bound to that exact path. Idempotent — safe to call at the top of every orchestrator invocation.
-// A corrupt, missing, or version-mismatched cache file degrades to an empty cache, never a fatal
-// error.
+// EnsureLoaded binds the cache to the Moodle root `moodlePath` and loads its persisted marks from
+// disk. It does nothing when the cache is already bound to that exact path, so it can be called at
+// the start of every generator run. A missing, corrupt or version-mismatched cache file yields an
+// empty cache, and an unreadable one additionally prints a warning to stderr; it never fails.
+// Switching roots resets the statistics.
 //
-// If the cache is currently bound to a different root and holds unsaved marks (c.dirty), those
-// marks are persisted to that previous root's own cache file before switching, so concurrent use
-// against different Moodle installations (e.g. --http serving multiple sessions) never loses marks
-// or writes them into the wrong root's .cache.json. A save error here is swallowed: EnsureLoaded
-// has no error return, and refusing to switch roots over a save failure would be worse than losing
-// the previous root's in-memory marks.
+// When the cache is bound to a different root and has unsaved marks, they are first saved to that
+// previous root's own cache file, so sessions using different Moodle installations never lose
+// marks or write them into the wrong root. A save error there is ignored, because EnsureLoaded
+// has no error return and refusing to switch would be worse than losing those marks.
 //
 // The locking only serializes goroutines within one process. Separate build82 processes pointed at
 // the same moodlePath can race on .cache.json and the last writer wins. The file is always written
@@ -196,9 +204,8 @@ func (c *MtimeCache) EnsureLoaded(moodlePath string) {
 		_ = c.saveLocked()
 	}
 
-	// Any read error (permission denied, etc.) degrades to an empty cache. A genuine read failure
-	// (as opposed to the file not existing, which ReadOptional reports as ok==false, err==nil) is
-	// reported with a stderr warning and does not block the operation.
+	// A missing file is not an error (ok is false). Other read failures only produce a warning
+	// and leave the cache empty.
 	path := cachePath(moodlePath)
 	content, ok, err := fsutil.ReadOptional(path)
 	if err != nil {
@@ -208,7 +215,9 @@ func (c *MtimeCache) EnsureLoaded(moodlePath string) {
 	if ok {
 		var cf cacheFile
 		if jsonErr := json.Unmarshal(content, &cf); jsonErr == nil && cf.Version == cacheFileVersion {
-			marked = cf.Entries
+			if cf.Entries != nil {
+				marked = cf.Entries
+			}
 		}
 	}
 
@@ -218,18 +227,16 @@ func (c *MtimeCache) EnsureLoaded(moodlePath string) {
 	c.stats = CacheStats{}
 }
 
-// Save persists the current staleness map to disk, if anything changed since the last Load/Save.
-// Call once at the end of every orchestrator invocation.
+// Save writes the marks to the bound root's cache file when they changed since the last load or
+// save, and does nothing when no root is bound or nothing changed. It returns an error when
+// marshaling or the atomic file write fails. Call it at the end of every generator run.
 func (c *MtimeCache) Save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.saveLocked()
 }
 
-// saveLocked is Save's body, factored out so EnsureLoaded can persist the previous root's state
-// while already holding c.mu (Save itself always acquires the lock, so it cannot call this other
-// than through Save — this split exists solely so EnsureLoaded doesn't need to re-lock or unlock
-// mid-method).
+// saveLocked implements Save for callers that already hold c.mu, such as EnsureLoaded.
 func (c *MtimeCache) saveLocked() error {
 	if c.loadedRoot == "" || !c.dirty {
 		return nil
@@ -247,9 +254,9 @@ func (c *MtimeCache) saveLocked() error {
 	return nil
 }
 
-// PluginSourceFileNames is the fixed set of plugin-relative file names whose mtimes gate per-plugin
-// generator staleness (via GetPluginSourceFiles) and that internal/watcher watches for live
-// regeneration.
+// PluginSourceFileNames lists the plugin-relative file names whose mtimes decide whether a
+// plugin's generated files are stale (through GetPluginSourceFiles) and that the watcher package
+// monitors for live regeneration.
 var PluginSourceFileNames = []string{
 	"version.php", "lib.php", "locallib.php", "settings.php",
 	"db/install.xml", "db/access.php", "db/events.php",
@@ -257,8 +264,8 @@ var PluginSourceFileNames = []string{
 	"db/subplugins.json", "db/subplugins.php",
 }
 
-// GetPluginSourceFiles returns PluginSourceFileNames joined with pluginPath. Existence is not
-// checked here — callers rely on os.Stat failing gracefully inside IsStale's loop.
+// GetPluginSourceFiles returns PluginSourceFileNames joined with the plugin directory
+// `pluginPath`. It does not check that the files exist, because IsStale ignores missing sources.
 func GetPluginSourceFiles(pluginPath string) []string {
 	files := make([]string, len(PluginSourceFileNames))
 	for i, n := range PluginSourceFileNames {
@@ -267,8 +274,8 @@ func GetPluginSourceFiles(pluginPath string) []string {
 	return files
 }
 
-// GetMoodleSourceFiles returns the fixed set of source files used as the staleness signal for
-// structural/summary generators.
+// GetMoodleSourceFiles returns the version.php, lib/moodlelib.php and lib/accesslib.php paths
+// under the Moodle root `moodlePath`, which are the staleness signal for the site-wide generators.
 func GetMoodleSourceFiles(moodlePath string) []string {
 	names := []string{"version.php", "lib/moodlelib.php", "lib/accesslib.php"}
 	files := make([]string, len(names))

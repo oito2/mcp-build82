@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,6 +23,8 @@ import (
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
+// TestUseTreesitter_DefaultFalse verifies that the regex backend is used when the variable is
+// empty.
 func TestUseTreesitter_DefaultFalse(t *testing.T) {
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "")
 	if useTreesitter() {
@@ -30,6 +32,8 @@ func TestUseTreesitter_DefaultFalse(t *testing.T) {
 	}
 }
 
+// TestUseTreesitter_ExactMatchOnly verifies that only the exact value "treesitter" enables the
+// tree-sitter backend.
 func TestUseTreesitter_ExactMatchOnly(t *testing.T) {
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "TreeSitter")
 	if useTreesitter() {
@@ -37,6 +41,7 @@ func TestUseTreesitter_ExactMatchOnly(t *testing.T) {
 	}
 }
 
+// TestUseTreesitter_True verifies that the value "treesitter" enables the tree-sitter backend.
 func TestUseTreesitter_True(t *testing.T) {
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "treesitter")
 	if !useTreesitter() {
@@ -44,10 +49,8 @@ func TestUseTreesitter_True(t *testing.T) {
 	}
 }
 
-// TestBackendsShareExactSameType verifies that both backends return the exact same Go type
-// (internal/phptypes.EventsExtraction), not two structurally identical but distinct types
-// reconciled by a conversion function. reflect.TypeOf on a value returned by each backend must
-// report the identical type; a structural check (e.g. comparing field names) would be weaker.
+// TestBackendsShareExactSameType verifies that both backends return the identical Go type,
+// *phptypes.EventsExtraction, rather than two structurally similar types.
 func TestBackendsShareExactSameType(t *testing.T) {
 	regexResult := ParseEventsPhp("/does/not/exist/events.php")
 	tsResult := tsbackend.ParseEventsPhp("/does/not/exist/events.php")

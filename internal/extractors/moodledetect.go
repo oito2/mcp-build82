@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,16 +28,18 @@ type MoodleInstallInfo struct {
 	Release string // full $release string
 }
 
+// Patterns that read the $release, $version and $branch values of Moodle's version.php.
 var (
 	releasePattern = regexp.MustCompile(`\$release\s*=\s*['"]([^'"]+)['"]`)
 	versionPattern = regexp.MustCompile(`\$version\s*=\s*([\d.]+)`)
 	branchPattern  = regexp.MustCompile(`\$branch\s*=\s*['"]([^'"]+)['"]`)
-	// versionPrefixPattern extracts a leading "4.3" or "4.3+" style prefix out of the full $release string.
+	// versionPrefixPattern extracts a leading "4.3" or "4.3+" style prefix from the $release string.
 	versionPrefixPattern = regexp.MustCompile(`^(\d+\.\d+[+.]?\d*)`)
 )
 
-// DetectMoodleInstall reads {moodlePath}/version.php and returns its install metadata, or nil if
-// the file can't be read.
+// DetectMoodleInstall reads `moodlePath`/version.php and returns its install metadata. Version is
+// the numeric prefix of $release, falling back to the build number when $release has none. It
+// returns nil when the file cannot be read.
 func DetectMoodleInstall(moodlePath string) *MoodleInstallInfo {
 	content, err := readFileCapped(filepath.Join(moodlePath, "version.php"))
 	if err != nil {
@@ -57,7 +59,8 @@ func DetectMoodleInstall(moodlePath string) *MoodleInstallInfo {
 	return &MoodleInstallInfo{Version: versionNum, Build: build, Branch: branch, Release: release}
 }
 
-// IsMoodleRoot reports whether dirPath looks like a Moodle installation root.
+// IsMoodleRoot reports whether `dirPath` looks like a Moodle installation root: it contains
+// version.php, a lib directory, and config.php or config-dist.php.
 func IsMoodleRoot(dirPath string) bool {
 	return fileExists(filepath.Join(dirPath, "version.php")) &&
 		dirExists(filepath.Join(dirPath, "lib")) &&

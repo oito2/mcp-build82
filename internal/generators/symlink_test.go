@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,9 +22,8 @@ import (
 )
 
 // TestWalkMoodleFiles_SkipsSymlinkedFiles verifies that walkMoodleFiles skips symlinked files.
-// Every caller eventually reads the matched file's content, so a symlink planted inside a scanned
-// Moodle tree would otherwise pull its target's content (potentially entirely outside the tree)
-// into a generated index.
+// Callers read matched files' content, so following a symlink could pull in content from outside
+// the scanned tree.
 func TestWalkMoodleFiles_SkipsSymlinkedFiles(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "real.php"), "<?php\n")
@@ -49,6 +48,7 @@ func TestWalkMoodleFiles_SkipsSymlinkedFiles(t *testing.T) {
 	}
 }
 
+// containsName reports whether `needle` is one of the strings in `haystack`.
 func containsName(haystack []string, needle string) bool {
 	for _, s := range haystack {
 		if s == needle {

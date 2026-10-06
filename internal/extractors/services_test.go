@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ import (
 	"testing"
 )
 
+// servicesFixtureWellFormed is a services.php with two web service functions.
 const servicesFixtureWellFormed = `<?php
 $functions = [
     'local_test_get_data' => [
@@ -39,6 +40,7 @@ $functions = [
     ],
 ];`
 
+// TestParseServicesPhp verifies the fields parsed from a well-formed services.php, including defaults.
 func TestParseServicesPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -64,6 +66,7 @@ func TestParseServicesPhp(t *testing.T) {
 	}
 }
 
+// TestParseServicesPhp_EmptyArray verifies that an empty $functions array yields a non-nil extraction without functions.
 func TestParseServicesPhp_EmptyArray(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -75,6 +78,8 @@ func TestParseServicesPhp_EmptyArray(t *testing.T) {
 	}
 }
 
+// TestParseServicesPhp_SkipsEntryWithNeitherClassnameNorDescription verifies that an entry with neither classname nor description is
+// skipped.
 func TestParseServicesPhp_SkipsEntryWithNeitherClassnameNorDescription(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -92,8 +97,8 @@ $functions = [
 	}
 }
 
-// TestParseServicesPhp_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for a normal, well-formed services.php.
+// TestParseServicesPhp_TreesitterBackendParity verifies that both backends return identical
+// functions for a well-formed services.php.
 func TestParseServicesPhp_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -115,8 +120,8 @@ func TestParseServicesPhp_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// TestParseServicesPhp_TreesitterBackendParity_RealFiles runs both backends against every real
-// db/services.php across all 4 real Moodle installations and confirms they agree.
+// TestParseServicesPhp_TreesitterBackendParity_RealFiles verifies that both backends agree on every
+// db/services.php of the available Moodle installations. The test is skipped when none is found.
 func TestParseServicesPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
@@ -150,10 +155,10 @@ func TestParseServicesPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	}
 }
 
-// assertServiceFunctionParity compares one function's fields, with an exception for
-// Description/Capabilities: the regex backend truncates escaped-apostrophe strings and
-// multi-fragment (`.`-concatenated) strings, while the tree-sitter backend returns the full
-// text; the difference is logged, not failed. Every other field is asserted exactly.
+// assertServiceFunctionParity fails the test unless the regex function `regex` and the tree-sitter
+// function `ts`, entry `i` of the file `path`, agree on every field. Description and Capabilities
+// differences are only logged, because the regex backend truncates strings containing an escaped
+// apostrophe or `.` concatenation while tree-sitter returns the full text.
 func assertServiceFunctionParity(t *testing.T, path string, i int, regex, ts WebServiceFunction) {
 	t.Helper()
 	if regex.Name != ts.Name || regex.ClassName != ts.ClassName || regex.MethodName != ts.MethodName ||
@@ -162,22 +167,21 @@ func assertServiceFunctionParity(t *testing.T, path string, i int, regex, ts Web
 		return
 	}
 	if regex.Description != ts.Description {
-		t.Logf("%s: function %d Description differs (expected per KNOWN_DIVERGENCES.md #2/#3): regex=%q treesitter=%q", path, i, regex.Description, ts.Description)
+		t.Logf("%s: function %d Description differs (the backends read the service description differently): regex=%q treesitter=%q", path, i, regex.Description, ts.Description)
 	}
 	if regex.Capabilities != ts.Capabilities {
-		t.Logf("%s: function %d Capabilities differs (expected per KNOWN_DIVERGENCES.md #2/#3): regex=%q treesitter=%q", path, i, regex.Capabilities, ts.Capabilities)
+		t.Logf("%s: function %d Capabilities differs (the backends read the service capabilities differently): regex=%q treesitter=%q", path, i, regex.Capabilities, ts.Capabilities)
 	}
 }
 
-// TestGetFunctionNames_NilInputDoesNotPanic confirms GetFunctionNames handles a nil
-// *ServicesExtraction (a plugin with no db/services.php, the common case) by returning nil instead
-// of panicking on a nil pointer dereference.
+// TestGetFunctionNames_NilInputDoesNotPanic verifies that a nil extraction yields nil.
 func TestGetFunctionNames_NilInputDoesNotPanic(t *testing.T) {
 	if got := GetFunctionNames(nil); got != nil {
 		t.Errorf("expected nil, got %v", got)
 	}
 }
 
+// TestGetFunctionNames_Sorted verifies that function names are returned in sorted order.
 func TestGetFunctionNames_Sorted(t *testing.T) {
 	names := GetFunctionNames(&ServicesExtraction{Functions: []WebServiceFunction{
 		{Name: "z_func"}, {Name: "a_func"},

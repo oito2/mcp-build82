@@ -1,0 +1,9 @@
+version: "2"
+
+linters:
+  # The "standard" set (errcheck, govet, ineffassign, staticcheck, unused) is enabled by default.
+  exclusions:
+    presets:
+      # Unchecked errors from Close, Flush, fmt.Print*/Fprint* to stdout/stderr, os.Remove(All)
+      # and os.(Un)Setenv are idiomatic in this codebase (deferred cleanup and diagnostics).
+      - std-error-handling

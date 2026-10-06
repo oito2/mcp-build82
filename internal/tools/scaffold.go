@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,31 +32,27 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
-// skeletonNamePattern enforces Moodle's own plugin name convention (lowercase, starts with a
-// letter, letters/digits/underscores only) — unlike the scaffold_plugin prompt's identically-worded
-// but unenforced argument description, this tool actually writes to disk, so a permissive or
-// unchecked name here would be a path-traversal vector (e.g. name="../../etc") rather than just
-// odd-looking prose in a chat message.
+// skeletonNamePattern matches valid plugin names: lowercase, starting with a letter, with only
+// letters, digits and underscores. Because the name becomes a directory name, this also prevents
+// path traversal (e.g. "../../etc").
 var skeletonNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// requiresPattern restricts $plugin->requires (see versionPhpSkeleton) to what's actually a valid
-// PHP numeric literal: digits, optionally with a single decimal point (Moodle's own $version can
-// carry a ".NN" point-release suffix) — nothing else. Required because this value is embedded
-// unquoted into version.php: an unvalidated value would let a crafted requires string inject
-// arbitrary PHP as a second statement.
+// requiresPattern matches the accepted $plugin->requires values: digits with an optional single
+// decimal point, i.e. a plain PHP numeric literal. The value is written unquoted into version.php
+// (see versionPhpSkeleton), so anything else could inject PHP code.
 var requiresPattern = regexp.MustCompile(`^\d+(\.\d+)?$`)
 
+// CreatePluginSkeletonInput is the input of the create_plugin_skeleton tool.
 type CreatePluginSkeletonInput struct {
-	Type string `json:"type" jsonschema:"Plugin type (local, mod, block, auth, tool, enrol, theme, report, format, filter, qtype, ...)"`
-	Name string `json:"name" jsonschema:"Plugin name, lowercase letters/digits/underscores only, must start with a letter"`
-	// display_name, not displayName — the other camelCase outlier alongside release_plugin's
-	// output_dir.
+	Type        string `json:"type" jsonschema:"Plugin type (local, mod, block, auth, tool, enrol, theme, report, format, filter, qtype, ...)"`
+	Name        string `json:"name" jsonschema:"Plugin name, lowercase letters/digits/underscores only, must start with a letter"`
 	DisplayName string `json:"display_name,omitempty" jsonschema:"Human-readable name for lang/en/{component}.php (default: derived from name)"`
 	Features    string `json:"features,omitempty" jsonschema:"Comma-separated stub files to scaffold: database, tasks, services, events, capabilities, settings"`
 	Requires    string `json:"requires,omitempty" jsonschema:"$plugin->requires value (default: the configured Moodle installation's build number)"`
 	Maturity    string `json:"maturity,omitempty" jsonschema:"$plugin->maturity constant: MATURITY_ALPHA (default), MATURITY_BETA, MATURITY_RC, or MATURITY_STABLE"`
 }
 
+// RegisterCreatePluginSkeletonTool registers the create_plugin_skeleton tool on `server`.
 func RegisterCreatePluginSkeletonTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "create_plugin_skeleton",
@@ -68,11 +64,18 @@ func RegisterCreatePluginSkeletonTool(server *mcp.Server) {
 	}, withRecover(handleCreatePluginSkeleton))
 }
 
+// skeletonFile is one file to scaffold: its path and its content.
 type skeletonFile struct {
 	path    string // relative to the plugin root, forward slashes
 	content string
 }
 
+// handleCreatePluginSkeleton creates the directory and stub files of a new plugin of type
+// `in.Type` named `in.Name` under the Moodle root, with the optional stubs selected by
+// `in.Features`. It never overwrites an existing plugin. If writing a file fails, everything this
+// call created is removed. It returns an error result for a missing configuration, unknown type,
+// invalid name, maturity or requires value, an existing target, or a write failure; the error
+// return is always nil.
 func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, in CreatePluginSkeletonInput) (*mcp.CallToolResult, struct{}, error) {
 	cfg, err := requireConfig()
 	if err != nil {
@@ -118,10 +121,8 @@ func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, i
 		requires = "0"
 		requiresComment = " // TODO: set to a real Moodle build number"
 	} else if !requiresPattern.MatchString(requires) {
-		// requires is written unquoted into version.php as a bare PHP expression (it must be a
-		// numeric literal, not a string) — an unvalidated value here is a PHP code-injection vector,
-		// e.g. "0; eval($_GET['c']);" would execute as a second statement every time Moodle parses
-		// this plugin's version.php.
+		// requires is written unquoted into version.php, so only a numeric literal is accepted;
+		// anything else could inject PHP code (e.g. "0; eval(...);").
 		return textResult(true, fmt.Sprintf(
 			"❌ requires must be a plain Moodle build number (digits, optionally with a decimal point), got %q.", requires,
 		)), struct{}{}, nil
@@ -137,10 +138,9 @@ func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, i
 		hasCaps: hasCaps, hasSettings: hasSettings,
 	})
 
-	// createdRoot is the outermost directory this call is about to create (the plugin directory
-	// itself, or a missing type directory above it, e.g. "local/" in a fresh tree). Everything
-	// under it is new, so removing it on failure undoes exactly this call's writes and nothing
-	// that existed before.
+	// createdRoot is the outermost directory this call will create: the plugin directory itself,
+	// or a missing type directory above it. Everything under it is new, so removing it on failure
+	// undoes exactly this call's writes.
 	createdRoot := outermostMissingDir(cfg.MoodlePath, pluginPath)
 
 	var written []string
@@ -169,13 +169,13 @@ func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, i
 	return textResult(false, b.String()), struct{}{}, nil
 }
 
-// writeSkeletonFile writes one scaffolded file. A package-level variable only so tests can inject
-// a write failure part-way through a skeleton; production behavior is fsutil.WriteAtomic.
+// writeSkeletonFile writes one scaffolded file atomically. It defaults to fsutil.WriteAtomic and
+// is a variable so tests can inject a write failure.
 var writeSkeletonFile = fsutil.WriteAtomic
 
-// outermostMissingDir returns the highest directory between moodlePath (exclusive) and dir
-// (inclusive) that does not exist yet — the one directory whose removal undoes everything a
-// subsequent MkdirAll(dir) plus writes under it created. dir itself must not exist.
+// outermostMissingDir returns the highest directory between `moodlePath` (exclusive) and `dir`
+// (inclusive) that does not exist yet, i.e. the one directory whose removal undoes everything a
+// later MkdirAll(dir) and writes under it create. `dir` itself must not exist.
 func outermostMissingDir(moodlePath, dir string) string {
 	root := filepath.Clean(moodlePath)
 	outermost := dir
@@ -188,8 +188,9 @@ func outermostMissingDir(moodlePath, dir string) string {
 	return outermost
 }
 
-// parseSkeletonFeatures parses a comma-separated feature list by keyword matching into the
-// has* flags that select which skeleton files to generate.
+// parseSkeletonFeatures parses the comma-separated `features` list, case-insensitively and by
+// keyword (e.g. "table" selects the database), into flags selecting the database, tasks, services,
+// events, capabilities and settings stubs. Unrecognized entries are ignored.
 func parseSkeletonFeatures(features string) (hasDB, hasTasks, hasServices, hasEvents, hasCaps, hasSettings bool) {
 	for _, f := range strings.Split(strings.ToLower(features), ",") {
 		f = strings.TrimSpace(f)
@@ -211,6 +212,7 @@ func parseSkeletonFeatures(features string) (hasDB, hasTasks, hasServices, hasEv
 	return
 }
 
+// skeletonParams holds the values and feature flags used to render the skeleton files.
 type skeletonParams struct {
 	pluginType, name, component, typeDir    string
 	displayName, requires, requiresComment  string
@@ -219,6 +221,9 @@ type skeletonParams struct {
 	hasCaps, hasSettings                    bool
 }
 
+// skeletonFiles returns every file to scaffold for `p`: version.php, the English language file,
+// the type's entry-point files and the stubs selected by the feature flags. The version is today's
+// date followed by "00".
 func skeletonFiles(p skeletonParams) []skeletonFile {
 	version := time.Now().Format("20060102") + "00"
 
@@ -250,6 +255,7 @@ func skeletonFiles(p skeletonParams) []skeletonFile {
 	return files
 }
 
+// versionPhpSkeleton renders version.php for `p` with the given `version` number.
 func versionPhpSkeleton(p skeletonParams, version string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -262,6 +268,7 @@ $plugin->release   = '1.0.0';
 `, p.component, version, p.requires, p.requiresComment, p.maturity)
 }
 
+// langFileSkeleton renders the English language file declaring the plugin name `displayName`.
 func langFileSkeleton(displayName string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -270,19 +277,17 @@ $string['pluginname'] = '%s';
 `, escapePhpSingleQuoted(displayName))
 }
 
-// escapePhpSingleQuoted escapes s for embedding as the content of a PHP single-quoted string
-// literal — the inverse of phparray.UnescapeString. Order matters: backslashes must be escaped
-// before quotes, or a literal `\'` in the input would be double-escaped. displayName is free text
-// with no character-set restriction (unlike name/type), so without this, a value such as
-// "x'; eval($_GET['c']); //" would break out of the string literal and inject a second, fully
-// executed PHP statement into the generated lang/en/{component}.php file — a real code-injection
-// vector, not just a cosmetic escaping gap.
+// escapePhpSingleQuoted escapes `s` for use inside a PHP single-quoted string literal by escaping
+// backslashes and then single quotes (in that order, so the escapes are not doubled). This keeps
+// free-text values from breaking out of the literal and injecting PHP code.
 func escapePhpSingleQuoted(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `'`, `\'`)
 	return s
 }
 
+// mainFilesSkeleton returns the mandatory entry-point files for the plugin type of `p`: block,
+// auth, mod and tool have their own, other types get a lib.php.
 func mainFilesSkeleton(p skeletonParams) []skeletonFile {
 	switch p.pluginType {
 	case "block":
@@ -303,6 +308,7 @@ func mainFilesSkeleton(p skeletonParams) []skeletonFile {
 	}
 }
 
+// libPhpSkeleton renders a lib.php stub for `component`.
 func libPhpSkeleton(component string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -311,6 +317,7 @@ defined('MOODLE_INTERNAL') || die();
 `, component)
 }
 
+// blockPhpSkeleton renders the block class stub for `p`.
 func blockPhpSkeleton(p skeletonParams) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -333,6 +340,7 @@ class block_%s extends block_base {
 `, p.name, p.component)
 }
 
+// authPhpSkeleton renders the authentication plugin class stub for `p`.
 func authPhpSkeleton(p skeletonParams) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -351,6 +359,8 @@ class auth_plugin_%s extends auth_plugin_base {
 `, p.name, p.name, p.name)
 }
 
+// modLibPhpSkeleton renders the lib.php stub of an activity module with its add, update and
+// delete instance callbacks.
 func modLibPhpSkeleton(p skeletonParams) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -376,6 +386,7 @@ function %s_delete_instance($id) {
 `, p.component, p.name, p.component, p.name, p.component, p.name)
 }
 
+// modFormPhpSkeleton renders the mod_form.php stub of an activity module.
 func modFormPhpSkeleton(p skeletonParams) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -397,6 +408,8 @@ class mod_%s_mod_form extends moodleform_mod {
 `, p.name, p.component)
 }
 
+// stubEntryPointSkeleton renders a web entry-point stub that loads config.php, with a TODO naming
+// the page's `purpose`.
 func stubEntryPointSkeleton(p skeletonParams, purpose string) string {
 	return fmt.Sprintf(`<?php
 require_once(__DIR__ . '/%sconfig.php');
@@ -405,29 +418,28 @@ require_once(__DIR__ . '/%sconfig.php');
 `, strings.Repeat("../", configDepth(p.typeDir)), purpose)
 }
 
-// configDepth returns the number of "../" segments a stub entry-point file (index.php, view.php,
-// ...) needs to prepend to __DIR__ to reach config.php at the Moodle root. The file lives directly
-// inside the plugin's own directory, {typeDir}/{name}/, so the depth depends on how many segments
-// typeDir itself has: a "mod" plugin's index.php sits at mod/{name}/index.php — only 2 levels up
-// from the Moodle root — while an "admin/tool" plugin's sits 3 levels up. The result is
-// the number of typeDir segments plus 2.
+// configDepth returns the number of "../" segments an entry-point file needs to reach config.php
+// at the Moodle root from {typeDir}/{name}/: the number of segments of `typeDir` plus one for the
+// plugin directory, e.g. 2 for "mod" and 3 for "admin/tool".
 func configDepth(typeDir string) int {
 	return strings.Count(typeDir, "/") + 2
 }
 
+// installXMLSkeleton renders an empty db/install.xml for `p`.
 func installXMLSkeleton(p skeletonParams) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" ?>
 <XMLDB PATH="%s/%s/db" VERSION="%s" COMMENT="XMLDB file for Moodle %s"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
+    xsi:noNamespaceSchemaLocation="%slib/xmldb/xmldb.xsd"
 >
   <TABLES>
     <!-- TODO: define tables here. -->
   </TABLES>
 </XMLDB>
-`, p.typeDir, p.name, time.Now().Format("20060102")+"00", p.component)
+`, p.typeDir, p.name, time.Now().Format("20060102")+"00", p.component, strings.Repeat("../", configDepth(p.typeDir)+1))
 }
 
+// tasksPhpSkeleton renders a db/tasks.php stub for `component`.
 func tasksPhpSkeleton(component string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -447,6 +459,7 @@ $tasks = array(
 `, component)
 }
 
+// servicesPhpSkeleton renders an empty db/services.php stub.
 func servicesPhpSkeleton() string {
 	return `<?php
 defined('MOODLE_INTERNAL') || die();
@@ -457,6 +470,7 @@ $functions = array(
 `
 }
 
+// eventsPhpSkeleton renders a db/events.php stub for `component`.
 func eventsPhpSkeleton(component string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -471,6 +485,7 @@ $observers = array(
 `, component)
 }
 
+// observerPhpSkeleton renders the classes/observer.php stub for `component`.
 func observerPhpSkeleton(component string) string {
 	return fmt.Sprintf(`<?php
 namespace %s;
@@ -483,6 +498,7 @@ class observer {
 `, component)
 }
 
+// accessPhpSkeleton renders a db/access.php stub for `component`.
 func accessPhpSkeleton(component string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -500,6 +516,7 @@ $capabilities = array(
 `, component)
 }
 
+// settingsPhpSkeleton renders a settings.php stub for `component`.
 func settingsPhpSkeleton(component string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();

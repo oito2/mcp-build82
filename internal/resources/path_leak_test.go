@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,9 +23,11 @@ import (
 
 // This file tests that the "Not found" resource messages never embed an absolute filesystem path:
 // a missing generated file is reported relative to the Moodle root, and an unresolvable plugin
-// only refers to "the configured Moodle root" — an absolute path would leak host directory structure (and often an OS username) into a
-// message that could end up quoted back into a third-party AI chat.
+// only refers to "the configured Moodle root". An absolute path would expose the host directory
+// structure to whoever receives the message.
 
+// TestReadMoodleFile_NotFoundMessageDoesNotLeakAbsolutePath verifies a missing global file is
+// reported by its root-relative path.
 func TestReadMoodleFile_NotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -43,6 +45,8 @@ func TestReadMoodleFile_NotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestReadPluginFile_NotFoundMessageDoesNotLeakAbsolutePath verifies a missing plugin file is
+// reported by its root-relative path.
 func TestReadPluginFile_NotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -64,6 +68,8 @@ func TestReadPluginFile_NotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestReadPluginFile_PluginNotFoundMessageDoesNotLeakAbsolutePath verifies an unresolvable plugin
+// message names the requested component but no absolute path.
 func TestReadPluginFile_PluginNotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)

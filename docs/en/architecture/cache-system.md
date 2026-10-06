@@ -170,7 +170,11 @@ The result is a real regeneration: forced outputs are rewritten even when every 
 
 ## Interaction with watch mode
 
-`internal/watcher` uses `fsnotify` to monitor the plugin source files listed above (those that exist) in every `.indevelopment`-marked plugin, up to 20 plugins. When a matching file is saved:
+`internal/watcher` uses `fsnotify` to monitor the plugin source files listed above (those that exist) in every `.indevelopment`-marked plugin, up to 20 plugins.
+
+The watcher registers the parent directories of those files with `fsnotify` and filters events to the tracked files, so editors that save through a temporary file and a rename keep being observed. A change that arrives while the same plugin is being regenerated triggers one more regeneration afterwards.
+
+When a matching file is saved:
 
 1. The watcher's 500 ms debounce timer fires after the change settles
 2. It calls `cache.Global.Invalidate(...)` for each of the plugin's 12 output files, which forces their regeneration regardless of modification times

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -32,7 +32,8 @@ import (
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
-// textResult is the shared response builder used by every tool.
+// textResult builds a single-text-block tool response with the given `text`, flagged as an error
+// when `isError` is true.
 func textResult(isError bool, text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
@@ -40,12 +41,11 @@ func textResult(isError bool, text string) *mcp.CallToolResult {
 	}
 }
 
-// withRecover wraps a tool handler so a panic anywhere inside it (most likely deep in an
-// extractor/generator triggered by malformed or adversarial plugin source) becomes an IsError text
-// result instead of an unrecovered panic. The MCP SDK's tool dispatch has no recover of its own, so
-// an unrecovered panic here kills the whole server process for every connected client/session, not
-// just the one request that triggered it. It is applied to every registered tool via
-// RegisterXxxTool.
+// withRecover wraps the tool handler `fn` so that a panic anywhere inside it (most likely deep in
+// an extractor or generator fed malformed plugin source) is converted into an IsError text result
+// instead of propagating. The MCP SDK's tool dispatch does not recover panics, so an unrecovered
+// one would terminate the whole server process for every connected client. Every registered tool
+// is wrapped with it.
 func withRecover[In any](
 	fn func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, struct{}, error),
 ) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, struct{}, error) {
@@ -59,17 +59,19 @@ func withRecover[In any](
 	}
 }
 
-// Format is the shared opt-in output-format field every tool's input struct embeds.
+// Format is the optional output-format field shared by every tool's input struct.
 // "text" (the zero value) renders Markdown/plain text; "json" renders the same underlying
 // data as a JSON string in that same single text block.
 type Format string
 
+// Supported values of Format.
 const (
 	FormatText Format = ""
 	FormatJSON Format = "json"
 )
 
-// jsonResult marshals data as the tool's single text block when a JSON format was requested.
+// jsonResult marshals `data` as indented JSON into a single text block flagged as an error when
+// `isError` is true. If marshaling fails, it returns an error result describing the failure.
 func jsonResult(isError bool, data any) *mcp.CallToolResult {
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -78,17 +80,17 @@ func jsonResult(isError bool, data any) *mcp.CallToolResult {
 	return textResult(isError, string(b))
 }
 
-// FailedFile is the shared JSON shape for one failed-to-generate file — used by every tool whose
-// output distinguishes generated/skipped/failed generator results.
+// FailedFile is the JSON shape of one file that failed to generate, used by every tool whose
+// output distinguishes generated, skipped and failed generator results.
 type FailedFile struct {
 	File  string `json:"file"`
 	Error string `json:"error"`
 }
 
-// classifyResults splits generator results into generated/skipped file names and full failed
-// records, all relativized against base (moodlePath for global generators, the plugin's own path
-// for per-plugin ones) so that generated output never leaks an absolute host filesystem path.
-// Shared by every tool's build*Output/render*Report.
+// classifyResults splits generator `results` into the names of generated files, the names of
+// skipped (cached) files, and the records of failed files. Every file name is made relative to
+// `base` (the Moodle root for global generators, the plugin's own path for per-plugin ones) so the
+// output never exposes an absolute host path.
 func classifyResults(results []generators.GeneratorResult, base string) (generated, skipped []string, failed []FailedFile) {
 	for _, r := range results {
 		rel := relativeToMoodle(base, r.File)
@@ -104,27 +106,24 @@ func classifyResults(results []generators.GeneratorResult, base string) (generat
 	return
 }
 
-// resolvedPlugin is the outcome of resolving+validating a plugin path argument, shared by every
-// tool that takes a plugin identifier (generate_plugin_context, explain_plugin, and any future
-// tool that needs it, via the same helper).
+// resolvedPlugin is the outcome of resolving and validating a plugin identifier: the absolute
+// plugin directory and its detected metadata.
 type resolvedPlugin struct {
 	Path string
 	Info extractors.PluginInfo
 }
 
-// resolveAndValidatePlugin resolves identifier — a frankenstyle component ("local_myplugin"), a
-// path relative to the Moodle root ("local/myplugin"), or an absolute path — against moodlePath,
-// checks it's within the Moodle root, exists, and looks like a plugin (has version.php). Returns a
-// non-nil *mcp.CallToolResult (already IsError:true) on any failure — callers should return that
-// result immediately when it is non-nil.
+// resolveAndValidatePlugin resolves `identifier` — a frankenstyle component ("local_myplugin"), a
+// path relative to the Moodle root ("local/myplugin"), or an absolute path — against `moodlePath`,
+// and checks that it lies within the Moodle root, exists, and contains a version.php. On any
+// failure it returns a non-nil error result (IsError set) that the caller should return as is; on
+// success the result is nil and the resolvedPlugin is populated.
 func resolveAndValidatePlugin(identifier, moodlePath string) (resolvedPlugin, *mcp.CallToolResult) {
 	full, _ := filepath.Abs(resolvePluginIdentifier(identifier, moodlePath))
 
-	// None of the messages below embed moodlePath or the resolved absolute `full` path directly —
-	// an absolute host filesystem path must never leak into tool/resource
-	// output, since it reveals host directory structure (often an OS username) and could end up
-	// quoted back into a third-party AI chat. Anywhere a path is useful to the caller, it's
-	// relativized to moodlePath via relativeToMoodle first.
+	// The messages below never embed moodlePath or the absolute `full` path: absolute host paths
+	// reveal the directory structure (often an OS username), so any path shown is first made
+	// relative to moodlePath via relativeToMoodle.
 	if !moodletype.IsWithinMoodle(full, moodlePath) {
 		return resolvedPlugin{}, textResult(true,
 			"❌ Invalid plugin path: must be within the Moodle installation.")
@@ -148,12 +147,12 @@ func resolveAndValidatePlugin(identifier, moodlePath string) (resolvedPlugin, *m
 	return resolvedPlugin{Path: full, Info: info}, nil
 }
 
-// resolvePluginIdentifier maps identifier to a filesystem path without checking containment or
-// existence — callers must still run moodletype.IsWithinMoodle on the result. It first tries
+// resolvePluginIdentifier maps `identifier` to a filesystem path without checking containment or
+// existence, so callers must still run moodletype.IsWithinMoodle on the result. It first tries
 // moodletype.ResolvePluginPath (component, relative, or absolute, existing paths only); when that
-// finds nothing, it falls back to treating identifier as a path (absolute, or joined onto
-// moodlePath), so a directory whose name merely looks like a component (e.g. a literal "local_x"
-// folder) still resolves, and a missing plugin still gets a meaningful "not found" message.
+// finds nothing, it treats `identifier` as a path (absolute, or joined onto `moodlePath`). That
+// way a directory whose name merely looks like a component (e.g. a literal "local_x" folder) still
+// resolves, and a missing plugin yields a meaningful "not found" message.
 func resolvePluginIdentifier(identifier, moodlePath string) string {
 	if path, ok := moodletype.ResolvePluginPath(identifier, moodlePath); ok {
 		return path
@@ -164,11 +163,10 @@ func resolvePluginIdentifier(identifier, moodlePath string) string {
 	return filepath.Join(moodlePath, identifier)
 }
 
-// resolvePluginPathWithinMoodle resolves identifier (component, relative path, or absolute path)
-// via moodletype.ResolvePluginPath, then checks moodletype.IsWithinMoodle — the shared containment
-// check for get_plugin_info and plugin_batch mode=list. Unlike resolveAndValidatePlugin it does
-// not require version.php to exist, a stricter check those two tools deliberately don't want.
-// Returns ("", false) if resolution or containment fails.
+// resolvePluginPathWithinMoodle resolves `identifier` (component, relative path, or absolute path)
+// via moodletype.ResolvePluginPath and checks it with moodletype.IsWithinMoodle against
+// `moodlePath`. Unlike resolveAndValidatePlugin it does not require version.php to exist. It
+// returns the resolved path and true, or ("", false) when resolution or containment fails.
 func resolvePluginPathWithinMoodle(identifier, moodlePath string) (string, bool) {
 	path, ok := moodletype.ResolvePluginPath(identifier, moodlePath)
 	if ok && !moodletype.IsWithinMoodle(path, moodlePath) {
@@ -177,9 +175,9 @@ func resolvePluginPathWithinMoodle(identifier, moodlePath string) (string, bool)
 	return path, ok
 }
 
-// findAllPlugins globs {typeDir}/*/version.php for every value in moodletype.PluginTypeToDir and
-// dedupes the parent dirs — unsorted, matching generators.findPluginDirs' own "sorting is the
-// caller's responsibility" convention.
+// findAllPlugins returns the de-duplicated plugin directories under `moodlePath`, found by globbing
+// {typeDir}/*/version.php for every value in moodletype.PluginTypeToDir. The result is unsorted;
+// sorting is the caller's responsibility.
 func findAllPlugins(moodlePath string) []string {
 	seen := map[string]struct{}{}
 	var dirs []string
@@ -196,35 +194,39 @@ func findAllPlugins(moodlePath string) []string {
 	return dirs
 }
 
-// requireConfig is the shared NOT_INITIALIZED guard. The returned error is non-nil only for a
-// genuine failure resolving config (e.g. os.UserHomeDir() failing) —
-// never for the ordinary "no config yet" case, which still comes back as (nil, nil) for callers to
-// render as NOT_INITIALIZED.
+// requireConfig loads the build82 configuration. It returns (nil, nil) when no configuration
+// exists yet, which callers report with toolutil.NotInitialized, and a non-nil error only when the
+// configuration location cannot be resolved or the file cannot be read.
 func requireConfig() (*config.Config, error) {
 	return config.Load()
 }
 
-// readPluginFileTruncated reads a per-plugin generated file (under the plugin's .build82/),
-// truncated to maxChars. Returns "" if the file doesn't exist — callers treat that as "not
-// available", not an error.
+// readPluginFileTruncated reads the generated file `filename` from the plugin's .build82/
+// directory (`pluginPath` is the plugin root), truncated to `maxChars` bytes. It returns "" when
+// the file is missing or unreadable; callers treat that as "not available".
 func readPluginFileTruncated(pluginPath, filename string, maxChars int) string {
 	return toolutil.ReadFileTruncated(generators.PluginOutputPath(pluginPath, filename), maxChars)
 }
 
+// joinPath joins path `parts` with the OS path separator.
 func joinPath(parts ...string) string {
 	return filepath.Join(parts...)
 }
 
+// fileExists reports whether `path` exists and is not a directory.
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
 
+// dirExists reports whether `path` exists and is a directory.
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
 
+// relativeToMoodle returns `absPath` relative to `moodlePath` with forward slashes, or `absPath`
+// unchanged when no relative form exists.
 func relativeToMoodle(moodlePath, absPath string) string {
 	rel, err := filepath.Rel(moodlePath, absPath)
 	if err != nil {
@@ -233,9 +235,9 @@ func relativeToMoodle(moodlePath, absPath string) string {
 	return filepath.ToSlash(rel)
 }
 
-// displayPathWithinMoodle returns absPath relative to moodlePath (forward slashes) when absPath
-// lies inside the Moodle root, and ok=false otherwise — so a caller can pick its own non-leaking
-// fallback instead of echoing an absolute host path.
+// displayPathWithinMoodle returns `absPath` relative to `moodlePath` (forward slashes) and true
+// when `absPath` lies inside the Moodle root, and ("", false) otherwise, so a caller can pick its
+// own fallback instead of echoing an absolute host path.
 func displayPathWithinMoodle(moodlePath, absPath string) (string, bool) {
 	if !moodletype.IsWithinMoodle(absPath, moodlePath) {
 		return "", false

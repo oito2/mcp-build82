@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -41,6 +41,8 @@ func hasEntry(t target) bool {
 	return false
 }
 
+// fileHasEntry reports whether the config file at `path` is readable and holds a build82 entry
+// under the top-level key of `shape`.
 func fileHasEntry(path string, shape configShape) bool {
 	if !fileExists(path) {
 		return false
@@ -117,15 +119,15 @@ func reportUninstall(t target, removed bool, warnings []string, err error) {
 	printWarnings(warnings)
 }
 
-// purgeFilenames is every filename a --purge pass considers, per plugin/global root: the
-// generated Markdown files plus the .indevelopment marker — the same lists doctor uses for
-// freshness checks. The mtime cache file (.cache.json) is excluded from the purge count.
+// purgePluginFilenames is every filename a --purge pass considers per development plugin: the
+// generated context files plus the .indevelopment marker. The mtime cache file (.cache.json) is
+// not included.
 var purgePluginFilenames = append(append([]string{}, generators.PluginContextFiles...), ".indevelopment")
 
 // purgeCandidates returns the config file path (which may not exist) and every generated file
-// that currently exists and would be deleted by --purge, scoped to the configured Moodle root's
-// global files plus the same .indevelopment-marked dev plugins doctor reports on. The error return
-// is non-nil only if the config file's own location couldn't be resolved (config.FilePath).
+// that currently exists and would be deleted by --purge: the global context files of the Moodle
+// root in `cfg` plus those of its .indevelopment-marked dev plugins. A nil `cfg` yields no files.
+// The error is non-nil only if the config file's location cannot be resolved.
 func purgeCandidates(cfg *config.Config) (configFile string, files []string, err error) {
 	configFile, err = config.FilePath()
 	if err != nil {
@@ -151,9 +153,10 @@ func purgeCandidates(cfg *config.Config) (configFile string, files []string, err
 	return configFile, files, nil
 }
 
-// runPurge implements the off-by-default --purge flag: a second, separate confirmation naming
-// exactly what will be deleted before touching any generated content or the ~/.build82 config
-// file.
+// runPurge implements the --purge flag: it lists what will be deleted, asks a separate
+// confirmation read from `in`, then removes the ~/.build82 config file and the generated files of
+// `cfg`'s Moodle root. Individual removal failures are printed, not returned; the error is non-nil
+// only when the config location cannot be resolved.
 func runPurge(cfg *config.Config, in *bufio.Reader) error {
 	configFile, files, err := purgeCandidates(cfg)
 	if err != nil {
@@ -185,7 +188,10 @@ func runPurge(cfg *config.Config, in *bufio.Reader) error {
 	return nil
 }
 
-// Uninstall is the top-level `build82 uninstall [target] [--purge]` flow.
+// Uninstall is the top-level `build82 uninstall [target] [--purge]` flow. With a non-empty
+// `targetID` it removes build82 from that target only; otherwise it removes it from every tool that
+// has a registration, after confirmation. When `purge` is true it then runs the purge step. It
+// returns an error for an unknown target, a failed single-target removal, or a config load failure.
 func Uninstall(targetID string, purge bool) error {
 	in := bufio.NewReader(os.Stdin)
 

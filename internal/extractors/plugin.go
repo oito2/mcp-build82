@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -40,6 +40,8 @@ type PluginInfo struct {
 	MoodlePath  string // set by generators, empty when DetectPlugin called directly
 }
 
+// Patterns that read the value of a PHP assignment: a quoted string, digits, or an upper-case
+// constant, plus the plugin name string from a lang file.
 var (
 	phpStringValue    = regexp.MustCompile(`=\s*['"]([^'"]+)['"]`)
 	phpNumericValue   = regexp.MustCompile(`=\s*(\d+)`)
@@ -47,9 +49,10 @@ var (
 	pluginNamePattern = regexp.MustCompile(`\$string\['pluginname'\]\s*=\s*['"]([^'"]+)['"]`)
 )
 
-// readVersionPhp does a line-based scan of version.php, matching individual $plugin->xxx = ...;
-// lines directly. This Contains-based dispatch also matches a commented-out line like
-// "// $plugin->component = 'old';".
+// readVersionPhp scans `pluginPath`/version.php line by line and returns the values assigned to
+// $plugin->component, version, requires and maturity, with "" for any that are missing or when the
+// file cannot be read. Lines are matched by substring, so a commented-out assignment such as
+// "// $plugin->component = 'old';" is also picked up.
 func readVersionPhp(pluginPath string) (component, version, requires, maturity string) {
 	if useTreesitter() {
 		return tsbackend.ReadVersionPhp(pluginPath)
@@ -73,6 +76,8 @@ func readVersionPhp(pluginPath string) (component, version, requires, maturity s
 	return
 }
 
+// readDisplayName returns the $string['pluginname'] value from `pluginPath`/lang/en/`component`.php,
+// or "" when the file or the string is missing.
 func readDisplayName(pluginPath, component string) string {
 	content, err := readFileCapped(filepath.Join(pluginPath, "lang", "en", component+".php"))
 	if err != nil {
@@ -81,15 +86,11 @@ func readDisplayName(pluginPath, component string) string {
 	return firstSubmatch(pluginNamePattern, string(content))
 }
 
-// inferTypeFromPath infers a plugin's type from its parent directory name, reverse-mapped
-// through moodletype.PluginTypeToDir.
-//
-// Iterates moodletype.PluginTypeToDir in sorted key order rather than ranging over the map
-// directly — several entries share the same trailing directory segment (e.g. "report",
-// "gradereport" -> "grade/report", "scormreport" -> "mod/scorm/report" all end in ".../report"),
-// so a plugin whose literal parent directory is named "report" could match more than one entry.
-// Exact-match candidates are checked before suffix-match candidates, in each case in sorted-key
-// order, so the result is deterministic.
+// inferTypeFromPath infers a plugin's type from the name of its parent directory by reverse
+// mapping moodletype.PluginTypeToDir. Several types share a trailing directory segment (e.g.
+// "report", "gradereport" -> "grade/report", "scormreport" -> "mod/scorm/report"), so exact
+// directory matches are tried before suffix matches, each in sorted type order, to keep the result
+// deterministic. When nothing matches, the parent directory name itself is returned.
 func inferTypeFromPath(pluginPath string) string {
 	parentDir := filepath.Base(filepath.Dir(pluginPath))
 
@@ -112,13 +113,15 @@ func inferTypeFromPath(pluginPath string) string {
 	return parentDir // fallback: use the raw directory name as the type
 }
 
-// IsPlugin reports whether dirPath directly contains a version.php.
+// IsPlugin reports whether `dirPath` directly contains a version.php.
 func IsPlugin(dirPath string) bool {
 	return fileExists(filepath.Join(dirPath, "version.php"))
 }
 
-// DetectPlugin detects a plugin's identity from its directory. Returns an error if the directory
-// doesn't exist.
+// DetectPlugin detects the identity of the plugin in directory `pluginPath`. The type is inferred
+// from the parent directory, the component falls back to type_name when version.php does not set
+// it, and the display name falls back to the directory name. It returns an error when
+// `pluginPath` does not exist or is not a directory.
 func DetectPlugin(pluginPath string) (PluginInfo, error) {
 	info, err := os.Stat(pluginPath)
 	if err != nil || !info.IsDir() {

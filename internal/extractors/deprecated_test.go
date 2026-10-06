@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@ import (
 	"testing"
 )
 
+// TestFindDeprecatedApiUsage_FlagsBareCallsOnly verifies that bare calls are reported while method and static calls are skipped.
 func TestFindDeprecatedApiUsage_FlagsBareCallsOnly(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php
@@ -42,6 +43,7 @@ function local_test_helper() {
 	}
 }
 
+// TestFindDeprecatedApiUsage_NoDeprecatedNames verifies that an empty deprecated set yields nil.
 func TestFindDeprecatedApiUsage_NoDeprecatedNames(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php
@@ -53,6 +55,7 @@ function f() { get_context_instance(); }
 	}
 }
 
+// TestFindDeprecatedApiUsage_CleanPluginReturnsNoCalls verifies that a plugin without deprecated calls yields no results.
 func TestFindDeprecatedApiUsage_CleanPluginReturnsNoCalls(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php
@@ -67,9 +70,8 @@ function local_test_helper() {
 	}
 }
 
-// TestFindDeprecatedApiUsage_MultilineArgumentsDetected verifies that a call whose function name
-// and opening paren land on different lines is matched, with the line number derived from the
-// match's byte offset.
+// TestFindDeprecatedApiUsage_MultilineArgumentsDetected verifies that a call whose name and
+// opening parenthesis are on different lines is matched and reported at the line of the name.
 func TestFindDeprecatedApiUsage_MultilineArgumentsDetected(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), `<?php
@@ -89,6 +91,7 @@ function local_test_helper() {
 	}
 }
 
+// TestFindDeprecatedApiUsage_WalksNestedDirectories verifies that calls in nested directories are found with a root-relative path.
 func TestFindDeprecatedApiUsage_WalksNestedDirectories(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "classes", "task"))

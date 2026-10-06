@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -78,6 +78,9 @@ func parseCapability(name string, inner *gotreesitter.Node, src []byte) phptypes
 	return capability
 }
 
+// parseArchetypes reads an archetypes sub-array into a role-to-permission map (for example
+// "manager" => CAP_ALLOW). Entries whose key is not a string are skipped; a nil node yields an
+// empty map.
 func parseArchetypes(node *gotreesitter.Node, src []byte) map[string]string {
 	result := map[string]string{}
 	for _, element := range ArrayElements(node) {

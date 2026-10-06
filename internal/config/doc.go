@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,5 +13,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package config resolves build82 configuration from ~/.build82 and BUILD82_* env vars.
+// Package config resolves the build82 configuration (the Moodle installation to operate on) from
+// BUILD82_MOODLE_* environment variables and the ~/.build82 file, and writes that file.
 package config

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,12 +27,13 @@ import (
 	"github.com/oito2/mcp-build82/internal/genutil"
 )
 
+// globalResourceDef describes one global resource: its URI, the generated file it serves, and its
+// display name and description.
 type globalResourceDef struct {
 	URI, Filename, Name, Description string
 }
 
-// globalResources is the canonical URI -> filename table for every global resource this server
-// exposes — do not rename URIs (MCP clients may have bookmarked them).
+// globalResources is the table mapping each global resource URI to the generated file it serves.
 var globalResources = []globalResourceDef{
 	{"moodle://context", "AI_CONTEXT.md", "Moodle AI Context", "High-level overview: version, directory structure, key APIs, coding guidelines"},
 	{"moodle://index", "MOODLE_AI_INDEX.md", "Moodle AI Index", "Master index linking all generated files and plugin AI contexts"},
@@ -49,7 +50,8 @@ var globalResources = []globalResourceDef{
 	{"moodle://plugin-guide", "MOODLE_PLUGIN_GUIDE.md", "Moodle Plugin Guide", "Component naming, required files, version.php template, hooks"},
 }
 
-// RegisterGlobalResources registers all 13 global resources in a data-driven loop.
+// RegisterGlobalResources registers every resource listed in globalResources on `server`, each
+// served as text/markdown.
 func RegisterGlobalResources(server *mcp.Server) {
 	for _, def := range globalResources {
 		def := def
@@ -62,6 +64,8 @@ func RegisterGlobalResources(server *mcp.Server) {
 	}
 }
 
+// handleGlobalResource returns a resource handler that serves the global generated file named
+// `filename`, echoing the requested URI in the result. It fails only when readMoodleFile fails.
 func handleGlobalResource(filename string) mcp.ResourceHandler {
 	return func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		text, err := readMoodleFile(filename)
@@ -75,11 +79,10 @@ func handleGlobalResource(filename string) mcp.ResourceHandler {
 	}
 }
 
-// readMoodleFile reads a global generated file. Placeholder text (never an error — resources have
-// no error flag the way tool results do) is returned when config is missing or the file hasn't
-// been generated yet. A non-nil error is returned only for a genuine failure resolving config (see
-// config.Load), which is a real environmental failure, not the ordinary "not initialized"
-// state, and so is surfaced as an actual protocol-level error rather than placeholder text.
+// readMoodleFile returns the content of the global generated file `filename` under the configured
+// Moodle root. When no configuration exists, or the file has not been generated yet, it returns
+// placeholder text (with the path relative to the Moodle root) and a nil error. An error is
+// returned only when config.Load itself fails.
 func readMoodleFile(filename string) (string, error) {
 	cfg, err := config.Load()
 	if err != nil {

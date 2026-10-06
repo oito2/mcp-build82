@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,13 +22,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// withRecoverResource wraps a resource (or resource template) handler so a panic anywhere inside
-// it (most likely deep in extractors.DetectPlugin or a filepath.WalkDir over a malformed/adversarial
-// plugin directory) becomes a normal error return instead of an unrecovered panic. The SDK's
-// readResource dispatch does not recover from a panicking ResourceHandler, so an unrecovered panic
-// would kill the whole server process for every connected client/session. mcp.ResourceHandler is
-// the same function type used by both server.AddResource and server.AddResourceTemplate, so this
-// one wrapper covers every registration in this package.
+// withRecoverResource wraps the resource or resource-template handler `fn` so that a panic inside
+// it (most likely in extractors.DetectPlugin or a directory walk over a malformed plugin
+// directory) is returned as an error with a nil result instead of propagating. The SDK does not
+// recover from a panicking handler, so an unrecovered panic would terminate the server for every
+// connected session. Results and errors from a non-panicking `fn` pass through unchanged.
 func withRecoverResource(fn mcp.ResourceHandler) mcp.ResourceHandler {
 	return func(ctx context.Context, req *mcp.ReadResourceRequest) (result *mcp.ReadResourceResult, err error) {
 		defer func() {

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@ import (
 	"testing"
 )
 
+// capabilitiesFixtureWellFormed is an access.php with two single-quoted capabilities, one using a
+// bare-constant riskbitmask.
 const capabilitiesFixtureWellFormed = `<?php
 $capabilities = [
     'local/test:view' => [
@@ -42,6 +44,8 @@ $capabilities = [
     ],
 ];`
 
+// TestParseAccessPhp verifies capability names, types, context levels, risk bitmasks and
+// archetypes parsed from a well-formed file.
 func TestParseAccessPhp(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -66,6 +70,7 @@ func TestParseAccessPhp(t *testing.T) {
 	}
 }
 
+// TestParseAccessPhp_CapTypeDefaultsToRead verifies that a missing captype defaults to "read".
 func TestParseAccessPhp_CapTypeDefaultsToRead(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -83,10 +88,10 @@ $capabilities = [
 	}
 }
 
+// TestParseAccessPhp_DoubleQuotedKeyNotMatched verifies that the regex backend ignores
+// double-quoted capability keys.
 func TestParseAccessPhp_DoubleQuotedKeyNotMatched(t *testing.T) {
-	// Asymmetry of the *regex* backend specifically: only single-quoted capability keys are
-	// matched. Pin the backend explicitly — the tree-sitter backend also matches double-quoted keys —
-	// so this test is not sensitive to whichever backend the environment selects.
+	// Only the regex backend ignores double-quoted keys, so it is selected explicitly.
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "")
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -104,9 +109,8 @@ $capabilities = [
 	}
 }
 
-// TestParseAccessPhp_TreesitterBackendParity confirms BUILD82_EXTRACTOR_BACKEND=treesitter
-// produces identical output to the regex backend for a normal, well-formed access.php (all
-// single-quoted keys, no compound riskbitmask — the two known divergences don't apply here).
+// TestParseAccessPhp_TreesitterBackendParity verifies that both backends return the same
+// capabilities for a well-formed access.php with single-quoted keys and no compound riskbitmask.
 func TestParseAccessPhp_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -126,10 +130,10 @@ func TestParseAccessPhp_TreesitterBackendParity(t *testing.T) {
 	}
 }
 
-// assertCapabilityParity compares one capability's fields, with an exception for RiskBitmask:
-// the regex backend truncates a compound bitwise-OR expression to its first flag, while
-// tree-sitter returns the full expression; the difference is logged, not failed. Every other
-// field (including Archetypes) is asserted exactly.
+// assertCapabilityParity fails the test unless the regex capability `regex` and the tree-sitter
+// capability `ts` named `name` in the file `path` agree on every field. A RiskBitmask difference is
+// only logged, because the regex backend truncates a compound bitwise-OR expression to its first
+// flag while tree-sitter returns the full expression.
 func assertCapabilityParity(t *testing.T, path, name string, regex, ts Capability) {
 	t.Helper()
 	if regex.Name != ts.Name || regex.CapType != ts.CapType || regex.ContextLevel != ts.ContextLevel {
@@ -146,15 +150,14 @@ func assertCapabilityParity(t *testing.T, path, name string, regex, ts Capabilit
 		}
 	}
 	if regex.RiskBitmask != ts.RiskBitmask {
-		t.Logf("%s: capability %q RiskBitmask differs (expected per KNOWN_DIVERGENCES.md #4): regex=%q treesitter=%q", path, name, regex.RiskBitmask, ts.RiskBitmask)
+		t.Logf("%s: capability %q RiskBitmask differs (the backends normalize the bitmask expression differently): regex=%q treesitter=%q", path, name, regex.RiskBitmask, ts.RiskBitmask)
 	}
 }
 
-// TestParseAccessPhp_TreesitterBackendParity_RealFiles runs both backends against every real
-// db/access.php in the available Moodle installations and confirms they agree, matched by
-// capability Name rather than positional index: the regex backend also counts commented-out
-// entries and misses double-quoted keys, so counts can legitimately differ and a name-keyed
-// comparison verifies parity on the capabilities both backends find.
+// TestParseAccessPhp_TreesitterBackendParity_RealFiles compares both backends on every
+// db/access.php of the available Moodle installations. Capabilities are matched by name because
+// the regex backend also reports commented-out entries and misses double-quoted keys, so counts
+// can differ. The test is skipped when no file is found.
 func TestParseAccessPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
@@ -185,14 +188,14 @@ func TestParseAccessPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 			for name, rc := range regexByName {
 				tc, ok := tsByName[name]
 				if !ok {
-					t.Logf("%s: capability %q found by regex but not treesitter (likely a commented-out entry — KNOWN_DIVERGENCES.md #1)", path, name)
+					t.Logf("%s: capability %q found by regex but not treesitter (likely a commented-out entry)", path, name)
 					continue
 				}
 				assertCapabilityParity(t, path, name, rc, tc)
 			}
 			for name := range tsByName {
 				if _, ok := regexByName[name]; !ok {
-					t.Logf("%s: capability %q found by treesitter but not regex (likely a double-quoted key — KNOWN_DIVERGENCES.md #4)", path, name)
+					t.Logf("%s: capability %q found by treesitter but not regex (likely a double-quoted key)", path, name)
 				}
 			}
 			return nil
@@ -203,14 +206,14 @@ func TestParseAccessPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	}
 }
 
-// TestGetCapabilityNames_NilInputDoesNotPanic verifies that GetCapabilityNames handles a nil
-// *CapabilitiesExtraction without panicking.
+// TestGetCapabilityNames_NilInputDoesNotPanic verifies that a nil extraction yields nil.
 func TestGetCapabilityNames_NilInputDoesNotPanic(t *testing.T) {
 	if got := GetCapabilityNames(nil); got != nil {
 		t.Errorf("expected nil, got %v", got)
 	}
 }
 
+// TestGetCapabilityNames_Sorted verifies that names are returned in sorted order.
 func TestGetCapabilityNames_Sorted(t *testing.T) {
 	names := GetCapabilityNames(&CapabilitiesExtraction{Capabilities: []Capability{
 		{Name: "local/test:z"}, {Name: "local/test:a"},

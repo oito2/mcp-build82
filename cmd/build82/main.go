@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -69,8 +69,12 @@ Flags:
   --version              Print the version and exit
 `
 
-// serveFlags holds the parsed server-mode flags. Parsed with a manual argv walk rather than the
-// flag package — deliberate, since flag's automatic -h/--help handling would conflict with this
+// usageExitCode is the process exit status for command-line usage errors: unknown flags, missing
+// flag values, server-only flags without --http, and unexpected arguments.
+const usageExitCode = 2
+
+// serveFlags holds the parsed server-mode flags. They are parsed with a manual argv walk rather
+// than the flag package because flag's automatic -h/--help handling would conflict with this
 // command's own subcommand-aware help text.
 type serveFlags struct {
 	http         bool
@@ -81,79 +85,103 @@ type serveFlags struct {
 	allowedHosts []string
 }
 
-func parseServeFlags(args []string) serveFlags {
+// flagValue returns the value following the flag at args[i] and the index of that value. It
+// returns an error when the flag is the last argument.
+func flagValue(args []string, i int) (string, int, error) {
+	if i+1 >= len(args) {
+		return "", i, fmt.Errorf("%s requires a value", args[i])
+	}
+	return args[i+1], i + 1, nil
+}
+
+// parseServeFlags parses the server-mode flags in `args` (--http, --port, --host, --token,
+// --allowed-host) and returns them, with defaults of port 3000 and host 127.0.0.1. It returns an
+// error for an unknown argument, a flag that is missing its value, or a server-only flag (--port,
+// --host, --token, --allowed-host) used without --http. An out-of-range or non-numeric port
+// produces a warning on stderr and keeps the default. --help/-h and --version print their output
+// and terminate the process with status 0.
+func parseServeFlags(args []string) (serveFlags, error) {
 	f := serveFlags{port: 3000, host: "127.0.0.1"}
+	var serverOnly []string
 	for i := 0; i < len(args); i++ {
+		var err error
 		switch args[i] {
 		case "--http":
 			f.http = true
 		case "--port":
-			if i+1 < len(args) {
-				i++
-				if n, err := strconv.Atoi(args[i]); err == nil && n > 0 && n < 65536 {
-					f.port = n
-				} else {
-					fmt.Fprintf(os.Stderr, "warning: invalid --port value %q, keeping %d\n", args[i], f.port)
-				}
+			serverOnly = append(serverOnly, args[i])
+			var v string
+			if v, i, err = flagValue(args, i); err != nil {
+				return f, err
+			}
+			if n, convErr := strconv.Atoi(v); convErr == nil && n > 0 && n < 65536 {
+				f.port = n
 			} else {
-				fmt.Fprintln(os.Stderr, "warning: --port requires a value, ignoring")
+				fmt.Fprintf(os.Stderr, "warning: invalid --port value %q, keeping %d\n", v, f.port)
 			}
 		case "--host":
-			if i+1 < len(args) {
-				i++
-				f.host = args[i]
-			} else {
-				fmt.Fprintln(os.Stderr, "warning: --host requires a value, ignoring")
+			serverOnly = append(serverOnly, args[i])
+			if f.host, i, err = flagValue(args, i); err != nil {
+				return f, err
 			}
 		case "--token":
-			if i+1 < len(args) {
-				i++
-				f.token = args[i]
-				f.tokenSet = true
-			} else {
-				fmt.Fprintln(os.Stderr, "warning: --token requires a value, ignoring")
+			serverOnly = append(serverOnly, args[i])
+			if f.token, i, err = flagValue(args, i); err != nil {
+				return f, err
 			}
+			f.tokenSet = true
 		case "--allowed-host":
-			if i+1 < len(args) {
-				i++
-				f.allowedHosts = append(f.allowedHosts, args[i])
-			} else {
-				fmt.Fprintln(os.Stderr, "warning: --allowed-host requires a value, ignoring")
+			serverOnly = append(serverOnly, args[i])
+			var v string
+			if v, i, err = flagValue(args, i); err != nil {
+				return f, err
 			}
+			f.allowedHosts = append(f.allowedHosts, v)
 		case "--help", "-h":
 			fmt.Print(helpText)
 			os.Exit(0)
 		case "--version":
 			fmt.Println(version.Current)
 			os.Exit(0)
+		default:
+			return f, fmt.Errorf("unknown argument %q", args[i])
 		}
 	}
-	return f
+	if !f.http && len(serverOnly) > 0 {
+		return f, fmt.Errorf("%s only applies with --http", serverOnly[0])
+	}
+	return f, nil
 }
 
-// parseSelfUpdateFlags parses `build82 self-update`'s own flags — kept separate from
-// serveFlags since they're a disjoint set with no overlap.
-func parseSelfUpdateFlags(args []string) selfupdate.RunOptions {
+// parseSelfUpdateFlags parses the flags of `build82 self-update` (--check, --yes/-y, --channel)
+// from `args` and returns them as run options, defaulting the channel to "stable". It returns an
+// error for an unknown argument or a --channel without a value. --rollback is accepted and
+// ignored here, because main handles it before calling this function. It is separate from
+// parseServeFlags because the two flag sets are disjoint.
+func parseSelfUpdateFlags(args []string) (selfupdate.RunOptions, error) {
 	opts := selfupdate.RunOptions{Channel: "stable"}
 	for i := 0; i < len(args); i++ {
+		var err error
 		switch args[i] {
 		case "--check":
 			opts.Check = true
 		case "--yes", "-y":
 			opts.Yes = true
+		case "--rollback":
 		case "--channel":
-			if i+1 < len(args) {
-				i++
-				opts.Channel = args[i]
+			if opts.Channel, i, err = flagValue(args, i); err != nil {
+				return opts, err
 			}
+		default:
+			return opts, fmt.Errorf("unknown argument %q for self-update", args[i])
 		}
 	}
-	return opts
+	return opts, nil
 }
 
-// hasFlag reports whether flag appears verbatim among args. Used to detect --rollback ahead of
-// parseSelfUpdateFlags's normal Check/Yes/Channel parsing — a rollback is a distinct operation
-// from the rest of self-update and doesn't go through RunOptions/selfupdate.Run at all.
+// hasFlag reports whether `flag` appears verbatim among `args`. It detects --rollback before
+// the regular self-update flag parsing, because a rollback is a distinct operation that does not
+// go through selfupdate.Run.
 func hasFlag(args []string, flag string) bool {
 	for _, a := range args {
 		if a == flag {
@@ -163,23 +191,50 @@ func hasFlag(args []string, flag string) bool {
 	return false
 }
 
-// parseUninstallArgs parses `build82 uninstall [target] [--purge]` — the first non-flag
-// argument is the target ID; --purge may appear anywhere.
-func parseUninstallArgs(args []string) (target string, purge bool) {
-	for _, a := range args {
-		switch {
-		case a == "--purge":
-			purge = true
-		case target == "" && !strings.HasPrefix(a, "-"):
-			target = a
-		}
-	}
-	return target, purge
+// parseInstallArgs parses the arguments of `build82 install [target]`. It returns the optional
+// target (empty when absent) and an error for any flag or a second positional argument.
+func parseInstallArgs(args []string) (string, error) {
+	target, _, err := parseTargetArgs("install", args, false)
+	return target, err
 }
 
-// exitOnError prints err to stderr in this command's standard "Error: ..." shape and exits with
-// status 1, unless err is nil (a no-op then). Shared by the install/self-update/uninstall
-// subcommands.
+// parseUninstallArgs parses the arguments of `build82 uninstall [target] [--purge]`. It returns
+// the target (empty when absent) and whether --purge, which may appear anywhere, was given. It
+// returns an error for an unknown flag or a second positional argument.
+func parseUninstallArgs(args []string) (target string, purge bool, err error) {
+	return parseTargetArgs("uninstall", args, true)
+}
+
+// parseTargetArgs implements the shared argument walk of install and uninstall: at most one
+// positional target, plus --purge when `allowPurge` is set.
+func parseTargetArgs(cmd string, args []string, allowPurge bool) (target string, purge bool, err error) {
+	for _, a := range args {
+		switch {
+		case allowPurge && a == "--purge":
+			purge = true
+		case strings.HasPrefix(a, "-"):
+			return "", false, fmt.Errorf("unknown argument %q for %s", a, cmd)
+		case target == "":
+			target = a
+		default:
+			return "", false, fmt.Errorf("unexpected argument %q for %s", a, cmd)
+		}
+	}
+	return target, purge, nil
+}
+
+// exitUsage prints `err` to stderr as a usage error with a pointer to --help and exits the
+// process with status usageExitCode. It does nothing when `err` is nil.
+func exitUsage(err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Error: %v\nRun 'build82 --help' for usage.\n", err)
+	os.Exit(usageExitCode)
+}
+
+// exitOnError prints `err` to stderr as "Error: ..." and exits the process with status 1. It does
+// nothing when `err` is nil. It is shared by the install, self-update and uninstall subcommands.
 func exitOnError(err error) {
 	if err == nil {
 		return
@@ -188,6 +243,11 @@ func exitOnError(err error) {
 	os.Exit(1)
 }
 
+// main dispatches on the first argument: no arguments or server flags start the MCP server
+// (stdio by default, Streamable HTTP with --http), the install, self-update and uninstall
+// subcommands run their own flows, --help and --version print and return, and any other bareword
+// is rejected as an unknown command with exit status 1. Unknown flags, missing flag values and
+// unexpected arguments are usage errors that exit with status 2.
 func main() {
 	if len(os.Args) < 2 {
 		runServe(nil)
@@ -198,20 +258,23 @@ func main() {
 	case "--http":
 		runServe(os.Args[1:])
 	case "install":
-		var target string
-		if len(os.Args) > 2 {
-			target = os.Args[2]
-		}
+		target, err := parseInstallArgs(os.Args[2:])
+		exitUsage(err)
 		exitOnError(installer.Run(target))
 	case "self-update":
 		args := os.Args[2:]
 		if hasFlag(args, "--rollback") {
+			_, err := parseSelfUpdateFlags(args)
+			exitUsage(err)
 			runRollback()
 		} else {
-			exitOnError(selfupdate.Run(parseSelfUpdateFlags(args)))
+			opts, err := parseSelfUpdateFlags(args)
+			exitUsage(err)
+			exitOnError(selfupdate.Run(opts))
 		}
 	case "uninstall":
-		target, purge := parseUninstallArgs(os.Args[2:])
+		target, purge, err := parseUninstallArgs(os.Args[2:])
+		exitUsage(err)
 		exitOnError(installer.Uninstall(target, purge))
 	case "--help", "-h":
 		fmt.Print(helpText)
@@ -219,8 +282,8 @@ func main() {
 		fmt.Println(version.Current)
 	default:
 		if strings.HasPrefix(os.Args[1], "-") {
-			// Unrecognized flag is treated as server flags (e.g. bare `--port 8080` isn't valid
-			// without --http, but keep parsing permissive/consistent with the --http-gated design).
+			// Any other flag is parsed as a server flag; unknown flags and server-only flags
+			// without --http are usage errors.
 			runServe(os.Args[1:])
 			return
 		}
@@ -233,10 +296,10 @@ func main() {
 	}
 }
 
-// runRollback implements `build82 self-update --rollback`: it resolves the currently running
-// binary's path the same way self-update itself locates currentBinaryPath (via binpath.Resolve)
-// and hands it to selfupdate.Rollback, which promotes the ".bak" backup left by a previous
-// self-update back into place.
+// runRollback implements `build82 self-update --rollback`. It resolves the running binary's path
+// with binpath.Resolve and passes it to selfupdate.Rollback, which restores the ".bak" backup
+// left by a self-update. Failures are reported through exitOnError; success prints a
+// confirmation line.
 func runRollback() {
 	binaryPath, err := binpath.Resolve()
 	if err != nil {
@@ -250,8 +313,11 @@ func runRollback() {
 	fmt.Printf("✅ Rolled back to previous version at %s.\n", binaryPath)
 }
 
+// runServe parses the server flags in `args` and runs the MCP server over Streamable HTTP when
+// --http is set, or over stdio otherwise. It returns only when the server stops.
 func runServe(args []string) {
-	flags := parseServeFlags(args)
+	flags, err := parseServeFlags(args)
+	exitUsage(err)
 	if !flags.http {
 		runStdio()
 		return
@@ -259,9 +325,10 @@ func runServe(args []string) {
 	runHTTP(flags)
 }
 
+// runStdio serves MCP over stdin/stdout until the client disconnects, exiting with status 1 on a
+// fatal error. The startup line goes to stderr, because stdout carries the protocol stream, and
+// is printed before the blocking Run call.
 func runStdio() {
-	// Server.Run blocks until the client disconnects or the context is cancelled, so the startup
-	// line is printed before calling it.
 	fmt.Fprintln(os.Stderr, "build82 server running on stdio")
 
 	srv := server.NewServer()
@@ -271,22 +338,18 @@ func runStdio() {
 	}
 }
 
-// buildTokenEnvVar is the environment variable fallback for --http's Bearer token — read
-// only when --token was not passed at all on the CLI, so an explicit --token (including an
-// explicit empty one, caught by resolveToken below) always wins over the environment. Passing the
-// token this way instead of on the command line avoids it being visible to other local processes
-// via `ps`/`/proc/<pid>/cmdline`/shell history.
+// buildTokenEnvVar names the environment variable that supplies the --http Bearer token. It is
+// read only when --token was not passed on the command line, so an explicit --token (even an
+// empty one, which resolveToken rejects) always wins. Using the environment keeps the token out
+// of `ps` output, /proc/<pid>/cmdline and shell history.
 const buildTokenEnvVar = "BUILD82_TOKEN"
 
-// resolveToken determines the effective --http Bearer token from the parsed CLI flags and the
-// BUILD82_TOKEN environment variable, while distinguishing "no token configured at all"
-// (auth intentionally disabled) from "a token source was used but resolved to an empty string"
-// — the latter is treated as a configuration error rather than silently disabling auth,
-// since it's most often a shell interpolating an empty variable into `--token "$TOKEN"` or a typo'd
-// `export BUILD82_TOKEN=`.
-//
-// The only way to legitimately run with authentication disabled is to omit --token from the CLI
-// entirely AND leave BUILD82_TOKEN unset (not merely empty) in the environment.
+// resolveToken returns the effective --http Bearer token from `flags` and the BUILD82_TOKEN
+// environment variable, with the command-line value taking precedence. It returns an empty token
+// and a nil error when neither source is present, which disables authentication. It returns an
+// error when a source is present but empty, so that an empty shell variable (for example
+// `--token "$TOKEN"`) cannot silently turn authentication off. Authentication is therefore
+// disabled only when --token is omitted and BUILD82_TOKEN is unset.
 func resolveToken(flags serveFlags) (string, error) {
 	if flags.tokenSet {
 		if flags.token == "" {
@@ -303,10 +366,13 @@ func resolveToken(flags serveFlags) (string, error) {
 	return "", nil
 }
 
-// shutdownTimeout bounds how long graceful shutdown waits for in-flight connections —
-// notably long-lived SSE/Streamable HTTP sessions — to finish before forcing the listener closed.
+// shutdownTimeout bounds how long graceful shutdown waits for in-flight connections, notably
+// long-lived SSE and Streamable HTTP sessions, before the listener is forced closed.
 const shutdownTimeout = 10 * time.Second
 
+// runHTTP starts the Streamable HTTP and SSE server from `flags` and blocks until SIGINT or
+// SIGTERM, then shuts it down gracefully within shutdownTimeout. It exits with status 1 on an
+// invalid token configuration or when the server cannot start.
 func runHTTP(flags serveFlags) {
 	token, err := resolveToken(flags)
 	if err != nil {
@@ -328,11 +394,9 @@ func runHTTP(flags serveFlags) {
 
 	<-ctx.Done()
 	fmt.Fprintln(os.Stderr, "[build82] shutting down...")
-	// net/http.Server.Shutdown blocks until all connections are idle, and the SSE/Streamable
-	// HTTP transport keeps long-lived connections open — an idle session left connected could hang
-	// Shutdown (and thus the whole process's exit on SIGINT/SIGTERM) indefinitely. Bound it with a
-	// timeout so the process always terminates, forcibly closing any still-open connections once it
-	// expires.
+	// Shutdown waits for every connection to become idle, and long-lived SSE and Streamable
+	// HTTP sessions can stay open indefinitely. The timeout guarantees the process exits, closing
+	// any remaining connections once it expires.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := cleanup(shutdownCtx); err != nil {

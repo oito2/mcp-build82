@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@ import (
 	"testing"
 )
 
+// TestExtractSubplugins_ModernJson verifies that types and paths are read from db/subplugins.json, sorted by type.
 func TestExtractSubplugins_ModernJson(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -43,8 +44,8 @@ func TestExtractSubplugins_ModernJson(t *testing.T) {
 	}
 }
 
-// TestExtractSubplugins_MergesSubplugintypesKey confirms the "subplugintypes" key (used alongside
-// the older "plugintypes" key) is also read.
+// TestExtractSubplugins_MergesSubplugintypesKey verifies that the "subplugintypes" key is merged
+// with the "plugintypes" key.
 func TestExtractSubplugins_MergesSubplugintypesKey(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -59,6 +60,7 @@ func TestExtractSubplugins_MergesSubplugintypesKey(t *testing.T) {
 	}
 }
 
+// TestExtractSubplugins_LegacyPhpFallback verifies that db/subplugins.php is read when db/subplugins.json is absent.
 func TestExtractSubplugins_LegacyPhpFallback(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -74,8 +76,8 @@ $subplugins = array(
 	}
 }
 
-// TestExtractSubplugins_JsonTakesPrecedenceOverLegacy confirms subplugins.json is authoritative
-// when both files are present.
+// TestExtractSubplugins_JsonTakesPrecedenceOverLegacy verifies that subplugins.json wins when both
+// files are present.
 func TestExtractSubplugins_JsonTakesPrecedenceOverLegacy(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
@@ -90,9 +92,25 @@ $subplugins = array('fromphp' => 'mod/workshop/php');
 	}
 }
 
+// TestExtractSubplugins_NoDeclarationReturnsNil verifies that a plugin without declarations yields nil.
 func TestExtractSubplugins_NoDeclarationReturnsNil(t *testing.T) {
 	dir := t.TempDir()
 	if got := ExtractSubplugins(dir); got != nil {
 		t.Errorf("expected nil for a plugin with no subplugin declaration, got %+v", got)
+	}
+}
+
+// TestExtractSubplugins_InvalidJsonDoesNotFallBack verifies that an existing but invalid
+// db/subplugins.json yields no subplugins even when db/subplugins.php is present.
+func TestExtractSubplugins_InvalidJsonDoesNotFallBack(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdirAll(t, filepath.Join(dir, "db"))
+	mustWriteFile(t, filepath.Join(dir, "db", "subplugins.json"), `{ not json`)
+	mustWriteFile(t, filepath.Join(dir, "db", "subplugins.php"), `<?php
+$subplugins = array('workshopform' => 'mod/workshop/form');
+`)
+
+	if got := ExtractSubplugins(dir); got != nil {
+		t.Errorf("expected nil for invalid JSON, got %+v", got)
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -35,6 +35,7 @@ $tasks = [
     ],
 ];`
 
+// writeTasksPhp writes content to a temporary db/tasks.php and returns its path.
 func writeTasksPhp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -45,6 +46,7 @@ func writeTasksPhp(t *testing.T, content string) string {
 	return path
 }
 
+// TestParseTasksPhp_MatchesRegexBackendFixture verifies the parsed tasks for a well-formed tasks file match the regex backend's output.
 func TestParseTasksPhp_MatchesRegexBackendFixture(t *testing.T) {
 	path := writeTasksPhp(t, tasksFixtureWellFormed)
 	result := ParseTasksPhp(path)
@@ -63,6 +65,7 @@ func TestParseTasksPhp_MatchesRegexBackendFixture(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_MissingClassnameSkipsEntry verifies an entry without classname is dropped.
 func TestParseTasksPhp_MissingClassnameSkipsEntry(t *testing.T) {
 	path := writeTasksPhp(t, "<?php\n$tasks = [\n    ['minute' => '5'],\n];")
 	result := ParseTasksPhp(path)
@@ -71,6 +74,7 @@ func TestParseTasksPhp_MissingClassnameSkipsEntry(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_CronFieldsDefaultToAsterisk verifies omitted cron fields default to "*".
 func TestParseTasksPhp_CronFieldsDefaultToAsterisk(t *testing.T) {
 	path := writeTasksPhp(t, "<?php\n$tasks = [\n    ['classname' => '\\\\local_test\\\\task\\\\bare_task'],\n];")
 	result := ParseTasksPhp(path)
@@ -83,6 +87,7 @@ func TestParseTasksPhp_CronFieldsDefaultToAsterisk(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_EmptyArray verifies a file without a $tasks array yields an empty, non-nil task list.
 func TestParseTasksPhp_EmptyArray(t *testing.T) {
 	path := writeTasksPhp(t, "<?php\n$tasks = [];\n")
 	result := ParseTasksPhp(path)
@@ -91,6 +96,7 @@ func TestParseTasksPhp_EmptyArray(t *testing.T) {
 	}
 }
 
+// TestParseTasksPhp_MissingFile verifies a nonexistent file yields nil.
 func TestParseTasksPhp_MissingFile(t *testing.T) {
 	if ParseTasksPhp("/nonexistent/db/tasks.php") != nil {
 		t.Error("expected nil for missing file")

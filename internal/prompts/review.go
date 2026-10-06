@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@ import (
 // review_plugin prompt.
 type ReviewFocus string
 
+// Accepted values of the review_plugin "focus" argument.
 const (
 	FocusAll         ReviewFocus = "all"
 	FocusSecurity    ReviewFocus = "security"
@@ -52,6 +53,8 @@ func RegisterReviewPrompt(server *mcp.Server) {
 	}, withRecoverPrompt(handleReviewPrompt))
 }
 
+// focusCriteria maps each single-area ReviewFocus to its Markdown review checklist. FocusAll has
+// no entry of its own; getFocusCriteria combines the others.
 var focusCriteria = map[ReviewFocus]string{
 	FocusSecurity: "## Security\n\n" +
 		"- **Authentication & Authorization**: `require_login()` called before any protected page; " +
@@ -114,6 +117,8 @@ func parseFocus(raw string) (ReviewFocus, error) {
 	}
 }
 
+// getFocusCriteria returns the review checklist for `focus`: the concatenation of every area's
+// checklist for FocusAll, or the single matching checklist otherwise.
 func getFocusCriteria(focus ReviewFocus) string {
 	if focus == FocusAll {
 		var b strings.Builder
@@ -126,6 +131,8 @@ func getFocusCriteria(focus ReviewFocus) string {
 	return focusCriteria[focus]
 }
 
+// reviewFewShotUser and reviewFewShotAssistant form the few-shot example exchange that precedes
+// the real review request, showing the expected issue-list format.
 const reviewFewShotUser = "Review local_demo for security issues. Here's the relevant code:\n\n```php\n" +
 	"function local_demo_view() {\n    $id = $_GET['id'];\n    $record = $DB->get_record_sql(\"SELECT * FROM {local_demo_records} WHERE id = $id\");\n    echo $record->name;\n}\n```"
 
@@ -145,6 +152,11 @@ const reviewFewShotAssistant = "## Review: local_demo (focus: security)\n\n" +
 	"as written. Top 3 priorities: (1) add auth/capability checks, (2) parameterise the query, (3) escape " +
 	"output. No positive patterns to note in this snippet."
 
+// handleReviewPrompt renders the review_plugin prompt from the required "plugin" argument and the
+// optional "focus" and "files" arguments. The request contains plugin metadata, the generated
+// plugin context and development rules when available, the review criteria for the chosen focus,
+// and the output format. It returns an invalid-params error when "plugin" is missing or "focus"
+// is not an accepted value.
 func handleReviewPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	args := req.Params.Arguments
 	if err := requireArgs(args, "plugin"); err != nil {

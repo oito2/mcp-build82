@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,11 +23,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// mustMkdirAll creates `path` and any missing parents, failing the test on error.
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -35,6 +37,7 @@ func mustMkdirAll(t *testing.T, path string) {
 	}
 }
 
+// mustWriteFile writes `content` to `path`, failing the test on error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -42,10 +45,9 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
-// TestResolvePluginForPrompt_PathTraversalIsRejected verifies that resolvePluginForPrompt (shared
-// by review_plugin/debug_plugin) checks moodletype.IsWithinMoodle on the client-controlled
-// "plugin" argument: an absolute path outside the Moodle root, even with a real version.php there,
-// must not have its component/version metadata or file content leak into the prompt response.
+// TestResolvePluginForPrompt_PathTraversalIsRejected verifies that an absolute plugin path outside
+// the Moodle root, even with a real version.php there, leaks neither its metadata nor its file
+// content through resolvePluginForPrompt.
 func TestResolvePluginForPrompt_PathTraversalIsRejected(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -65,9 +67,8 @@ func TestResolvePluginForPrompt_PathTraversalIsRejected(t *testing.T) {
 	}
 }
 
-// TestResolvePluginForPrompt_WithinRootResolvesNormally confirms the IsWithinMoodle check still accepts
-// the legitimate case: a plugin identifier that genuinely resolves within the Moodle root
-// must still have its metadata detected and its files readable.
+// TestResolvePluginForPrompt_WithinRootResolvesNormally verifies that a plugin identifier resolving
+// inside the Moodle root has its metadata detected and its files readable.
 func TestResolvePluginForPrompt_WithinRootResolvesNormally(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -88,12 +89,13 @@ func TestResolvePluginForPrompt_WithinRootResolvesNormally(t *testing.T) {
 	}
 }
 
+// promptReq builds a GetPromptRequest carrying the given prompt arguments.
 func promptReq(args map[string]string) *mcp.GetPromptRequest {
 	return &mcp.GetPromptRequest{Params: &mcp.GetPromptParams{Arguments: args}}
 }
 
-// TestRequireArgs verifies requireArgs itself: a client omitting a required argument must get a
-// clear error instead of a prompt silently rendered from empty strings.
+// TestRequireArgs verifies that requireArgs errors on a missing or blank required argument and
+// accepts a complete set.
 func TestRequireArgs(t *testing.T) {
 	if err := requireArgs(map[string]string{"a": "x", "b": "y"}, "a", "b"); err != nil {
 		t.Errorf("expected no error when all required args are present, got: %v", err)
@@ -106,28 +108,32 @@ func TestRequireArgs(t *testing.T) {
 	}
 }
 
+// TestHandleScaffoldPrompt_MissingRequiredArgsIsError verifies scaffold_plugin rejects a request
+// missing required arguments.
 func TestHandleScaffoldPrompt_MissingRequiredArgsIsError(t *testing.T) {
 	if _, err := handleScaffoldPrompt(context.Background(), promptReq(map[string]string{"name": "demo"})); err == nil {
 		t.Error("expected an error when 'type'/'description' are missing")
 	}
 }
 
+// TestHandleReviewPrompt_MissingRequiredArgIsError verifies review_plugin rejects a request
+// without "plugin".
 func TestHandleReviewPrompt_MissingRequiredArgIsError(t *testing.T) {
 	if _, err := handleReviewPrompt(context.Background(), promptReq(map[string]string{})); err == nil {
 		t.Error("expected an error when 'plugin' is missing")
 	}
 }
 
+// TestHandleDebugPrompt_MissingRequiredArgsIsError verifies debug_plugin rejects a request
+// without "error".
 func TestHandleDebugPrompt_MissingRequiredArgsIsError(t *testing.T) {
 	if _, err := handleDebugPrompt(context.Background(), promptReq(map[string]string{"plugin": "local_demo"})); err == nil {
 		t.Error("expected an error when 'error' is missing")
 	}
 }
 
-// TestWithRecoverPrompt_ConvertsPanicToErrorResult verifies that withRecoverPrompt converts a
-// panic inside a prompt handler (e.g. resolvePluginForPrompt/extractors.DetectPlugin hitting a
-// malformed plugin directory) into a normal error return instead of letting the panic escape and
-// crash the process.
+// TestWithRecoverPrompt_ConvertsPanicToErrorResult verifies that a panic inside a wrapped handler
+// is returned as an error with a nil result and the panic message preserved.
 func TestWithRecoverPrompt_ConvertsPanicToErrorResult(t *testing.T) {
 	panicky := func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		panic("boom: simulated prompt handler failure")
@@ -146,8 +152,8 @@ func TestWithRecoverPrompt_ConvertsPanicToErrorResult(t *testing.T) {
 	}
 }
 
-// TestWithRecoverPrompt_PassesThroughNormalResults confirms the wrapper is transparent when the
-// handler doesn't panic — it must return exactly what the handler returned, not swallow or alter it.
+// TestWithRecoverPrompt_PassesThroughNormalResults verifies the wrapper returns a non-panicking
+// handler's result unchanged.
 func TestWithRecoverPrompt_PassesThroughNormalResults(t *testing.T) {
 	normal := func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		return &mcp.GetPromptResult{
@@ -193,6 +199,8 @@ func connectReviewPrompt(t *testing.T) (context.Context, *mcp.ClientSession) {
 	return ctx, session
 }
 
+// TestReviewPrompt_UnknownFocusIsInvalidParamsError verifies an unknown focus yields a jsonrpc
+// invalid-params error listing the accepted values.
 func TestReviewPrompt_UnknownFocusIsInvalidParamsError(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 	ctx, session := connectReviewPrompt(t)
@@ -215,6 +223,8 @@ func TestReviewPrompt_UnknownFocusIsInvalidParamsError(t *testing.T) {
 	}
 }
 
+// TestReviewPrompt_EveryAcceptedFocusRendersCriteria verifies every accepted focus value renders
+// a non-empty criteria section.
 func TestReviewPrompt_EveryAcceptedFocusRendersCriteria(t *testing.T) {
 	_, pluginPath := setupPromptPlugin(t)
 	ctx, session := connectReviewPrompt(t)
@@ -232,5 +242,16 @@ func TestReviewPrompt_EveryAcceptedFocusRendersCriteria(t *testing.T) {
 		if !strings.Contains(text, "### Review Criteria\n\n## ") {
 			t.Errorf("focus %q: expected a non-empty review criteria section, got:\n%s", focus, text)
 		}
+	}
+}
+
+func TestTruncateArg_RuneSafe(t *testing.T) {
+	in := strings.Repeat("a", maxPromptArgLen-1) + "é" + "tail"
+	got := truncateArg(in)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateArg produced invalid UTF-8")
+	}
+	if want := strings.Repeat("a", maxPromptArgLen-1) + "\n...(truncated)"; got != want {
+		t.Errorf("truncateArg tail = %q", got[len(got)-30:])
 	}
 }

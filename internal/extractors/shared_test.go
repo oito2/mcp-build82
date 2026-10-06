@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,15 +21,12 @@ import (
 	"testing"
 )
 
-// TestReadFileCapped_OversizedFileReturnsErrorWithoutReading verifies that readFileCapped
-// rejects a file bigger than maxReadableFileSize via os.Stat before ever reading its content, so
-// an abnormally large .php file cannot force unbounded allocation.
+// TestReadFileCapped_OversizedFileReturnsErrorWithoutReading verifies that a file larger than
+// maxReadableFileSize is rejected from its stat size, before its content is read.
 func TestReadFileCapped_OversizedFileReturnsErrorWithoutReading(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "huge.php")
-	// Use a sparse file so the test doesn't actually need to allocate/write >8 MiB of real data —
-	// os.Stat still reports the correct (post-truncate) size, which is all readFileCapped consults
-	// before deciding whether to read.
+	// A sparse file avoids writing more than 8 MiB; os.Stat still reports its truncated size.
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +43,7 @@ func TestReadFileCapped_OversizedFileReturnsErrorWithoutReading(t *testing.T) {
 	}
 }
 
-// TestReadFileCapped_NormalFileReadsSuccessfully confirms the cap doesn't get in the way of an
-// ordinary, well-within-limit file.
+// TestReadFileCapped_NormalFileReadsSuccessfully verifies that a file within the limit is read.
 func TestReadFileCapped_NormalFileReadsSuccessfully(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "normal.php")
@@ -65,8 +61,7 @@ func TestReadFileCapped_NormalFileReadsSuccessfully(t *testing.T) {
 	}
 }
 
-// TestReadFileCapped_AtSizeLimitStillReads confirms the cap doesn't reject a file at exactly the
-// boundary.
+// TestReadFileCapped_AtSizeLimitStillReads verifies that a file of exactly the limit is read.
 func TestReadFileCapped_AtSizeLimitStillReads(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "atlimit.php")
@@ -83,8 +78,7 @@ func TestReadFileCapped_AtSizeLimitStillReads(t *testing.T) {
 	}
 }
 
-// TestReadFileCapped_NonexistentReturnsError confirms readFileCapped surfaces a stat error the
-// same way os.ReadFile would surface its own error for a missing file.
+// TestReadFileCapped_NonexistentReturnsError verifies that a missing file yields an error.
 func TestReadFileCapped_NonexistentReturnsError(t *testing.T) {
 	if _, err := readFileCapped(filepath.Join(t.TempDir(), "nonexistent.php")); err == nil {
 		t.Error("expected an error for a nonexistent file")

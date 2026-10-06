@@ -26,20 +26,20 @@ Argument resolution for the first argument:
 | :--- | :--- |
 | None | stdio server. |
 | `--http`, `install`, `uninstall`, `self-update`, `--help`, `-h`, `--version` | As listed above. |
-| Any other value starting with `-` | Treated as server flags (see below). Without `--http` among the arguments, the stdio server starts and every server flag is ignored silently. |
+| Any other value starting with `-` | Treated as server flags (see below). An unknown flag, or a server-only flag without `--http` among the arguments, is a usage error (exit code 2). |
 | Any other value | `Error: unknown command "<value>"`, followed by the help text, on stderr. Exit code 1. |
 
 ## Server flags
 
-Parsed by a manual walk of the arguments, in any order (`build82 --port 8080 --http` works). Unrecognised arguments are ignored. `--help`, `-h` and `--version` are also honoured inside this walk (print and exit 0).
+Parsed by a manual walk of the arguments, in any order (`build82 --port 8080 --http` works). An unrecognised argument, a flag missing its value, or a server-only flag (`--port`, `--host`, `--token`, `--allowed-host`) without `--http` is a usage error: `Error: <message>` and `Run 'build82 --help' for usage.` on stderr, exit code 2. `--help`, `-h` and `--version` are also honoured inside this walk (print and exit 0).
 
 | Flag | Type | Default | Applies to | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--http` | bool | off | — | Selects the HTTP transport. Without it, all other server flags have no effect. |
-| `--port <n>` | integer 1–65535 | `3000` | `--http` | TCP port. An invalid value prints `warning: invalid --port value "<v>", keeping <n>` to stderr and keeps the previous value. A missing value prints `warning: --port requires a value, ignoring`. The next argument is always consumed as the value. |
-| `--host <host>` | string | `127.0.0.1` | `--http` | Bind address. Also added to the Host allow-list. Missing value: warning, ignored. |
-| `--token <token>` | string | none (auth disabled) | `--http` | Bearer token required on `/mcp` and `/sse`. Last occurrence wins. Missing value: warning, ignored. |
-| `--allowed-host <host>` | string, repeatable | none | `--http` | Extra value accepted in the `Host` header. Missing value: warning, ignored. |
+| `--http` | bool | off | — | Selects the HTTP transport. Required by every other server flag. |
+| `--port <n>` | integer 1–65535 | `3000` | `--http` | TCP port. An invalid value prints `warning: invalid --port value "<v>", keeping <n>` to stderr and keeps the previous value. A missing value is a usage error. The next argument is always consumed as the value. |
+| `--host <host>` | string | `127.0.0.1` | `--http` | Bind address. Also added to the Host allow-list. Missing value: usage error. |
+| `--token <token>` | string | none (auth disabled) | `--http` | Bearer token required on `/mcp` and `/sse`. Last occurrence wins. Missing value: usage error. |
+| `--allowed-host <host>` | string, repeatable | none | `--http` | Extra value accepted in the `Host` header. Missing value: usage error. |
 
 ### Token resolution
 
@@ -64,12 +64,12 @@ build82 install [target]
 
 | Item | Value |
 | :--- | :--- |
-| Flags | None. `argv[2]` is taken as the target, whatever its value. |
+| Flags | None. At most one positional target; any flag or second argument is a usage error (exit 2). |
 | `target` | `claude` (Claude Code), `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`. Omitted: all detected tools. |
 | Prompts | Moodle root path (offers the current directory when it is a Moodle root; validated as a Moodle root), and `Install build82 into all N detected tool(s)? [y/N]` when no target is given. |
 | Writes | The `build82` entry in each tool's configuration, with `BUILD82_MOODLE_PATH` in its environment and the resolved absolute path of the running binary as the command. `claude` runs `claude mcp add --scope user build82 -e BUILD82_MOODLE_PATH=<path> -- <binary>`; `codex` runs `codex mcp add build82 --env BUILD82_MOODLE_PATH=<path> -- <binary>`. For both, an existing registration reported by `<tool> mcp get build82` is removed first (for `claude`: every `user` and `local` registration; a `project` registration in `.mcp.json` is left unchanged and reported with a warning, see [Claude Code](../guides/clients/claude-code.md)). The other targets merge the entry into their JSON file (see [client guides](../guides/clients/claude-code.md)); `cline` writes every Cline settings file that exists (the CLI one under `CLINE_DATA_DIR` when set), and a file with comments or trailing commas is never rewritten (the command prints the snippet to paste by hand and fails). |
 | Output | `<tool>... configured.` for a new registration, `<tool>... updated.` when an existing one was replaced, `<tool>... failed: <error>` on error; each warning follows on its own line as `  Warning: <text>`. |
-| Exit code | 0 when finished, including "No supported AI tools detected", `Skipped: <tool> not detected.` and `Skipped: <tool> (<reason>).` for a tool unavailable on the current OS; 1 on an unknown target or on an error while installing into an explicit target. Without a target, a per-tool failure is printed (`<tool>... failed: <error>`) and the exit code stays 0. |
+| Exit code | 0 when finished, including "No supported AI tools detected", `Skipped: <tool> not detected.` and `Skipped: <tool> (<reason>).` for a tool unavailable on the current OS; 1 on an unknown target, on an error while installing into an explicit target, or when stdin ends before a valid Moodle root is given (`no Moodle path provided (stdin closed)`). Without a target, a per-tool failure is printed (`<tool>... failed: <error>`) and the exit code stays 0. |
 
 ## `uninstall`
 
@@ -95,7 +95,7 @@ build82 self-update [--check] [--channel <name>] [--yes | -y] [--rollback]
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--check` | bool | off | Reports whether a newer release exists; installs nothing. Exit code 0 either way. |
-| `--channel <name>` | string | `stable` | Only `stable` is accepted; any other value fails with `unsupported channel "<name>": only "stable" is currently supported` (exit 1). A missing value is ignored silently. |
+| `--channel <name>` | string | `stable` | Only `stable` is accepted; any other value fails with `unsupported channel "<name>": only "stable" is currently supported` (exit 1). A missing value is a usage error (exit 2). |
 | `--yes`, `-y` | bool | off | Skips the `Replace the running binary with <tag>? [y/N]` prompt. Only `y` (any case) confirms. |
 | `--rollback` | bool | off | Renames `<binary>.bak` over the binary, then runs `--version` on it as a diagnostic. If it appears anywhere in the arguments, all other self-update flags are ignored. Fails with `no backup found at <path> — nothing to roll back` if the backup is missing. On success prints `Rolled back to previous version at <path>.` |
 
@@ -104,11 +104,11 @@ Update sequence:
 | Step | Detail |
 | :--- | :--- |
 | 1 | Queries `https://api.github.com/repos/oito2/mcp-build82/releases/latest` (30 s timeout). A 404 prints `No releases found.` and exits 0. |
-| 2 | Compares the tag with the current version as `X.Y.Z` (leading `v` and any `-`/`+` suffix ignored). A `dev` build is always considered outdated; an unparsable tag never triggers an update. Not newer: prints `Already on the latest version (<tag>).`, exit 0. |
+| 2 | Compares the tag with the current version as `X.Y.Z` (semver precedence: a release outranks the same version with a pre-release suffix such as `-rc1`; build metadata after `+` is ignored). A `dev` build is always considered outdated; an unparsable tag never triggers an update. Not newer: prints `Already on the latest version (<tag>).`, exit 0. |
 | 3 | Confirmation (unless `--yes`), or stop after reporting with `--check`. |
 | 4 | Downloads `checksums.txt` and the asset `build82_<GOOS>_<GOARCH>` (`.exe` on Windows) into the binary's directory. URLs must be `https` on `github.com` or `*.githubusercontent.com`; redirects to non-https are refused; each download is limited to 200 MiB and 5 minutes. |
 | 5 | Verifies the SHA-256 against `checksums.txt`; a mismatch aborts before anything is replaced. |
-| 6 | Sets mode `0755`, runs `<new binary> --version` (10 s timeout), renames the current binary to `<binary>.bak`, then moves the new binary into place. |
+| 6 | Sets mode `0755`, runs `<new binary> --version` (10 s timeout; its output must equal the release tag, otherwise nothing is replaced), renames the current binary to `<binary>.bak`, then moves the new binary into place. |
 | Exit code | 0 on success, cancel, already latest; 1 on any error. |
 
 The binary path is resolved from the running executable with symlinks followed.
@@ -118,6 +118,7 @@ The binary path is resolved from the running executable with symlinks followed.
 | Code | Situation |
 | :--- | :--- |
 | 0 | Normal completion, `--help`, `--version`, cancelled prompts, graceful HTTP shutdown (also when the 10 s shutdown timeout is exceeded). |
+| 2 | Usage error: unknown flag or argument, flag missing its value, server-only flag without `--http`, or an extra argument to `install`, `uninstall` or `self-update`. Reported as `Error: <message>` followed by `Run 'build82 --help' for usage.` on stderr. |
 | 1 | Unknown command; any error printed as `Error: <message>` by `install`, `uninstall`, `self-update`; token configuration errors; `Fatal error: <message>` from the stdio server, or from the HTTP server failing to bind (`listen on <host>:<port>: <cause>`). |
 
 ## Transports

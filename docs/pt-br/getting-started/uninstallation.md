@@ -30,7 +30,7 @@ build82 uninstall [alvo] [--purge]
 | `alvo` | Opcional. O primeiro argumento que não começa com `-`. Um entre `claude`, `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`. Omitido: todos os registros encontrados. |
 | `--purge` | Opcional, pode aparecer em qualquer posição. Após remover os registros, apaga também os arquivos gerados e o arquivo de configuração, com confirmação própria e separada. |
 
-Argumentos posicionais além do primeiro são ignorados. Um `alvo` desconhecido falha com `unknown target "<id>" — supported targets: <lista>` e código de saída 1.
+Um argumento posicional extra ou uma flag desconhecida é um erro de uso (código de saída 2). Um `alvo` desconhecido falha com `unknown target "<id>" — supported targets: <lista>` e código de saída 1.
 
 ### Sem alvo
 

@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,15 +22,11 @@ import (
 	"sync"
 )
 
-// keyedPatternCache caches the compiled regexes that ExtractArrayBody/ExtractString/ExtractInt/
-// ExtractBool build per-call from a caller-supplied key — the pattern template is fixed per
-// function but the key varies, so a plain package-level var can't hold it. Callers pass the same
-// small set of keys repeatedly (e.g. "captype"/"contextlevel" across every capability in an
-// installation), so caching by the fully-assembled pattern string avoids recompiling the same
-// regex on every call.
-//
-// Exported as CachedPattern so other packages that assemble a regex from a caller-supplied key can
-// share the same cache and sync.Map instance.
+// keyedPatternCache caches the compiled regexes that ExtractArrayBody, ExtractString, ExtractInt
+// and ExtractBool build per call from a caller-supplied key. The pattern template is fixed per
+// function but the key varies, and callers pass the same small set of keys repeatedly, so caching
+// by the fully assembled pattern string avoids recompiling the same regex on every call.
+// CachedPattern exposes the cache to other packages.
 var keyedPatternCache sync.Map // string pattern -> *regexp.Regexp
 
 // CachedPattern compiles pattern on first use and returns the cached *regexp.Regexp on every
@@ -46,6 +42,7 @@ func CachedPattern(pattern string) *regexp.Regexp {
 	return actual.(*regexp.Regexp)
 }
 
+// cachedPattern is the package-internal alias of CachedPattern.
 func cachedPattern(pattern string) *regexp.Regexp {
 	return CachedPattern(pattern)
 }
@@ -200,14 +197,17 @@ func SplitIntoBlocks(body string) []string {
 }
 
 // ExtractString extracts a single-quoted or double-quoted string value for the given key from a
-// block, e.g. 'key' => 'value'. Applies PHP single-quoted-string unescaping via UnescapeString.
+// block, e.g. 'key' => 'value'. Single-quoted values honor the \\ and \' escapes; double-quoted values honor \\ and \".
 func ExtractString(block, key string) string {
-	re := cachedPattern(`['"]` + regexp.QuoteMeta(key) + `['"]\s*=>\s*['"]([^'"]+)['"]`)
+	re := cachedPattern(`['"]` + regexp.QuoteMeta(key) + `['"]\s*=>\s*(?:'((?:[^'\\]|\\.)+)'|"((?:[^"\\]|\\.)+)")`)
 	m := re.FindStringSubmatch(block)
 	if m == nil {
 		return ""
 	}
-	return UnescapeString(m[1])
+	if m[1] != "" {
+		return UnescapeString(m[1])
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(m[2], `\\`, `\`), `\"`, `"`)
 }
 
 // UnescapeString applies PHP single-quoted-string unescaping to raw string content already

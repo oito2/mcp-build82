@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,16 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package resources implements the global and per-plugin MCP resource definitions.
+// Package resources implements the global and per-plugin MCP resources, which serve the Markdown
+// context files generated under each `.build82` directory.
 package resources
 
-// notInitializedBody is the shared message body for every resource's "config.Load() is nil"
-// placeholder, used by readMoodleFile, readPluginFile, and handlePluginsWithContext.
-// handlePluginsWithContext keeps its own specific heading (it names the resource itself, "Plugins
-// With AI Context") but shares this same body text.
+// notInitializedBody is the message body returned by every resource when no configuration exists
+// yet (config.Load returns nil). It is used by readMoodleFile, readPluginFile, and
+// handlePluginsWithContext, the last of which pairs it with its own heading.
 const notInitializedBody = "build82 has not been initialized.\n\n" +
 	"Run the `init_moodle_context` tool to generate context files."
 
-// notInitializedText is the full placeholder (generic heading + body) for the two resources with
-// no more specific heading of their own.
+// notInitializedText is the generic-heading placeholder returned by readMoodleFile and
+// readPluginFile when no configuration exists yet.
 const notInitializedText = "# Resource not available\n\n" + notInitializedBody

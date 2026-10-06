@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,5 +13,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package cache implements the mtime-based staleness cache, persisted to disk per Moodle/plugin root.
+// Package cache implements the mtime-based staleness cache that decides whether generated files
+// must be regenerated, and persists its marks on disk in each Moodle root's .build82 directory.
 package cache

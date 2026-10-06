@@ -1,4 +1,4 @@
-// Copyright (C) 2026  oito2
+// Copyright (C) 2026  OITO2
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,13 +25,11 @@ import (
 )
 
 // This file tests the per-plugin resource templates' URI parsing (makePluginFileHandler) across
-// all pluginFileResources definitions, plus the aggregate moodle://plugins/with-context resource,
-// including its in-memory cache.
+// all pluginFileResources definitions, plus the aggregate moodle://plugins/with-context resource.
 
-// TestMakePluginFileHandler_EveryTemplateResolvesItsOwnFile confirms each of the 11
-// pluginFileResources definitions strips its own URI suffix correctly and reads its own filename —
-// swapped Suffix/Filename entries would serve the wrong
-// file for a given resource URI.
+// TestMakePluginFileHandler_EveryTemplateResolvesItsOwnFile verifies that every pluginFileResources
+// definition strips its own URI suffix and serves its own file, so swapped Suffix/Filename entries
+// are detected.
 func TestMakePluginFileHandler_EveryTemplateResolvesItsOwnFile(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
@@ -69,6 +67,8 @@ func TestMakePluginFileHandler_EveryTemplateResolvesItsOwnFile(t *testing.T) {
 	}
 }
 
+// TestHandlePluginsWithContext_ListsOnlyPluginsWithGeneratedContext verifies the listing includes
+// only plugins that have a generated PLUGIN_AI_CONTEXT.md.
 func TestHandlePluginsWithContext_ListsOnlyPluginsWithGeneratedContext(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", root)
