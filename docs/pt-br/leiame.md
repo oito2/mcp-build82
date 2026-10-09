@@ -194,8 +194,8 @@ Os downloads vêm apenas da release deste repositório no GitHub. Quando o
 `PATH`, a assinatura da release é verificada primeiro; sem ele, um aviso é impresso e só o checksum
 é conferido. Todo download é verificado por checksum contra o `checksums.txt` da release e testado
 antes de o binário em execução ser substituído; o binário anterior é mantido como `<caminho>.bak`,
-que o `--rollback` restaura com um rename atômico. Se não houver backup, ele falha com um erro claro
-e nada é alterado. Detalhes: [referência da CLI](reference/cli.md#self-update).
+e o `--rollback` troca os dois (então rodá-lo de novo desfaz a troca). Se não houver backup, ou se o
+backup não rodar, ele falha com um erro claro e nada é alterado. Detalhes: [referência da CLI](reference/cli.md#self-update).
 
 ## Documentação
 

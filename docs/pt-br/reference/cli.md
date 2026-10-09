@@ -110,7 +110,7 @@ build82 self-update --rollback
 | `--channel <nome>` | string | `stable` | Somente `stable` é aceito; qualquer outro valor falha com `unsupported channel "<nome>": only "stable" is currently supported` (saída 1). Valor ausente é um erro de uso (saída 2). |
 | `--yes`, `-y` | bool | desligado | Pula o prompt `Replace the running binary with <tag>? [y/N]`. Somente `y` (qualquer caixa) confirma. |
 | `--require-signature` | bool | desligado | Recusa a atualização, antes de baixar qualquer coisa, quando não há um cosign utilizável (v3 ou mais novo no `PATH`) para verificar a assinatura da release. Não pode ser combinada com `--check` (saída 2). |
-| `--rollback` | bool | desligado | Renomeia `<binário>.bak` sobre o binário e executa `--version` nele como diagnóstico. Não pode ser combinada com nenhuma outra flag do self-update (saída 2). Falha com `no backup found at <caminho> — nothing to roll back` se o backup não existir. Em caso de sucesso imprime `Rolled back to previous version at <caminho>.` |
+| `--rollback` | bool | desligado | Troca o binário com `<binário>.bak`: o backup precisa passar antes em `<backup> --version` (senão nada muda); depois o binário atual é renomeado para `<binário>.bak` e o backup assume o lugar dele, então rodar `--rollback` de novo desfaz a troca. Renomear em vez de sobrescrever funciona no Windows, onde um binário em execução não pode ser substituído. Não pode ser combinada com nenhuma outra flag do self-update (saída 2). Falha com `no backup found at <caminho> — nothing to roll back` se o backup não existir. Em caso de sucesso imprime `Rolled back to <versão> at <caminho> (the replaced version is kept at <caminho>.bak; run --rollback again to undo).` |
 
 Sequência da atualização:
 

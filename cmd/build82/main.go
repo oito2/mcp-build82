@@ -63,8 +63,8 @@ self-update flags:
   --yes, -y               Skip the confirmation prompt before replacing the running binary
   --require-signature     Refuse to update unless cosign v3+ is installed to verify the release
                           signature (by default, without cosign only the checksum is verified)
-  --rollback              Restore the previous binary from its .bak backup and exit; cannot be
-                          combined with other self-update flags
+  --rollback              Swap the binary with its .bak backup (run again to undo) and exit;
+                          cannot be combined with other self-update flags
 
 uninstall flags:
   --purge                 Also delete generated files and the config file (asks for its own confirmation)
@@ -113,8 +113,8 @@ release signature is verified too; the checksum always is.
   --channel <name>      Release channel (default "stable"; reserved for future use)
   --yes, -y             Update without asking
   --require-signature   Refuse to update unless cosign verifies the release signature
-  --rollback            Restore the previous binary from its .bak backup; cannot be combined with
-                        other flags
+  --rollback            Swap the binary with its .bak backup (run again to undo); cannot be
+                        combined with other flags
 `
 
 // subcommandHelp returns the help text of `build82 <subcommand> --help`, or "" for a name that has
@@ -423,20 +423,21 @@ func main() {
 }
 
 // runRollback implements `build82 self-update --rollback`. It resolves the running binary's path
-// with binpath.Resolve and passes it to selfupdate.Rollback, which restores the ".bak" backup
-// left by a self-update. Failures are reported through exitOnError; success prints a
-// confirmation line.
+// with binpath.Resolve and passes it to selfupdate.Rollback, which swaps the binary with the ".bak"
+// backup left by a self-update. Failures are reported through exitOnError; success prints the
+// restored version and where the replaced binary is kept.
 func runRollback() {
 	binaryPath, err := binpath.Resolve()
 	if err != nil {
 		exitOnError(err)
 		return
 	}
-	if err := selfupdate.Rollback(binaryPath); err != nil {
+	restored, err := selfupdate.Rollback(binaryPath)
+	if err != nil {
 		exitOnError(err)
 		return
 	}
-	fmt.Printf("✅ Rolled back to previous version at %s.\n", binaryPath)
+	fmt.Printf("✅ Rolled back to %s at %s (the replaced version is kept at %s.bak; run --rollback again to undo).\n", restored, binaryPath, binaryPath)
 }
 
 // runServe parses the server flags in `args` and runs the MCP server over Streamable HTTP when

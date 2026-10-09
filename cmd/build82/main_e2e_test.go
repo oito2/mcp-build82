@@ -160,8 +160,9 @@ func TestMain_HTTPWithEnvTokenDoesNotFailToStart(t *testing.T) {
 }
 
 // TestMain_SelfUpdateRollbackRestoresBackup verifies that `build82 self-update --rollback`
-// resolves the running binary's path and promotes the "<binary>.bak" file next to it back into
-// place, printing a confirmation.
+// resolves the running binary's path and swaps it with the "<binary>.bak" file next to it, keeping
+// the replaced binary as the new .bak and printing a confirmation. On Windows this also proves the
+// running binary is renamed rather than replaced.
 //
 // A copy of the built binary serves as the backup. The path is resolved with
 // filepath.EvalSymlinks first, so the backup sits next to the path the process will resolve.
@@ -191,8 +192,8 @@ func TestMain_SelfUpdateRollbackRestoresBackup(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Rolled back") {
 		t.Errorf("expected a success message, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if _, statErr := os.Stat(backupPath); statErr == nil {
-		t.Error("expected the .bak file to be gone after being promoted back into place")
+	if _, statErr := os.Stat(backupPath); statErr != nil {
+		t.Errorf("expected the replaced binary kept as .bak after the swap: %v", statErr)
 	}
 }
 

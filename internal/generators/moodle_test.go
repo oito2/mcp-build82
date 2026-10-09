@@ -165,8 +165,55 @@ func TestGenerateCtags_PassesDoubleDashBeforeMoodlePath(t *testing.T) {
 	}
 }
 
-// buildFakeCtags compiles a small "ctags" executable into `dir` that writes its arguments, one per
-// line, to `argvFile`. A real subprocess exercises the actual argument passing of exec.Command.
+// TestGenerateCtags_SkipsCtagsThatIsNotUniversal verifies that a ctags which is not Universal
+// Ctags (here one that rejects every flag, as the BSD ctags of macOS rejects --version and -R) makes
+// the tags generator skip instead of failing, and is never run over the Moodle tree.
+func TestGenerateCtags_SkipsCtagsThatIsNotUniversal(t *testing.T) {
+	binDir := t.TempDir()
+	ranFile := filepath.Join(binDir, "ran.txt")
+	srcDir := t.TempDir()
+	src := fmt.Sprintf(`package main
+
+import (
+	"os"
+	"strings"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] != "--version" {
+		_ = os.WriteFile(%q, []byte(strings.Join(os.Args[1:], " ")), 0o644)
+	}
+	os.Stderr.WriteString("ctags: illegal option -- -\n")
+	os.Exit(1)
+}
+`, ranFile)
+	srcFile := filepath.Join(srcDir, "main.go")
+	if err := os.WriteFile(srcFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := "ctags"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", filepath.Join(binDir, name), srcFile).CombinedOutput(); err != nil {
+		t.Fatalf("build fake BSD ctags: %v\n%s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if found, universal := CtagsStatus(); !found || universal {
+		t.Fatalf("CtagsStatus() = %v, %v; want found but not universal", found, universal)
+	}
+	result := GenerateCtags(t.TempDir())
+	if !result.Success || !result.Skipped || result.Error != "" {
+		t.Errorf("expected a successful skipped result, got %+v", result)
+	}
+	if _, err := os.Stat(ranFile); err == nil {
+		t.Error("a ctags that is not Universal Ctags must not be run over the Moodle tree")
+	}
+}
+
+// buildFakeCtags compiles a small "ctags" executable into `dir` that identifies itself as Universal
+// Ctags for --version and otherwise writes its arguments, one per line, to `argvFile`. A real subprocess exercises the actual argument passing of exec.Command.
 func buildFakeCtags(t *testing.T, dir, argvFile string) {
 	t.Helper()
 	srcDir := t.TempDir()
@@ -178,6 +225,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		os.Stdout.WriteString("Universal Ctags 6.1.0, Copyright (C) 2015-2023 Universal Ctags Team\n")
+		return
+	}
 	f, err := os.Create(%q)
 	if err != nil {
 		os.Exit(1)

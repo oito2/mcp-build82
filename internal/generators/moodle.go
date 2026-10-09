@@ -16,6 +16,7 @@
 package generators
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/extractors"
@@ -585,12 +587,30 @@ func generateAiIndex(moodlePath, moodleVersion string, pluginDirs []string, info
 
 // --- GenerateCtags -------------------------------------------------------------
 
+// ctagsVersionTimeout bounds how long CtagsStatus waits for `ctags --version`.
+const ctagsVersionTimeout = 5 * time.Second
+
+// CtagsStatus reports whether a ctags executable is on PATH and whether it is Universal Ctags, the
+// only implementation whose flags GenerateCtags uses (-R, --languages, --exclude); other ctags
+// programs, such as the BSD ctags that macOS ships, reject them.
+func CtagsStatus() (found, universal bool) {
+	path, err := exec.LookPath("ctags")
+	if err != nil {
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ctagsVersionTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	return true, err == nil && strings.Contains(string(out), "Universal Ctags")
+}
+
 // GenerateCtags runs ctags over `moodlePath` to produce the tags file under ContextDir. When
-// ctags is not on PATH it returns a successful, skipped result. Directory creation or ctags
+// ctags is not on PATH, or is not Universal Ctags (see CtagsStatus), it returns a successful,
+// skipped result. Directory creation or ctags
 // failures are reported in the result's Error field.
 func GenerateCtags(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "tags")
-	if _, err := exec.LookPath("ctags"); err != nil {
+	if found, universal := CtagsStatus(); !found || !universal {
 		return GeneratorResult{File: output, Success: true, Skipped: true}
 	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {

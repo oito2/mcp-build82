@@ -190,8 +190,8 @@ Downloads come only from this repository's release on GitHub. When [cosign](http
 v3 or later is on `PATH`, the release's signature is verified first; without it, a warning is
 printed and only the checksum is checked. Every download is checksum-verified against the
 release's `checksums.txt` and smoke-tested before the running binary is replaced; the previous
-binary is kept as `<path>.bak`, which `--rollback` restores with an atomic rename. If no backup
-exists, it fails with a clear error and nothing is changed. Details:
+binary is kept as `<path>.bak`, and `--rollback` swaps the two (so running it again undoes it). If
+no backup exists, or the backup does not run, it fails with a clear error and nothing is changed. Details:
 [CLI reference](docs/en/reference/cli.md#self-update).
 
 ## Documentation

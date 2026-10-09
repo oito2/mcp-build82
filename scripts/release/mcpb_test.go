@@ -103,7 +103,8 @@ func TestWriteUniversalMachO_ProducesValidFatBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	// Windows has no execute permission bit to check.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("universal binary is not executable: %v", info.Mode())
 	}
 }

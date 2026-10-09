@@ -29,7 +29,7 @@ Gerados por `init_moodle_context` e `update_indexes` (13 arquivos Markdown mais 
 | `MOODLE_TASKS_INDEX.md` | Tasks agendadas declaradas em todo `db/tasks.php` | `db/tasks.php` |
 | `MOODLE_DEV_RULES.md` | Trechos de padrões de código: segurança, API de banco, estrutura de arquivos de plugin, eventos, tasks | arquivos da raiz do Moodle (veja abaixo) |
 | `MOODLE_PLUGIN_GUIDE.md` | Nomenclatura de components, arquivos obrigatórios, template de `version.php`, caminhos de classes com autoload | arquivos da raiz do Moodle (veja abaixo) |
-| `tags` | Índice de símbolos ctags do código PHP (`ctags -R --languages=PHP`, excluindo `vendor` e `node_modules`). Ignorado silenciosamente quando não há executável `ctags` no `PATH` | arquivos da raiz do Moodle (veja abaixo) |
+| `tags` | Índice de símbolos ctags do código PHP (`ctags -R --languages=PHP`, excluindo `vendor` e `node_modules`). Ignorado silenciosamente quando não há executável `ctags` no `PATH`, ou quando ele não é o Universal Ctags (como o `ctags` BSD que vem no macOS, sem essas flags) | arquivos da raiz do Moodle (veja abaixo) |
 
 **Arquivos da raiz do Moodle:** `version.php`, `lib/moodlelib.php` e `lib/accesslib.php` na raiz do Moodle.
 
@@ -88,7 +88,7 @@ Mudanças em outros pontos do plugin (por exemplo arquivos em `classes/`, `lang/
 
 ## Arquivo `tags` do editor
 
-O build82 grava a saída do ctags em `{raiz_moodle}/.build82/tags`, e somente quando há um executável `ctags` (universal-ctags) no `PATH`. Usuários de Vim podem apontar o editor para ele adicionando isto ao `~/.vimrc`:
+O build82 grava a saída do ctags em `{raiz_moodle}/.build82/tags`, e somente quando o `ctags` no `PATH` é o Universal Ctags (`ctags --version` informa `Universal Ctags`); qualquer outro ctags é ignorado, e o `doctor` avisa sobre isso. Usuários de Vim podem apontar o editor para ele adicionando isto ao `~/.vimrc`:
 
 ```vim
 set tags=./.build82/tags;

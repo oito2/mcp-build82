@@ -69,6 +69,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `structuredContent`); `get_plugin_info` reports "possible matches" for an unknown plugin as an
   error result. `doctor` keeps returning its full report, also when the verdict is `fail`.
 - The stdio transport accepts inbound messages of up to 64 MiB.
+- `self-update --rollback` swaps the binary with its `.bak` backup instead of discarding the
+  current binary: the replaced version becomes the new `.bak`, so running it again undoes the
+  rollback. The backup is smoke-tested before anything is renamed.
 - Release binaries are built reproducibly (`-trimpath`, empty build ID, pinned build environment):
   the same Go release produces byte-identical binaries locally and in CI.
 
@@ -90,6 +93,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `self-update` on Windows: the downloaded binary is staged with an `.exe` name, so its smoke test
+  can run it, and `--rollback` renames the running binary instead of overwriting it, which Windows
+  refuses.
+- The `tags` file is skipped, instead of being reported as a failed generator, when the `ctags` on
+  `PATH` is not Universal Ctags (such as macOS's BSD `ctags`); `doctor` warns about it.
 - A client configuration file that cannot be read or parsed is reported as `failed` by `install`
   and `uninstall` instead of being treated as having no build82 registration.
 - A `mcpServers`/`mcp`/`context_servers` key that holds something other than an object is no longer

@@ -284,7 +284,7 @@ Read-only environment diagnostic. Returns a Markdown report by default, or the s
 
 | Section | Checks |
 |---------|--------|
-| System Dependencies | `php`, `ctags`, `git` on `PATH` (missing = warning, "optional") |
+| System Dependencies | `php`, `ctags`, `git` on `PATH` (missing = warning, "optional"; a `ctags` that is not Universal Ctags = warning, the tags file is skipped) |
 | Configuration | Config file path, Moodle path, Moodle version. If not initialized: `Config — not initialized` and the report stops (non-error result). If the config location cannot be resolved: error result |
 | Moodle Installation | Directory exists and looks like a Moodle root |
 | Global Index Files | Each of the 13 global files: missing = failure; older than 7 days = warning (`stale`); otherwise age in days |

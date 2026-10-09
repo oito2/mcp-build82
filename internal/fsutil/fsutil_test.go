@@ -150,6 +150,9 @@ func TestWriteAtomic_SetsRequestedPermissions(t *testing.T) {
 
 // TestWriteAtomic_DirModeDerivedFromPerm verifies a 0600 file gets a 0700 parent directory.
 func TestWriteAtomic_DirModeDerivedFromPerm(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reports only the read-only attribute as permission bits")
+	}
 	path := filepath.Join(t.TempDir(), "new", "f")
 	if err := WriteAtomic(path, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)

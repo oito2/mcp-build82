@@ -693,7 +693,7 @@ func TestRollback_NoBackupReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Rollback(bin)
+	_, err := Rollback(bin)
 	if err == nil {
 		t.Fatal("expected an error when no .bak file exists")
 	}
@@ -702,81 +702,84 @@ func TestRollback_NoBackupReturnsError(t *testing.T) {
 	}
 }
 
-// TestRollback_PromotesBackupSuccessfully verifies the success path: a real .bak (built as a
-// working fake binary, so SmokeTest also genuinely passes) is renamed back into place, and the
-// restored file is the backup's actual content, not just any file happening to exist at that path.
-func TestRollback_PromotesBackupSuccessfully(t *testing.T) {
+// TestRollback_SwapsBinaryAndBackup verifies the success path: the working backup (a real fake
+// binary, so the smoke test genuinely passes) takes the binary's place, the replaced binary becomes
+// the new .bak, and a second rollback swaps them back.
+func TestRollback_SwapsBinaryAndBackup(t *testing.T) {
 	dir := t.TempDir()
-	current := filepath.Join(dir, exeName("build82"))
-	if err := os.WriteFile(current, []byte("broken placeholder"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	current := buildFakeBinary(t, dir, "build82", "v0.2.0\n")
 	// current + ".bak" is exactly what AtomicReplace would have produced for the binary in dir.
-	buildFakeBinary(t, dir, exeName("build82")+".bak", "v0.1.0\n")
+	buildFakeBinary(t, dir, filepath.Base(current)+".bak", "v0.1.0\n")
 
-	if err := Rollback(current); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	version, err := Rollback(current)
+	if err != nil || version != "v0.1.0" {
+		t.Fatalf("Rollback = %q, %v; want v0.1.0", version, err)
+	}
+	if got, err := SmokeTest(current); err != nil || got != "v0.1.0" {
+		t.Errorf("restored binary reports %q (err %v), want v0.1.0", got, err)
+	}
+	if got, err := SmokeTest(current + ".bak"); err != nil || got != "v0.2.0" {
+		t.Errorf("the replaced binary must be kept as .bak, got %q (err %v)", got, err)
+	}
+	if _, err := os.Stat(current + ".rollback"); err == nil {
+		t.Error("the staging file must not be left behind")
 	}
 
-	if _, err := os.Stat(current + ".bak"); err == nil {
-		t.Error("expected the .bak file to be gone after being promoted back into place")
+	if version, err := Rollback(current); err != nil || version != "v0.2.0" {
+		t.Fatalf("second Rollback = %q, %v; want v0.2.0", version, err)
 	}
-
-	out, err := exec.Command(current, "--version").Output()
-	if err != nil {
-		t.Fatalf("expected the restored binary to be runnable: %v", err)
-	}
-	if strings.TrimSpace(string(out)) != "v0.1.0" {
-		t.Errorf("restored binary reports %q, want v0.1.0 (the backup's content)", strings.TrimSpace(string(out)))
+	if got, _ := SmokeTest(current); got != "v0.2.0" {
+		t.Errorf("a second rollback must swap back, got %q", got)
 	}
 }
 
-// TestRollback_RenameFailureIsSurfaced verifies that Rollback goes through the osRename seam (like
-// AtomicReplace) and wraps a rename failure with enough context to act on.
-func TestRollback_RenameFailureIsSurfaced(t *testing.T) {
+// TestRollback_RenameFailureRestoresBothFiles verifies that when moving the staged backup into
+// place fails, the error carries the rename failure and the binary and its backup are back where
+// they were.
+func TestRollback_RenameFailureRestoresBothFiles(t *testing.T) {
 	dir := t.TempDir()
-	current := filepath.Join(dir, exeName("build82"))
-	if err := os.WriteFile(current, []byte("current binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	buildFakeBinary(t, dir, exeName("build82")+".bak", "v0.1.0\n")
+	current := buildFakeBinary(t, dir, "build82", "v0.2.0\n")
+	buildFakeBinary(t, dir, filepath.Base(current)+".bak", "v0.1.0\n")
 
 	origRename := osRename
 	defer func() { osRename = origRename }()
 	renameErr := errors.New("simulated rename failure")
-	osRename = func(oldpath, newpath string) error { return renameErr }
-
-	err := Rollback(current)
-	if err == nil {
-		t.Fatal("expected an error")
+	calls := 0
+	osRename = func(oldpath, newpath string) error {
+		calls++
+		if calls == 3 { // staged backup -> binary path
+			return renameErr
+		}
+		return origRename(oldpath, newpath)
 	}
-	if !strings.Contains(err.Error(), renameErr.Error()) {
-		t.Errorf("expected the underlying rename error surfaced, got: %v", err)
+
+	if _, err := Rollback(current); err == nil || !strings.Contains(err.Error(), renameErr.Error()) {
+		t.Fatalf("expected the underlying rename error surfaced, got: %v", err)
+	}
+	if got, err := SmokeTest(current); err != nil || got != "v0.2.0" {
+		t.Errorf("the current binary must be back in place, got %q (err %v)", got, err)
+	}
+	if got, err := SmokeTest(current + ".bak"); err != nil || got != "v0.1.0" {
+		t.Errorf("the backup must be back in place, got %q (err %v)", got, err)
 	}
 }
 
-// TestRollback_SmokeTestFailureDoesNotUndoRename verifies that if the restored (.bak) binary fails
-// the post-rollback smoke test, Rollback returns an error but the rename is not undone.
-func TestRollback_SmokeTestFailureDoesNotUndoRename(t *testing.T) {
+// TestRollback_BrokenBackupChangesNothing verifies that a backup failing its smoke test is refused
+// before anything is renamed.
+func TestRollback_BrokenBackupChangesNothing(t *testing.T) {
 	dir := t.TempDir()
-	current := filepath.Join(dir, exeName("build82"))
-	if err := os.WriteFile(current, []byte("current binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	buildFakeBinary(t, dir, exeName("build82")+".bak", "") // exits 3, no --version output -> fails SmokeTest
+	current := buildFakeBinary(t, dir, "build82", "v0.2.0\n")
+	buildFakeBinary(t, dir, filepath.Base(current)+".bak", "") // exits 3, no --version output -> fails SmokeTest
 
-	err := Rollback(current)
-	if err == nil {
-		t.Fatal("expected an error when the restored binary fails its smoke test")
+	_, err := Rollback(current)
+	if err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("expected a smoke-test refusal, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "smoke test") {
-		t.Errorf("expected a smoke-test-failure error, got: %v", err)
+	if got, err := SmokeTest(current); err != nil || got != "v0.2.0" {
+		t.Errorf("the current binary must be untouched, got %q (err %v)", got, err)
 	}
-	if _, statErr := os.Stat(current + ".bak"); statErr == nil {
-		t.Error("expected the rename to have already happened (.bak consumed), not undone")
-	}
-	if _, statErr := os.Stat(current); statErr != nil {
-		t.Errorf("expected the restored (if broken) binary to still be in place at %s: %v", current, statErr)
+	if _, err := os.Stat(current + ".bak"); err != nil {
+		t.Errorf("the backup must be untouched: %v", err)
 	}
 }
 

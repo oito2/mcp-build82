@@ -40,7 +40,7 @@ func TestReadMoodleFile_NotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	if strings.Contains(text, root) {
 		t.Errorf("expected no absolute host path leaked, got:\n%s", text)
 	}
-	if !strings.Contains(text, filepath.Join(".build82", "AI_CONTEXT.md")) {
+	if !strings.Contains(text, ".build82/AI_CONTEXT.md") {
 		t.Errorf("expected the path relative to the Moodle root, got:\n%s", text)
 	}
 }
@@ -63,7 +63,7 @@ func TestReadPluginFile_NotFoundMessageDoesNotLeakAbsolutePath(t *testing.T) {
 	if strings.Contains(text, root) {
 		t.Errorf("expected no absolute host path leaked, got:\n%s", text)
 	}
-	if !strings.Contains(text, filepath.Join("local", "demo", ".build82", "PLUGIN_CONTEXT.md")) {
+	if !strings.Contains(text, "local/demo/.build82/PLUGIN_CONTEXT.md") {
 		t.Errorf("expected the path relative to the Moodle root, got:\n%s", text)
 	}
 }

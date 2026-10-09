@@ -110,7 +110,7 @@ build82 self-update --rollback
 | `--channel <name>` | string | `stable` | Only `stable` is accepted; any other value fails with `unsupported channel "<name>": only "stable" is currently supported` (exit 1). A missing value is a usage error (exit 2). |
 | `--yes`, `-y` | bool | off | Skips the `Replace the running binary with <tag>? [y/N]` prompt. Only `y` (any case) confirms. |
 | `--require-signature` | bool | off | Refuses to update, before downloading anything, when no usable cosign (v3 or later on `PATH`) can verify the release signature. Cannot be combined with `--check` (exit 2). |
-| `--rollback` | bool | off | Renames `<binary>.bak` over the binary, then runs `--version` on it as a diagnostic. Cannot be combined with any other self-update flag (exit 2). Fails with `no backup found at <path> — nothing to roll back` if the backup is missing. On success prints `Rolled back to previous version at <path>.` |
+| `--rollback` | bool | off | Swaps the binary with `<binary>.bak`: the backup must pass `<backup> --version` first (otherwise nothing changes), then the current binary is renamed to `<binary>.bak` and the backup takes its place, so running `--rollback` again swaps them back. Renaming instead of replacing works on Windows, where a running binary cannot be overwritten. Cannot be combined with any other self-update flag (exit 2). Fails with `no backup found at <path> — nothing to roll back` if the backup is missing. On success prints `Rolled back to <version> at <path> (the replaced version is kept at <path>.bak; run --rollback again to undo).` |
 
 Update sequence:
 

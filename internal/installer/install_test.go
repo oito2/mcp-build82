@@ -161,7 +161,10 @@ func TestWriteConfig_ZedShape(t *testing.T) {
 
 // TestClineDir_LinuxDefaultBranch verifies the Cline extension directory on Linux.
 func TestClineDir_LinuxDefaultBranch(t *testing.T) {
-	// This test environment is Linux — confirm the "default" (non-darwin, non-windows) branch.
+	// The OS is pinned to Linux to reach the "default" (non-darwin, non-windows) branch.
+	prev := goos
+	goos = "linux"
+	t.Cleanup(func() { goos = prev })
 	dir, err := clineDir()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

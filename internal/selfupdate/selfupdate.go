@@ -532,31 +532,49 @@ func AtomicReplace(currentBinaryPath, newBinaryPath, wantVersion string) (backup
 	return backupPath, nil
 }
 
-// Rollback restores the binary at `binaryPath` from its ".bak" backup created by AtomicReplace,
-// as used by `build82 self-update --rollback`. The backup is renamed over `binaryPath`, discarding
-// whatever is there. It returns an error when the backup is missing or cannot be inspected, or the
-// rename fails. After the rename the restored binary is smoke-tested; a failure there is returned
-// as an error, but the rename is not undone.
-func Rollback(binaryPath string) error {
+// Rollback swaps the binary at `binaryPath` with its ".bak" backup created by AtomicReplace, as
+// used by `build82 self-update --rollback`: the backup is smoke-tested first, then moved aside to
+// "<binaryPath>.rollback", the current binary is renamed to the backup path (a running binary can
+// be renamed on every supported OS, including Windows, where it cannot be replaced), and the staged
+// backup is moved into place. The replaced binary is therefore kept as the new ".bak", so running
+// Rollback again swaps them back. It returns the version the restored binary reports, or an error
+// when the backup is missing or cannot be inspected, fails the smoke test (nothing is changed), or
+// a rename fails; when moving the staged backup into place fails, the current binary is renamed
+// back and the backup is restored to its original path.
+func Rollback(binaryPath string) (restoredVersion string, err error) {
 	backupPath := binaryPath + ".bak"
 
 	if _, err := os.Stat(backupPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no backup found at %s — nothing to roll back", backupPath)
+			return "", fmt.Errorf("no backup found at %s — nothing to roll back", backupPath)
 		}
-		return fmt.Errorf("check backup at %s: %w", backupPath, err)
+		return "", fmt.Errorf("check backup at %s: %w", backupPath, err)
 	}
 
-	if err := osRename(backupPath, binaryPath); err != nil {
-		return fmt.Errorf("restore backup %s to %s: %w", backupPath, binaryPath, err)
+	restoredVersion, err = SmokeTest(backupPath)
+	if err != nil {
+		return "", fmt.Errorf("the backup %s does not run, nothing was changed: %w", backupPath, err)
+	}
+
+	staged := binaryPath + ".rollback"
+	if err := osRename(backupPath, staged); err != nil {
+		return "", fmt.Errorf("stage backup %s: %w", backupPath, err)
+	}
+	if err := osRename(binaryPath, backupPath); err != nil {
+		_ = osRename(staged, backupPath)
+		return "", fmt.Errorf("move the current binary %s aside: %w", binaryPath, err)
+	}
+	if err := osRename(staged, binaryPath); err != nil {
+		// Undo both moves so the original binary and its backup are where they were.
+		if restoreErr := osRename(backupPath, binaryPath); restoreErr != nil {
+			return "", fmt.Errorf("move %s into place: %w (restore also failed, %s is now MISSING — recover it manually from %s: %v)",
+				staged, err, binaryPath, backupPath, restoreErr)
+		}
+		_ = osRename(staged, backupPath)
+		return "", fmt.Errorf("move %s into place: %w", staged, err)
 	}
 	fsutil.SyncDir(filepath.Dir(binaryPath))
-
-	if _, err := SmokeTest(binaryPath); err != nil {
-		return fmt.Errorf("restored %s from %s, but it failed the smoke test: %w", binaryPath, backupPath, err)
-	}
-
-	return nil
+	return restoredVersion, nil
 }
 
 // signatureBundleName is the release asset holding the Sigstore bundle that signs checksums.txt.
@@ -804,7 +822,9 @@ func run(ctx context.Context, opts RunOptions, d deps) (bool, error) {
 		return false, fmt.Errorf("read downloaded checksums.txt: %w", err)
 	}
 
-	newBinaryPath, err := downloadToTemp(ctx, d.downloadClient, urls[assetName], dir, "build82-update-*")
+	// The temp name keeps the asset's extension (".exe" on Windows), which Windows needs to run the
+	// downloaded binary for the smoke test.
+	newBinaryPath, err := downloadToTemp(ctx, d.downloadClient, urls[assetName], dir, "build82-update-*"+filepath.Ext(assetName))
 	if err != nil {
 		return false, err
 	}

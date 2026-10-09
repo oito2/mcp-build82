@@ -336,7 +336,8 @@ func (o *DoctorOutput) normalize() {
 }
 
 // checkSystemDependencies reports whether the optional external tools php, ctags and git are on
-// PATH, looking them up concurrently. A missing tool is a warning, never a failure.
+// PATH, looking them up concurrently; a ctags that is not Universal Ctags is reported as unusable,
+// since the tags file is then skipped. A missing or unusable tool is a warning, never a failure.
 func checkSystemDependencies() []checkResult {
 	tools := []string{"php", "ctags", "git"}
 	results := make([]checkResult, len(tools))
@@ -345,6 +346,17 @@ func checkSystemDependencies() []checkResult {
 	for i, t := range tools {
 		go func(i int, t string) {
 			defer wg.Done()
+			if t == "ctags" {
+				switch found, universal := generators.CtagsStatus(); {
+				case universal:
+					results[i] = checkResult{t, statusOK, "found"}
+				case found:
+					results[i] = checkResult{t, statusWarn, "found, but not Universal Ctags — the tags file is skipped (optional)"}
+				default:
+					results[i] = checkResult{t, statusWarn, "not found (optional)"}
+				}
+				return
+			}
 			if _, err := exec.LookPath(t); err == nil {
 				results[i] = checkResult{t, statusOK, "found"}
 			} else {

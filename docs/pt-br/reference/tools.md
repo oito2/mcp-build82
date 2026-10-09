@@ -284,7 +284,7 @@ Diagnóstico do ambiente, somente leitura. Retorna um relatório em Markdown por
 
 | Seção | Verificações |
 |---------|--------|
-| System Dependencies | `php`, `ctags`, `git` no `PATH` (ausente = aviso, "optional") |
+| System Dependencies | `php`, `ctags`, `git` no `PATH` (ausente = aviso, "optional"; um `ctags` que não é o Universal Ctags = aviso, o arquivo `tags` é ignorado) |
 | Configuration | Caminho do arquivo de config, caminho e versão do Moodle. Se não inicializado: `Config — not initialized` e o relatório para (resultado sem erro). Se o local da config não puder ser resolvido: resultado de erro |
 | Moodle Installation | O diretório existe e parece uma raiz de Moodle |
 | Global Index Files | Cada um dos 13 arquivos globais: ausente = falha; mais antigo que 7 dias = aviso (`stale`); caso contrário, idade em dias |
