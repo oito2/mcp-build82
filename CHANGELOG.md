@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-09
+
 ### Added
 
 - `self-update` verifies the Sigstore signature of the release's `checksums.txt` with
@@ -180,6 +182,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release artifacts: 5 binaries, the `build82.mcpb` Claude Desktop extension, `checksums.txt`, and
   the MCP Registry entry `io.github.oito2/mcp-build82`.
 
-[Unreleased]: https://github.com/oito2/mcp-build82/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/oito2/mcp-build82/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/oito2/mcp-build82/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/oito2/mcp-build82/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/oito2/mcp-build82/releases/tag/v1.0.0
