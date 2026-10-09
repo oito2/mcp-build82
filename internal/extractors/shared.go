@@ -21,14 +21,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/oito2/mcp-build82/internal/fsutil"
 )
 
 // maxReadableFileSize is the largest file, in bytes, that readFileCapped will buffer into memory.
 // It bounds memory use when scanning potentially untrusted third-party PHP source.
 const maxReadableFileSize = 8 << 20 // 8 MiB
 
-// readFileCapped returns the content of the file at `path`. It returns an error if the file cannot
-// be stat'ed or read, or if it is larger than maxReadableFileSize.
+// readFileCapped returns the content of the regular file at `path`, never following a symbolic
+// link or waiting on a FIFO (see fsutil.ReadRegular). It returns an error if the file cannot be
+// stat'ed or read, is not a regular file, or is larger than maxReadableFileSize.
 func readFileCapped(path string) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -37,7 +40,7 @@ func readFileCapped(path string) ([]byte, error) {
 	if info.Size() > maxReadableFileSize {
 		return nil, fmt.Errorf("file %s exceeds max readable size (%d > %d bytes)", path, info.Size(), maxReadableFileSize)
 	}
-	return os.ReadFile(path)
+	return fsutil.ReadRegular(path, maxReadableFileSize)
 }
 
 // firstSubmatch returns the first capture group of the first match of `re` in `s`, or "" when

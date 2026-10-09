@@ -28,12 +28,12 @@ build82 install claude-desktop
 
 O que ele faz, exatamente:
 
-1. Verifica se o Claude Desktop foi detectado (o diretório de configuração dele existe: `~/Library/Application Support/Claude` no macOS, `%APPDATA%\Claude` no Windows, `$XDG_CONFIG_HOME/Claude` no Linux, com padrão `~/.config/Claude`); caso contrário imprime `Skipped: Claude Desktop not detected.` e não altera nada. O Claude Desktop cria esse diretório na primeira vez que é aberto, então abra-o uma vez antes de rodar o comando.
+1. Verifica se o Claude Desktop foi detectado (o diretório de configuração dele existe: `~/Library/Application Support/Claude` no macOS, `%APPDATA%\Claude` no Windows — ou, no pacote MSIX, `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude` — e `$XDG_CONFIG_HOME/Claude` no Linux, com padrão `~/.config/Claude`); caso contrário imprime `Skipped: Claude Desktop not detected.` e não altera nada. O Claude Desktop cria esse diretório na primeira vez que é aberto, então abra-o uma vez antes de rodar o comando.
 2. Pergunta a raiz do Moodle (sugere o diretório atual se parecer uma raiz do Moodle).
-3. Mescla uma entrada `build82` no `claude_desktop_config.json` desse diretório (objeto `mcpServers` no nível raiz), preservando as demais entradas e as permissões do arquivo. Se o arquivo não existir, ele é criado.
+3. Mescla uma entrada `build82` no `claude_desktop_config.json` de cada um desses diretórios que existir (objeto `mcpServers` no nível raiz), preservando as demais entradas, a ordem das chaves e cada valor como foi escrito (só a indentação é normalizada para 2 espaços), as permissões do arquivo e um link simbólico nesse caminho (o arquivo apontado é que é gravado). Uma entrada `build82` nova vai para o fim do objeto. Se o arquivo não existir, ele é criado.
 4. Registra o caminho absoluto do binário `build82` em execução como comando (stdio) e define uma única variável de ambiente, `BUILD82_MOODLE_PATH`.
 
-Se o arquivo tiver comentários ou vírgulas finais (JSONC), o build82 o lê, mas nunca o reescreve: o comando falha com `Claude Desktop... failed: ...`, o arquivo permanece inalterado e a mensagem traz o trecho `build82` exato para colar manualmente no objeto `mcpServers`. Um arquivo que não seja JSON válido também aborta sem escrever.
+Se o arquivo tiver comentários ou vírgulas finais (JSONC), o build82 o lê, mas nunca o reescreve: se ele já tiver a mesma entrada `build82`, a ferramenta conta como instalada; caso contrário, imprime `Claude Desktop... manual step needed: ...` com o trecho `build82` exato para colar manualmente no objeto `mcpServers`, o arquivo permanece inalterado e o `install` sai com código 1. Um BOM UTF-8 é tolerado. Um arquivo que não seja JSON válido, ou cuja chave `mcpServers` não seja um objeto, é reportado como `failed` e fica inalterado.
 
 Entrada resultante:
 
@@ -59,7 +59,10 @@ O Claude Desktop tem um único arquivo de configuração por usuário (não exis
 |---------------------|---------|
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Windows, pacote MSIX (download do claude.ai e Microsoft Store) | `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json` |
 | Linux | `~/.config/Claude/claude_desktop_config.json` (`$XDG_CONFIG_HOME/Claude/` quando `XDG_CONFIG_HOME` está definida) |
+
+No Windows, o pacote MSIX do Claude Desktop lê a cópia virtualizada em `%LOCALAPPDATA%\Packages\`, enquanto o **Edit Config** pode abrir o arquivo de `%APPDATA%` ([anthropics/claude-code#26073](https://github.com/anthropics/claude-code/issues/26073)); o `build82 install claude-desktop` grava em todos esses diretórios que existirem. Feche o Claude Desktop antes de rodar o `install` ou editar o arquivo: ele regrava o arquivo enquanto está aberto.
 
 Adicione o `build82` em `mcpServers` (mantenha os servidores já existentes):
 
@@ -97,7 +100,7 @@ Execute o doctor do build82.
 build82 uninstall claude-desktop
 ```
 
-Isso apaga apenas a chave `build82` de `claude_desktop_config.json` (as outras entradas não são tocadas; arquivo inexistente não gera erro) e imprime `Claude Desktop... removed.`, ou `Claude Desktop... not registered.` (código de saída 0) quando não havia nada a remover. Um arquivo com comentários ou vírgulas finais (JSONC) nunca é reescrito: o comando falha com `Claude Desktop... failed: ...` pedindo que você remova a entrada manualmente. Execute `build82 uninstall` sem alvo para localizar e remover todos os registros do build82 de uma vez (pede confirmação).
+Isso apaga apenas a chave `build82` de cada `claude_desktop_config.json` listado acima (as outras entradas não são tocadas; arquivo inexistente não gera erro) e imprime `Claude Desktop... removed.`, ou `Claude Desktop... not registered.` (código de saída 0) quando não havia nada a remover. Um arquivo com comentários ou vírgulas finais (JSONC) nunca é reescrito: o comando imprime `Claude Desktop... manual step needed: ...` pedindo que você remova a entrada manualmente, e sai com código 1. Um arquivo que não pode ser lido ou interpretado é reportado como `Claude Desktop... failed: ...`, nunca como não registrado. Execute `build82 uninstall` sem alvo para localizar e remover todos os registros do build82 de uma vez (pede confirmação).
 
 Reinicie o Claude Desktop depois.
 

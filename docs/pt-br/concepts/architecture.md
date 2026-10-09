@@ -30,7 +30,7 @@ mcp-build82/
     ├── watcher/          ← regeneração automática via fsnotify (com debounce, só plugins dev)
     ├── config/           ← carregador de config: variáveis de ambiente → ~/.build82
     ├── installer/        ← `install`/`uninstall` — configura/remove o registro no cliente MCP
-    ├── selfupdate/       ← `self-update` — consulta GitHub Releases, verifica checksum, troca atômica do binário
+    ├── selfupdate/       ← `self-update` — consulta GitHub Releases, verifica assinatura (cosign) e checksum, troca atômica do binário
     ├── moodletype/       ← mapa tipo de plugin ↔ diretório, resolução de path e checagens de containment
     ├── phparray/         ← helpers compartilhados de parse de array/string literal PHP
     ├── phpdoc/           ← parse compartilhado de PHPDoc (visibilidade, @deprecated, @since...)

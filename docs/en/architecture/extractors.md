@@ -215,7 +215,7 @@ Regex-only scans used exclusively by the `doctor` tool, not by any generator: ba
 
 ### `shared.go` — safe file access
 
-`readFileCapped` refuses to buffer files larger than 8 MiB, and the shared directory walk skips symlinked files, so scanning untrusted third-party plugin code cannot exhaust memory or read files outside the plugin tree. The tree-sitter backend applies the same size cap.
+`readFileCapped` refuses to buffer files larger than 8 MiB and reads only regular files (`fsutil.ReadRegular`: a symbolic link at the file is not followed, and a FIFO or device is refused without blocking), and the shared directory walk skips symlinked files, so scanning untrusted third-party plugin code cannot exhaust memory, read files outside the plugin tree, or hang on a planted FIFO. The tree-sitter backend applies the same size cap and the same regular-file rule.
 
 ---
 

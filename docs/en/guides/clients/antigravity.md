@@ -20,10 +20,10 @@ What it does, exactly:
 
 1. Checks that Antigravity (IDE / CLI) is detected (the `agy` command is on `PATH`, or the `~/.gemini/config` or `~/.gemini/antigravity` directory exists); otherwise it prints `Skipped: Antigravity (IDE / CLI) not detected.` and changes nothing.
 2. Asks for the Moodle root (offers the current directory if it looks like a Moodle root).
-3. Merges a `build82` entry into `~/.gemini/config/mcp_config.json` (top-level `mcpServers` object), keeping every other entry and the file's permissions. If the file does not exist it is created.
+3. Merges a `build82` entry into `~/.gemini/config/mcp_config.json` (top-level `mcpServers` object), keeping every other entry, the order of the keys and each value as written (only the indentation is normalized to 2 spaces), the file's permissions, and a symbolic link at that path (the file it points to is written). A new `build82` entry goes at the end of the object. If the file does not exist it is created.
 4. Registers the absolute path of the running `build82` binary as the command (stdio) and sets a single environment variable, `BUILD82_MOODLE_PATH`.
 
-If the file contains comments or trailing commas (JSONC), build82 reads it but never rewrites it: the command fails with `Antigravity (IDE / CLI)... failed: ...`, the file stays unchanged, and the message includes the exact `build82` snippet to paste by hand into its `mcpServers` object. A file that is not valid JSON at all also aborts without writing.
+If the file contains comments or trailing commas (JSONC), build82 reads it but never rewrites it: if it already holds the same `build82` entry, the tool counts as installed; otherwise it prints `Antigravity (IDE / CLI)... manual step needed: ...` with the exact `build82` snippet to paste by hand into its `mcpServers` object, the file stays unchanged, and `install` exits with code 1. A UTF-8 byte order mark is tolerated. A file that is not valid JSON at all, or whose `mcpServers` key is not an object, is reported as `failed` and left unchanged.
 
 Resulting entry:
 
@@ -81,7 +81,7 @@ Then ask the agent to run the build82 `doctor` tool.
 build82 uninstall antigravity
 ```
 
-This deletes only the `build82` key from `~/.gemini/config/mcp_config.json` and from the legacy `~/.gemini/antigravity/mcp_config.json`. Other entries are untouched and a missing file is a no-op. It prints `Antigravity (IDE / CLI)... removed.`, or `Antigravity (IDE / CLI)... not registered.` (exit code 0) when there was nothing to remove. A file with comments or trailing commas (JSONC) is never rewritten: the command fails with `Antigravity (IDE / CLI)... failed: ...` asking you to remove the entry manually. Run `build82 uninstall` without a target to find and remove every build82 registration at once (it asks for confirmation).
+This deletes only the `build82` key from `~/.gemini/config/mcp_config.json` and from the legacy `~/.gemini/antigravity/mcp_config.json`. Other entries are untouched and a missing file is a no-op. It prints `Antigravity (IDE / CLI)... removed.`, or `Antigravity (IDE / CLI)... not registered.` (exit code 0) when there was nothing to remove. A file with comments or trailing commas (JSONC) is never rewritten: the command prints `Antigravity (IDE / CLI)... manual step needed: ...` asking you to remove the entry by hand, and exits with code 1. A file that cannot be read or parsed is reported as `Antigravity (IDE / CLI)... failed: ...`, never as not registered. Run `build82 uninstall` without a target to find and remove every build82 registration at once (it asks for confirmation).
 
 Removing the entry from the config file may not be enough: the IDE and CLI keep cached copies under `~/.gemini/antigravity-ide/mcp/` and `~/.gemini/antigravity-cli/mcp/` and can keep showing a removed server. If build82 still appears, delete the matching cache folder (if any) and restart. An entry you added by hand to the workspace file `.agents/mcp_config.json` is not touched by the uninstall; remove it yourself.
 

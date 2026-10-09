@@ -37,7 +37,8 @@ type GenerateContextInput struct {
 // RegisterGenerateContextTool registers the generate_plugin_context tool on `server`.
 func RegisterGenerateContextTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "generate_plugin_context",
+		Name:        "generate_plugin_context",
+		Annotations: toolAnnotations("Generate Plugin Context", false, false, true, false),
 		Description: "Generates the 12 PLUGIN_*.md context files for a single Moodle plugin: metadata, " +
 			"structure, DB tables, events, dependencies, function/callback/endpoint indexes, runtime flow, " +
 			"architecture, settings, and the combined AI context file.",
@@ -46,20 +47,21 @@ func RegisterGenerateContextTool(server *mcp.Server) {
 
 // handleGenerateContext generates the per-plugin context files for the plugin named by
 // `in.PluginPath` and refreshes the global AI index. It returns an error result when the
-// configuration is missing or invalid or the plugin path is rejected; failures of individual files
-// are reported inside the successful report. The error return is always nil.
-func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in GenerateContextInput) (*mcp.CallToolResult, struct{}, error) {
+// configuration is missing or invalid or the plugin path is rejected — returned as an error, so
+// that result has no structured output; failures of individual files are reported inside the
+// successful report. The structured output is a PluginContextOutput in either format.
+func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in GenerateContextInput) (*mcp.CallToolResult, PluginContextOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, PluginContextOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, PluginContextOutput{}, resultError(toolutil.NotInitialized())
 	}
 
 	rp, errResult := resolveAndValidatePlugin(in.PluginPath, cfg.MoodlePath)
 	if errResult != nil {
-		return errResult, struct{}{}, nil
+		return nil, PluginContextOutput{}, resultError(errResult)
 	}
 
 	result := generators.GenerateAllForPlugin(rp.Path, cfg.MoodlePath, true, &rp.Info)
@@ -70,13 +72,12 @@ func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in Gen
 		fmt.Fprintln(os.Stderr, "[build82] warning: failed to update MOODLE_AI_INDEX.md:", r.Error)
 	}
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, buildPluginContextOutput(rp, cfg.MoodlePath, result)), struct{}{}, nil
-	}
-	return textResult(false, renderPluginContextReport(rp, cfg.MoodlePath, result)), struct{}{}, nil
+	return structuredResult(in.Format, false, renderPluginContextReport(rp, cfg.MoodlePath, result), buildPluginContextOutput(rp, cfg.MoodlePath, result))
 }
 
-// PluginContextOutput is the JSON-format response of generate_plugin_context.
+// PluginContextOutput is the structured output of generate_plugin_context: the plugin's component,
+// type, version and path relative to the Moodle root, and the context files generated, served from
+// the cache and failed (relative to the plugin directory).
 type PluginContextOutput struct {
 	Component string       `json:"component"`
 	Type      string       `json:"type"`
@@ -87,7 +88,7 @@ type PluginContextOutput struct {
 	Failed    []FailedFile `json:"failed,omitempty"`
 }
 
-// buildPluginContextOutput builds the JSON response for plugin `rp` from the generator `result`.
+// buildPluginContextOutput builds the structured output for plugin `rp` from the generator `result`.
 // The plugin Path is relative to `moodlePath`, never an absolute host path.
 func buildPluginContextOutput(rp resolvedPlugin, moodlePath string, result generators.PluginGeneratorResult) PluginContextOutput {
 	generated, skipped, failed := classifyResults(result.Files, rp.Path)

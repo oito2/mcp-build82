@@ -16,6 +16,7 @@
 package selfupdate
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +96,7 @@ func TestFetchLatestRelease_ReturnsRelease(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rel, err := FetchLatestRelease(http.DefaultClient, srv.URL)
+	rel, err := FetchLatestRelease(context.Background(), http.DefaultClient, srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,7 +119,7 @@ func TestFetchLatestRelease_NoReleases(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rel, err := FetchLatestRelease(http.DefaultClient, srv.URL)
+	rel, err := FetchLatestRelease(context.Background(), http.DefaultClient, srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +143,7 @@ func TestFetchLatestRelease_SuccessBodyIsCapped(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rel, err := FetchLatestRelease(http.DefaultClient, srv.URL)
+	rel, err := FetchLatestRelease(context.Background(), http.DefaultClient, srv.URL)
 	if err == nil {
 		t.Fatalf("expected the truncated body to fail JSON decoding, got release: %+v", rel)
 	}
@@ -163,7 +165,7 @@ func TestFetchLatestRelease_ErrorBodyIsCapped(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := FetchLatestRelease(http.DefaultClient, srv.URL)
+	_, err := FetchLatestRelease(context.Background(), http.DefaultClient, srv.URL)
 	if err == nil {
 		t.Fatal("expected an error for the 500 status")
 	}
@@ -232,8 +234,18 @@ func TestVerifyChecksum_NoEntryForAsset(t *testing.T) {
 	}
 }
 
+// exeName returns `name` with the ".exe" suffix Windows needs to run a file that has no extension,
+// and unchanged elsewhere or when `name` already has an extension.
+func exeName(name string) string {
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		return name + ".exe"
+	}
+	return name
+}
+
 // buildFakeBinary compiles a tiny standalone Go program into dir that responds to --version, to
-// stand in for a downloaded release asset without touching the network.
+// stand in for a downloaded release asset without touching the network. The returned path carries
+// the ".exe" suffix on Windows.
 func buildFakeBinary(t *testing.T, dir, name, versionOutput string) string {
 	t.Helper()
 	srcDir := t.TempDir()
@@ -257,7 +269,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	out := filepath.Join(dir, name)
+	out := filepath.Join(dir, exeName(name))
 	cmd := exec.Command("go", "build", "-o", out, srcFile)
 	cmd.Dir = srcDir
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -309,7 +321,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	out := filepath.Join(dir, name)
+	out := filepath.Join(dir, exeName(name))
 	cmd := exec.Command("go", "build", "-o", out, srcFile)
 	cmd.Dir = srcDir
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -490,7 +502,7 @@ func TestAtomicReplace_SingleRenameFailureStillRestoresSuccessfully(t *testing.T
 // TestRun_RejectsUnsupportedChannel verifies that Run returns an error for a channel other than
 // "stable" (e.g. `build82 self-update --channel beta`).
 func TestRun_RejectsUnsupportedChannel(t *testing.T) {
-	err := Run(RunOptions{Channel: "beta"})
+	_, err := Run(context.Background(), RunOptions{Channel: "beta"})
 	if err == nil {
 		t.Fatal("expected an error for an unsupported channel")
 	}
@@ -509,7 +521,7 @@ func TestRun_EmptyAndStableChannelAreBothAccepted(t *testing.T) {
 
 	for _, channel := range []string{"", "stable"} {
 		var out strings.Builder
-		err := Run(RunOptions{Channel: channel, APIBaseURL: srv.URL, Stdout: &out})
+		_, err := Run(context.Background(), RunOptions{Channel: channel, APIBaseURL: srv.URL, Stdout: &out})
 		if err != nil {
 			t.Errorf("channel %q: expected no error, got: %v", channel, err)
 		}
@@ -525,9 +537,12 @@ func TestRun_CheckReportsUpdateAvailable(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	err := Run(RunOptions{Check: true, APIBaseURL: srv.URL, Stdout: &out})
+	available, err := Run(context.Background(), RunOptions{Check: true, APIBaseURL: srv.URL, Stdout: &out})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !available {
+		t.Error("expected Run to report an available update in check mode")
 	}
 	if !strings.Contains(out.String(), "A new version is available: v99.0.0") {
 		t.Errorf("unexpected output: %s", out.String())
@@ -542,7 +557,7 @@ func TestRun_CheckAgainstEmptyReleaseList(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := Run(RunOptions{Check: true, APIBaseURL: srv.URL, Stdout: &out}); err != nil {
+	if _, err := Run(context.Background(), RunOptions{Check: true, APIBaseURL: srv.URL, Stdout: &out}); err != nil {
 		t.Fatalf("unexpected error against an empty release list: %v", err)
 	}
 	if !strings.Contains(out.String(), "No releases found.") {
@@ -563,7 +578,7 @@ func TestRun_AlreadyLatestSkipsDownload(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := Run(RunOptions{APIBaseURL: srv.URL, Stdout: &out}); err != nil {
+	if _, err := Run(context.Background(), RunOptions{APIBaseURL: srv.URL, Stdout: &out}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(out.String(), "Already on the latest version") {
@@ -585,7 +600,7 @@ func TestDownloadToTemp_ExceedsMaxSizeIsRejected(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	path, err := downloadToTemp(http.DefaultClient, srv.URL, dir, "oversized-*")
+	path, err := downloadToTemp(context.Background(), http.DefaultClient, srv.URL, dir, "oversized-*")
 	if err == nil {
 		t.Fatalf("expected an error for a response exceeding maxAssetSize, got a file at %s", path)
 	}
@@ -598,8 +613,8 @@ func TestDownloadToTemp_ExceedsMaxSizeIsRejected(t *testing.T) {
 	}
 }
 
-// TestValidateAssetURL verifies that asset URLs are accepted only when the scheme is https and the
-// host is github.com or a *.githubusercontent.com subdomain.
+// TestValidateAssetURL verifies that asset URLs are accepted only when the scheme is https, the
+// host is one of GitHub's release hosts, and no port or credentials are present.
 func TestValidateAssetURL(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -609,7 +624,12 @@ func TestValidateAssetURL(t *testing.T) {
 		{"valid https github.com release asset", "https://github.com/oito2/mcp-build82/releases/download/v1.0.0/build82_linux_amd64", false},
 		{"valid https objects.githubusercontent.com redirect target", "https://objects.githubusercontent.com/github-production-release-asset-2e65be/1/abc123", false},
 		{"http is rejected", "http://github.com/oito2/mcp-build82/releases/download/v1.0.0/build82_linux_amd64", true},
+		{"valid https release-assets.githubusercontent.com redirect target", "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc123", false},
 		{"arbitrary host is rejected", "https://evil.example.com/build82_linux_amd64", true},
+		{"raw user content host is rejected", "https://raw.githubusercontent.com/someone/repo/main/build82_linux_amd64", true},
+		{"gist user content host is rejected", "https://gist.githubusercontent.com/someone/abc/raw/build82", true},
+		{"explicit port is rejected", "https://github.com:8443/oito2/mcp-build82/releases/download/v1.0.0/build82_linux_amd64", true},
+		{"credentials are rejected", "https://user:pass@github.com/oito2/mcp-build82/releases/download/v1.0.0/build82_linux_amd64", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -634,7 +654,7 @@ func TestFetchLatestRelease_SendsUserAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := FetchLatestRelease(http.DefaultClient, srv.URL); err != nil {
+	if _, err := FetchLatestRelease(context.Background(), http.DefaultClient, srv.URL); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := "build82/" + version.Current
@@ -654,7 +674,7 @@ func TestDownloadToTemp_SendsUserAgent(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	if _, err := downloadToTemp(http.DefaultClient, srv.URL, dir, "ua-test-*"); err != nil {
+	if _, err := downloadToTemp(context.Background(), http.DefaultClient, srv.URL, dir, "ua-test-*"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := "build82/" + version.Current
@@ -668,7 +688,7 @@ func TestDownloadToTemp_SendsUserAgent(t *testing.T) {
 // than an opaque os.Stat failure.
 func TestRollback_NoBackupReturnsError(t *testing.T) {
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "build82")
+	bin := filepath.Join(dir, exeName("build82"))
 	if err := os.WriteFile(bin, []byte("current binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -687,13 +707,12 @@ func TestRollback_NoBackupReturnsError(t *testing.T) {
 // restored file is the backup's actual content, not just any file happening to exist at that path.
 func TestRollback_PromotesBackupSuccessfully(t *testing.T) {
 	dir := t.TempDir()
-	current := filepath.Join(dir, "build82")
+	current := filepath.Join(dir, exeName("build82"))
 	if err := os.WriteFile(current, []byte("broken placeholder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// current + ".bak" == filepath.Join(dir, "build82.bak"), exactly what AtomicReplace would have
-	// produced for a binary named "build82" in dir.
-	buildFakeBinary(t, dir, "build82.bak", "v0.1.0\n")
+	// current + ".bak" is exactly what AtomicReplace would have produced for the binary in dir.
+	buildFakeBinary(t, dir, exeName("build82")+".bak", "v0.1.0\n")
 
 	if err := Rollback(current); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -716,11 +735,11 @@ func TestRollback_PromotesBackupSuccessfully(t *testing.T) {
 // AtomicReplace) and wraps a rename failure with enough context to act on.
 func TestRollback_RenameFailureIsSurfaced(t *testing.T) {
 	dir := t.TempDir()
-	current := filepath.Join(dir, "build82")
+	current := filepath.Join(dir, exeName("build82"))
 	if err := os.WriteFile(current, []byte("current binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	buildFakeBinary(t, dir, "build82.bak", "v0.1.0\n")
+	buildFakeBinary(t, dir, exeName("build82")+".bak", "v0.1.0\n")
 
 	origRename := osRename
 	defer func() { osRename = origRename }()
@@ -740,11 +759,11 @@ func TestRollback_RenameFailureIsSurfaced(t *testing.T) {
 // the post-rollback smoke test, Rollback returns an error but the rename is not undone.
 func TestRollback_SmokeTestFailureDoesNotUndoRename(t *testing.T) {
 	dir := t.TempDir()
-	current := filepath.Join(dir, "build82")
+	current := filepath.Join(dir, exeName("build82"))
 	if err := os.WriteFile(current, []byte("current binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	buildFakeBinary(t, dir, "build82.bak", "") // exits 3, no --version output -> fails SmokeTest
+	buildFakeBinary(t, dir, exeName("build82")+".bak", "") // exits 3, no --version output -> fails SmokeTest
 
 	err := Rollback(current)
 	if err == nil {
@@ -769,7 +788,7 @@ func TestDownloadToTemp_WithinMaxSizeSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	path, err := downloadToTemp(http.DefaultClient, srv.URL, dir, "normal-*")
+	path, err := downloadToTemp(context.Background(), http.DefaultClient, srv.URL, dir, "normal-*")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

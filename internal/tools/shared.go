@@ -18,6 +18,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,18 +46,75 @@ func textResult(isError bool, text string) *mcp.CallToolResult {
 // an extractor or generator fed malformed plugin source) is converted into an IsError text result
 // instead of propagating. The MCP SDK's tool dispatch does not recover panics, so an unrecovered
 // one would terminate the whole server process for every connected client. Every registered tool
-// is wrapped with it.
-func withRecover[In any](
-	fn func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, struct{}, error),
-) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, struct{}, error) {
-	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (result *mcp.CallToolResult, out struct{}, err error) {
+// is wrapped with it. The panic is returned as an error, so the result carries no structured
+// content.
+func withRecover[In, Out any](
+	fn func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, Out, error),
+) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, Out, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (result *mcp.CallToolResult, out Out, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				result = textResult(true, fmt.Sprintf("❌ Internal error while handling this request: %v", r))
+				var zero Out
+				result, out, err = nil, zero, fmt.Errorf("❌ Internal error while handling this request: %v", r)
 			}
 		}()
 		return fn(ctx, req, in)
 	}
+}
+
+// structuredResult returns the result of a tool with structured output `out`: a single text block
+// holding `text` for the text format, or `out` as indented JSON for the JSON format, flagged as an
+// error when `isError` is true. The SDK publishes `out` as the result's structuredContent in both
+// formats.
+func structuredResult[Out any](format Format, isError bool, text string, out Out) (*mcp.CallToolResult, Out, error) {
+	if format == FormatJSON {
+		return jsonResult(isError, out), out, nil
+	}
+	return textResult(isError, text), out, nil
+}
+
+// toolError returns an error carrying `text`. A tool handler returns it for a failure that has no
+// structured output (a missing or invalid argument, a missing configuration); the SDK turns it
+// into an IsError result whose single text block is `text`, without structuredContent.
+func toolError(text string) error {
+	return errors.New(text)
+}
+
+// resultError converts the error result `res`, made of text blocks, into a toolError carrying its
+// text, so an error built as a result can be returned by a tool with structured output.
+func resultError(res *mcp.CallToolResult) error {
+	return toolError(textOf(res))
+}
+
+// textOf returns the text blocks of `res` joined by newlines.
+func textOf(res *mcp.CallToolResult) string {
+	var parts []string
+	for _, c := range res.Content {
+		if t, ok := c.(*mcp.TextContent); ok {
+			parts = append(parts, t.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// toolAnnotations returns the annotations of a tool with every hint set explicitly, so no client
+// falls back to the protocol defaults (which assume a destructive, open-world tool): `title` is the
+// human-readable name; `readOnly` means the tool changes nothing; `destructive` means it may
+// overwrite or delete existing data; `idempotent` means repeating a call with the same arguments
+// has no further effect; `openWorld` means it reaches entities outside the Moodle installation.
+func toolAnnotations(title string, readOnly, destructive, idempotent, openWorld bool) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		Title:           title,
+		ReadOnlyHint:    readOnly,
+		DestructiveHint: &destructive,
+		IdempotentHint:  idempotent,
+		OpenWorldHint:   &openWorld,
+	}
+}
+
+// configError returns the toolError for a configuration that cannot be resolved because of `err`.
+func configError(err error) error {
+	return toolError("❌ Failed to resolve build82 configuration: " + err.Error())
 }
 
 // Format is the optional output-format field shared by every tool's input struct.

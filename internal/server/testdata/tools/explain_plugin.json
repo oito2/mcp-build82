@@ -1,0 +1,28 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Explain Plugin"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "plugin": {
+        "description": "Component, relative path, or absolute path",
+        "type": "string"
+      },
+      "section": {
+        "description": "'all' (default), 'overview', 'database', 'events', 'classes', 'services', or 'flow'",
+        "type": "string"
+      }
+    },
+    "required": [
+      "plugin"
+    ],
+    "type": "object"
+  },
+  "name": "explain_plugin",
+  "outputSchema": null
+}

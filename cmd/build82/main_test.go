@@ -35,7 +35,7 @@ func mustParseServeFlags(t *testing.T, args []string) serveFlags {
 // mustParseSelfUpdateFlags parses `args` and fails the test on a usage error.
 func mustParseSelfUpdateFlags(t *testing.T, args []string) selfupdate.RunOptions {
 	t.Helper()
-	o, err := parseSelfUpdateFlags(args)
+	o, _, err := parseSelfUpdateFlags(args)
 	if err != nil {
 		t.Fatalf("unexpected usage error: %v", err)
 	}
@@ -80,27 +80,6 @@ func TestParseSelfUpdateFlags_Channel(t *testing.T) {
 	opts := mustParseSelfUpdateFlags(t, []string{"--channel", "beta"})
 	if opts.Channel != "beta" {
 		t.Errorf("expected channel 'beta', got %q", opts.Channel)
-	}
-}
-
-// TestHasFlag_Present verifies that hasFlag finds a flag among the arguments.
-func TestHasFlag_Present(t *testing.T) {
-	if !hasFlag([]string{"--check", "--rollback"}, "--rollback") {
-		t.Error("expected hasFlag to find --rollback among the args")
-	}
-}
-
-// TestHasFlag_Absent verifies that hasFlag reports false for a missing flag.
-func TestHasFlag_Absent(t *testing.T) {
-	if hasFlag([]string{"--check", "--yes"}, "--rollback") {
-		t.Error("expected hasFlag to report false when the flag isn't present")
-	}
-}
-
-// TestHasFlag_EmptyArgs verifies that hasFlag handles a nil argument slice.
-func TestHasFlag_EmptyArgs(t *testing.T) {
-	if hasFlag(nil, "--rollback") {
-		t.Error("expected hasFlag to report false for a nil args slice")
 	}
 }
 
@@ -340,13 +319,29 @@ func TestParseServeFlags_ServerFlagsBeforeHTTP(t *testing.T) {
 	}
 }
 
-// TestParseSelfUpdateFlags_UsageErrors verifies that unknown arguments and a missing --channel
-// value are rejected.
+// TestParseSelfUpdateFlags_UsageErrors verifies that unknown arguments, a missing --channel value,
+// --rollback combined with another flag, and --require-signature with --check are rejected.
 func TestParseSelfUpdateFlags_UsageErrors(t *testing.T) {
-	for _, args := range [][]string{{"--bogus"}, {"extra"}, {"--channel"}, {"--check", "--channel"}} {
-		if _, err := parseSelfUpdateFlags(args); err == nil {
+	for _, args := range [][]string{
+		{"--bogus"}, {"extra"}, {"--channel"}, {"--check", "--channel"},
+		{"--rollback", "--check"}, {"--yes", "--rollback"}, {"--rollback", "--require-signature"},
+		{"--rollback", "--channel", "stable"}, {"--check", "--require-signature"},
+	} {
+		if _, _, err := parseSelfUpdateFlags(args); err == nil {
 			t.Errorf("parseSelfUpdateFlags(%v) expected an error", args)
 		}
+	}
+}
+
+// TestParseSelfUpdateFlags_RollbackAndRequireSignature verifies that a lone --rollback is reported
+// as a rollback and that --require-signature sets its option.
+func TestParseSelfUpdateFlags_RollbackAndRequireSignature(t *testing.T) {
+	if _, rollback, err := parseSelfUpdateFlags([]string{"--rollback"}); err != nil || !rollback {
+		t.Errorf("--rollback: got rollback=%v, err=%v", rollback, err)
+	}
+	opts, rollback, err := parseSelfUpdateFlags([]string{"--require-signature", "-y"})
+	if err != nil || rollback || !opts.RequireSignature || !opts.Yes {
+		t.Errorf("--require-signature -y: got %+v, rollback=%v, err=%v", opts, rollback, err)
 	}
 }
 
@@ -370,6 +365,56 @@ func TestParseUninstallArgs_UsageErrors(t *testing.T) {
 	for _, args := range [][]string{{"--bogus"}, {"claude", "cursor"}} {
 		if _, _, err := parseUninstallArgs(args); err == nil {
 			t.Errorf("parseUninstallArgs(%v) expected an error", args)
+		}
+	}
+}
+
+// TestParseTargetArgs_DoubleDashMakesEverythingPositional verifies that after "--" an argument
+// starting with "-" is taken as the target, and that --purge is still recognized before it.
+func TestParseTargetArgs_DoubleDashMakesEverythingPositional(t *testing.T) {
+	target, purge, err := parseUninstallArgs([]string{"--purge", "--", "-odd"})
+	if err != nil || target != "-odd" || !purge {
+		t.Errorf("got target=%q purge=%v err=%v", target, purge, err)
+	}
+	if target, purge, err := parseUninstallArgs([]string{"--", "--purge"}); err != nil || target != "--purge" || purge {
+		t.Errorf("--purge after --: got target=%q purge=%v err=%v", target, purge, err)
+	}
+	if _, err := parseInstallArgs([]string{"--", "a", "b"}); err == nil {
+		t.Error("expected a second positional argument after -- to be rejected")
+	}
+}
+
+// TestParseSelfUpdateAndServeFlags_DoubleDash verifies that a trailing "--" is accepted and that
+// anything after it is an unexpected argument, since neither takes a positional argument.
+func TestParseSelfUpdateAndServeFlags_DoubleDash(t *testing.T) {
+	if _, _, err := parseSelfUpdateFlags([]string{"--yes", "--"}); err != nil {
+		t.Errorf("self-update --yes --: unexpected error %v", err)
+	}
+	if _, _, err := parseSelfUpdateFlags([]string{"--", "--check"}); err == nil {
+		t.Error("self-update -- --check: expected an error")
+	}
+	if _, err := parseServeFlags([]string{"--http", "--"}); err != nil {
+		t.Errorf("--http --: unexpected error %v", err)
+	}
+	if _, err := parseServeFlags([]string{"--", "x"}); err == nil {
+		t.Error("-- x: expected an error")
+	}
+}
+
+// TestWantsHelp verifies that -h/--help count only before "--".
+func TestWantsHelp(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--help"}, true},
+		{[]string{"claude", "-h"}, true},
+		{[]string{"--", "--help"}, false},
+		{[]string{"claude"}, false},
+		{nil, false},
+	} {
+		if got := wantsHelp(tc.args); got != tc.want {
+			t.Errorf("wantsHelp(%v) = %v, want %v", tc.args, got, tc.want)
 		}
 	}
 }

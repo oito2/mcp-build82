@@ -70,10 +70,43 @@ type BatchPluginResult struct {
 	Error     string
 }
 
+// BatchOutput is the structured output of plugin_batch: the selection mode and one entry per
+// processed plugin, in processing order.
+type BatchOutput struct {
+	Mode    BatchMode           `json:"mode"`
+	Plugins []BatchPluginOutput `json:"plugins"`
+}
+
+// BatchPluginOutput is one processed plugin of a BatchOutput: its component, its path relative to
+// the Moodle root, the counts of generated, cached and failed context files, and the error message
+// when processing aborted.
+type BatchPluginOutput struct {
+	Component string `json:"component"`
+	Path      string `json:"path"`
+	Generated int    `json:"generated"`
+	Skipped   int    `json:"skipped"`
+	Failed    int    `json:"failed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// buildBatchOutput converts the batch `results` into a BatchOutput for `mode`, with plugin paths
+// relative to `moodlePath`.
+func buildBatchOutput(mode BatchMode, moodlePath string, results []BatchPluginResult) BatchOutput {
+	out := BatchOutput{Mode: mode, Plugins: make([]BatchPluginOutput, 0, len(results))}
+	for _, r := range results {
+		out.Plugins = append(out.Plugins, BatchPluginOutput{
+			Component: r.Component, Path: relativeToMoodle(moodlePath, r.Path),
+			Generated: r.Generated, Skipped: r.Skipped, Failed: r.Failed, Error: r.Error,
+		})
+	}
+	return out
+}
+
 // RegisterBatchTool registers the plugin_batch tool on `server`.
 func RegisterBatchTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "plugin_batch",
+		Name:        "plugin_batch",
+		Annotations: toolAnnotations("Generate Context for Many Plugins", false, false, true, false),
 		Description: "Bulk-generates context for multiple plugins at once: 'dev' mode processes every " +
 			".indevelopment-marked plugin (default), 'all' processes every plugin in the installation, " +
 			"'list' processes an explicit set of plugin identifiers.",
@@ -82,16 +115,17 @@ func RegisterBatchTool(server *mcp.Server) {
 
 // handleBatch regenerates context for the plugins selected by `in.Mode` (default "dev"),
 // sequentially or with `in.Parallel` workers, then persists the cache and refreshes the global AI
-// index. A failing plugin never aborts the batch. It returns an error result when the
-// configuration is missing or invalid or the plugin selection cannot be resolved; the error return
-// is always nil.
-func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (*mcp.CallToolResult, struct{}, error) {
+// index. A failing plugin never aborts the batch. The structured output is a BatchOutput in either
+// format; "dev" mode with no .indevelopment plugin succeeds with an empty plugin list. A missing or
+// invalid configuration or an unresolvable plugin selection is returned as an error, so that
+// result has no structured output.
+func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (*mcp.CallToolResult, BatchOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, BatchOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, BatchOutput{}, resultError(toolutil.NotInitialized())
 	}
 	if in.Mode == "" {
 		in.Mode = BatchModeDev
@@ -99,7 +133,10 @@ func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (
 
 	pluginPaths, modeDescription, errResult := resolveBatchPlugins(in, cfg.MoodlePath)
 	if errResult != nil {
-		return errResult, struct{}{}, nil
+		if errResult.IsError {
+			return nil, BatchOutput{}, resultError(errResult)
+		}
+		return structuredResult(in.Format, false, textOf(errResult), buildBatchOutput(in.Mode, cfg.MoodlePath, nil))
 	}
 
 	sort.Strings(pluginPaths)
@@ -124,10 +161,7 @@ func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (
 		fmt.Fprintln(os.Stderr, "[build82] warning: failed to update MOODLE_AI_INDEX.md:", r.Error)
 	}
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, results), struct{}{}, nil
-	}
-	return textResult(false, renderBatchReport(in, modeDescription, results)), struct{}{}, nil
+	return structuredResult(in.Format, false, renderBatchReport(in, modeDescription, results), buildBatchOutput(in.Mode, cfg.MoodlePath, results))
 }
 
 // processBatchParallel runs processPlugin for every path in `pluginPaths` on a worker pool whose

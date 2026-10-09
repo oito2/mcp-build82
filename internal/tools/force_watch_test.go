@@ -118,10 +118,11 @@ func TestPluginBatch_ForceRegeneratesEveryFileAfterRestart(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("cached plugin_batch failed: err=%v text=%s", err, resultText(t, res))
 	}
-	var cached []BatchPluginResult
-	if err := json.Unmarshal([]byte(resultText(t, res)), &cached); err != nil {
+	var cachedOut BatchOutput
+	if err := json.Unmarshal([]byte(resultText(t, res)), &cachedOut); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	cached := cachedOut.Plugins
 	if len(cached) != 1 || cached[0].Generated != 0 {
 		t.Fatalf("expected a fully cached run without force, got %+v", cached)
 	}
@@ -133,10 +134,11 @@ func TestPluginBatch_ForceRegeneratesEveryFileAfterRestart(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("forced plugin_batch failed: err=%v text=%s", err, resultText(t, res))
 	}
-	var forced []BatchPluginResult
-	if err := json.Unmarshal([]byte(resultText(t, res)), &forced); err != nil {
+	var forcedOut BatchOutput
+	if err := json.Unmarshal([]byte(resultText(t, res)), &forcedOut); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	forced := forcedOut.Plugins
 	if len(forced) != 1 {
 		t.Fatalf("expected one plugin result, got %+v", forced)
 	}

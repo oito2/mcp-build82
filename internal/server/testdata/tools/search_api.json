@@ -1,0 +1,65 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Search Moodle API"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "limit": {
+        "description": "Max results, 1-100 (default 30)",
+        "type": "integer"
+      },
+      "query": {
+        "description": "Search term (function name, keyword in summary, etc.)",
+        "type": "string"
+      },
+      "visibility": {
+        "description": "'public' (default), 'deprecated', or 'all'",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "name": "search_api",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "fuzzy": {
+        "type": "boolean"
+      },
+      "matches": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "query": {
+        "type": "string"
+      },
+      "visibility": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query",
+      "visibility",
+      "fuzzy",
+      "matches"
+    ],
+    "type": "object"
+  }
+}

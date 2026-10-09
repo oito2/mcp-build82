@@ -35,33 +35,33 @@ An extra positional argument or an unknown flag is a usage error (exit code 2). 
 ### Without a target
 
 1. build82 checks every supported client for an existing `build82` entry. It does not require the client to be detected as installed.
-   - Claude Code and Codex: run `<tool> mcp get build82`; the tool counts as registered when the command succeeds (for Claude Code this also matches the `local` and `project` scopes of the current directory). If the tool is missing or the command fails, it is treated as not registered.
-   - File-based clients: any of the configuration files listed [below](#what-is-removed-per-client) must exist, be readable as JSON (comments and trailing commas are tolerated for reading) and contain a `build82` key under the client's top-level key.
+   - Claude Code and Codex: run `<tool> mcp get build82`; the tool counts as registered when the command succeeds (for Claude Code this also matches the `local` and `project` scopes of the current directory). If the tool is missing, it is treated as not registered. When the command fails, Claude Code is treated as not registered; Codex only when the output says `No MCP server named ...` — any other failure lists it, so the removal reports the error.
+   - File-based clients: any of the configuration files listed [below](#what-is-removed-per-client) must exist, be readable as JSON (comments, trailing commas and a UTF-8 byte order mark are tolerated for reading) and contain a `build82` key under the client's top-level key. This includes clients that are no longer detected (for example OpenCode after its command was removed from `PATH`), so no entry is left pointing at a removed binary. A file that cannot be read or parsed is listed too, and its removal is reported as failed.
 2. No entries found: prints `No build82 registrations found.`
-3. Otherwise lists the clients and asks `Remove build82 from all N tool(s)? [y/N]`. Only `y` (any case) confirms; anything else, including an empty answer, exits without changes and **without running `--purge`**.
-4. Removes each entry, printing `<Label>... removed.` or `<Label>... failed: <error>` (for Claude Code, `<Label>... nothing removed.` when only a `project` registration was found, followed by a warning; see [below](#claude-code-scopes)). A failure on one client does not stop the others and does not change the exit code.
+3. Otherwise lists the clients and asks `Remove build82 from all N tool(s)? [y/N]`. Only `y` (any case) confirms; anything else, including an empty answer, prints `Nothing removed.` and exits without changes and **without running `--purge`** (with `--purge` the message is `Nothing removed; --purge was skipped too.`).
+4. Removes each entry, printing `<Label>... removed.`, `<Label>... manual step needed: <instructions>` (JSONC file, see below) or `<Label>... failed: <error>` (for Claude Code, `<Label>... nothing removed.` when only a `project` registration was found, followed by a warning; see [below](#claude-code-scopes)). A failure on one client does not stop the others (nor `--purge`), but the command exits with code 1 when any client failed or needs a manual step.
 
 ### With a target
 
 - No confirmation prompt.
 - Claude Code and Codex: if the tool is not found in `PATH`, prints `Skipped: <Label> not detected.` (exit code 0). Otherwise it runs `<tool> mcp get build82`; if that reports no registration it prints `<Label>... not registered.` (exit code 0), else it runs the removal command (see the table below). A Claude Code `project` registration is never removed: it prints a warning and exits with code 0 (see [Claude Code scopes](#claude-code-scopes)). On failure it prints `<Label>... failed: <error>` and exits with code 1 (`--purge` does not run).
-- File-based clients: no detection check. Removes the `build82` key from every file listed for the target. Prints `<Label>... removed.` when at least one entry was deleted, or `<Label>... not registered.` (exit code 0) when none was found. Invalid JSON in one of the files is an error (`<Label>... failed: <error>`, exit code 1).
-- A file with comments or trailing commas (JSONC, common in Zed's `settings.json` and OpenCode's `opencode.jsonc`) is never rewritten: if it holds a `build82` entry the command fails asking you to remove that entry manually, and the file stays unchanged.
+- File-based clients: no detection check. Removes the `build82` key from every file listed for the target. Prints `<Label>... removed.` when at least one entry was deleted, or `<Label>... not registered.` (exit code 0) when none was found. A file that cannot be read or is not valid JSON is an error (`<Label>... failed: <error>`, exit code 1), never "not registered".
+- A file with comments or trailing commas (JSONC, common in Zed's `settings.json` and OpenCode's `opencode.jsonc`) is never rewritten: if it holds a `build82` entry the command prints `<Label>... manual step needed: ...` asking you to remove that entry by hand, exits with code 1, and the file stays unchanged.
 
 ### What is removed per client
 
-Only the `build82` key is deleted; the rest of the file is preserved (file permissions are kept). A file is never created if missing.
+Only the `build82` key is deleted; the rest of the file is preserved — the other keys keep their order and their values as written (only the indentation is normalized to 2 spaces), the file permissions are kept, and when the path is a symbolic link the file it points to is edited. A file is never created if missing.
 
 | Target (label) | Registration removed |
 | :--- | :--- |
 | `claude` (Claude Code) | `claude mcp remove --scope <scope> build82` for each `user` and `local` registration; a `project` registration is left unchanged with a warning |
-| `claude-desktop` (Claude Desktop) | `mcpServers.build82` in `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`, Linux: `~/.config/Claude/`) |
+| `claude-desktop` (Claude Desktop) | `mcpServers.build82` in `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\` and every MSIX package directory `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\`, Linux: `~/.config/Claude/`) |
 | `antigravity` (Antigravity (IDE / CLI)) | `mcpServers.build82` in `~/.gemini/config/mcp_config.json` and in the legacy `~/.gemini/antigravity/mcp_config.json` |
 | `codex` (OpenAI Codex CLI) | `codex mcp remove build82` |
 | `opencode` (OpenCode) | `mcp.build82` in `~/.config/opencode/opencode.json`, `~/.config/opencode/opencode.jsonc` and the legacy `~/.config/opencode/config.json` |
 | `cursor` (Cursor) | `mcpServers.build82` in `~/.cursor/mcp.json` |
 | `zed` (Zed) | `context_servers.build82` in `~/.config/zed/settings.json` (Windows: `%APPDATA%\Zed\settings.json`) |
-| `cline` (Cline (VS Code extension / CLI)) | `mcpServers.build82` in `<globalStorage>/settings/cline_mcp_settings.json` and in `~/.cline/data/settings/cline_mcp_settings.json` (`$CLINE_DATA_DIR/settings/cline_mcp_settings.json` when `CLINE_DATA_DIR` is set) |
+| `cline` (Cline (VS Code extension / CLI)) | `mcpServers.build82` in `<globalStorage>/settings/cline_mcp_settings.json` and in `~/.cline/data/settings/cline_mcp_settings.json` (`$CLINE_DIR/data/settings/cline_mcp_settings.json` when `CLINE_DIR` is an absolute path; `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` when `CLINE_DATA_DIR` is set) |
 
 Cline `<globalStorage>` (stable VS Code):
 

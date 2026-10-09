@@ -17,6 +17,7 @@ package installer
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -27,46 +28,59 @@ import (
 )
 
 // hasEntry reports whether a target currently has a build82 registration configured — not
-// merely whether the tool itself is installed.
+// merely whether the tool itself is installed. A config file that cannot be read or parsed counts
+// as holding one, so an uninstall reports it as failed instead of skipping it. For a tool with a
+// single configuration (Codex), a failed `mcp get` counts as "not registered" only when its output
+// says so or the tool is not on PATH.
 func hasEntry(t target) bool {
 	if t.Shape == shapeCLI {
-		_, err := runCommand(t.CLI.Bin, t.CLI.GetArgs...)
-		return err == nil
+		out, err := runCommand(t.CLI.Bin, t.CLI.GetArgs...)
+		if err == nil {
+			return true
+		}
+		if t.CLI.Scope != nil || notRegisteredOutput(out) {
+			return false
+		}
+		_, lookErr := lookPath(t.CLI.Bin)
+		return lookErr == nil
 	}
 	for _, path := range t.removePaths() {
-		if fileHasEntry(path, t.Shape) {
+		if has, err := fileHasEntry(path, t.Shape); has || err != nil {
 			return true
 		}
 	}
 	return false
 }
 
-// fileHasEntry reports whether the config file at `path` is readable and holds a build82 entry
-// under the top-level key of `shape`.
-func fileHasEntry(path string, shape configShape) bool {
+// fileHasEntry reports whether the config file at `path` holds a build82 entry under the top-level
+// key of `shape`. A missing file holds none. It returns the error of a file that exists but cannot
+// be read or parsed, so the caller reports it instead of taking it for a file without build82.
+func fileHasEntry(path string, shape configShape) (bool, error) {
 	if !fileExists(path) {
-		return false
+		return false, nil
 	}
 	m, _, err := readConfig(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	sub, ok := m[shape.topKey()].(map[string]any)
 	if !ok {
-		return false
+		return false, nil
 	}
 	_, ok = sub["build82"]
-	return ok
+	return ok, nil
 }
 
-// removeEntryFile deletes the build82 key from one config file, never touching the rest of the
-// file and never creating a file that didn't exist. removed reports whether there was an entry to
-// delete. A file with comments or trailing commas is never rewritten.
+// removeEntryFile deletes the build82 key from one config file, keeping every other key, their
+// order and values as written, the file mode and a symbolic link at `path`, and never creating a
+// file that didn't exist. removed reports whether there was an entry to delete. A file with
+// comments or trailing commas is never rewritten: the returned *manualEditError says what to
+// remove by hand. It returns an error when the file cannot be read, parsed or written.
 func removeEntryFile(path string, shape configShape) (removed bool, err error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	m, strict, err := readConfig(path)
+	m, strict, raw, err := loadConfig(path)
 	if err != nil {
 		return false, err
 	}
@@ -79,12 +93,12 @@ func removeEntryFile(path string, shape configShape) (removed bool, err error) {
 		return false, nil
 	}
 	if !strict {
-		return false, fmt.Errorf("%s contains comments or trailing commas; it was left unchanged so they are not lost. "+
-			"Remove the \"build82\" entry from its %q object manually", path, topKey)
+		return false, &manualEditError{fmt.Sprintf("%s contains comments or trailing commas; it was left unchanged so they are not lost. "+
+			"Remove the \"build82\" entry from its %q object manually", path, topKey)}
 	}
-	delete(sub, "build82")
-	m[topKey] = sub
-	return true, writeJSON(path, m)
+	return true, editServers(path, raw, topKey, func(members []jsonMember) []jsonMember {
+		return deleteMember(members, "build82")
+	})
 }
 
 // uninstallTarget removes build82 from a target. removed is false, with a nil error, when there
@@ -104,9 +118,12 @@ func uninstallTarget(t target) (removed bool, warnings []string, err error) {
 	return removed, nil, errors.Join(errs...)
 }
 
-// reportUninstall prints the outcome of one target's uninstall.
+// reportUninstall prints the outcome of one target's uninstall: "manual step needed" when the only
+// problems are files left for the user to edit, "failed" for any other error.
 func reportUninstall(t target, removed bool, warnings []string, err error) {
 	switch {
+	case onlyManual(err):
+		fmt.Printf("%s... manual step needed: %v\n", t.Label, err)
 	case err != nil:
 		fmt.Printf("%s... failed: %v\n", t.Label, err)
 	case removed:
@@ -156,8 +173,9 @@ func purgeCandidates(cfg *config.Config) (configFile string, files []string, err
 // runPurge implements the --purge flag: it lists what will be deleted, asks a separate
 // confirmation read from `in`, then removes the ~/.build82 config file and the generated files of
 // `cfg`'s Moodle root. Individual removal failures are printed, not returned; the error is non-nil
-// only when the config location cannot be resolved.
-func runPurge(cfg *config.Config, in *bufio.Reader) error {
+// only when the config location cannot be resolved or `ctx` ends at the confirmation (wrapping
+// prompt.ErrInterrupted).
+func runPurge(ctx context.Context, cfg *config.Config, in *bufio.Reader) error {
 	configFile, files, err := purgeCandidates(cfg)
 	if err != nil {
 		return err
@@ -169,7 +187,11 @@ func runPurge(cfg *config.Config, in *bufio.Reader) error {
 	}
 	fmt.Printf("  - %d generated file(s) under %s/\n", len(files), generators.ContextDir)
 
-	if !confirm(in, "This cannot be undone. Proceed? [y/N] ") {
+	ok, err := confirm(ctx, in, "This cannot be undone. Proceed? [y/N] ")
+	if err != nil {
+		return err
+	}
+	if !ok {
 		fmt.Println("Purge cancelled.")
 		return nil
 	}
@@ -190,10 +212,14 @@ func runPurge(cfg *config.Config, in *bufio.Reader) error {
 
 // Uninstall is the top-level `build82 uninstall [target] [--purge]` flow. With a non-empty
 // `targetID` it removes build82 from that target only; otherwise it removes it from every tool that
-// has a registration, after confirmation. When `purge` is true it then runs the purge step. It
-// returns an error for an unknown target, a failed single-target removal, or a config load failure.
-func Uninstall(targetID string, purge bool) error {
+// has a registration — including tools no longer detected whose config files still hold the entry,
+// and files that cannot be read, which are reported as failed — after confirmation. Declining that
+// confirmation skips the purge too. When `purge` is true it then runs the purge step. It returns an
+// error for an unknown target, any removal that failed or needs a manual step, a config load
+// failure, or `ctx` ending — at a prompt (wrapping prompt.ErrInterrupted) or between two targets.
+func Uninstall(ctx context.Context, targetID string, purge bool) error {
 	in := bufio.NewReader(os.Stdin)
+	problems := 0
 
 	if targetID != "" {
 		t, ok, err := targetByID(targetID)
@@ -237,22 +263,42 @@ func Uninstall(targetID string, purge bool) error {
 			for _, t := range configured {
 				fmt.Printf("  - %s\n", t.Label)
 			}
-			if !confirm(in, fmt.Sprintf("Remove build82 from all %d tool(s)? [y/N] ", len(configured))) {
+			ok, err := confirm(ctx, in, fmt.Sprintf("Remove build82 from all %d tool(s)? [y/N] ", len(configured)))
+			if err != nil {
+				return err
+			}
+			if !ok {
+				if purge {
+					fmt.Println("Nothing removed; --purge was skipped too.")
+				} else {
+					fmt.Println("Nothing removed.")
+				}
 				return nil
 			}
-			for _, t := range configured {
+			for i, t := range configured {
+				if ctx.Err() != nil {
+					return fmt.Errorf("interrupted after %d of %d tool(s): %w", i, len(configured), ctx.Err())
+				}
 				removed, warnings, err := uninstallTarget(t)
 				reportUninstall(t, removed, warnings, err)
+				if err != nil {
+					problems++
+				}
 			}
 		}
 	}
 
-	if !purge {
-		return nil
+	if purge {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if err := runPurge(ctx, cfg, in); err != nil {
+			return err
+		}
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
+	if problems > 0 {
+		return fmt.Errorf("build82 could not be removed from %d tool(s); see above", problems)
 	}
-	return runPurge(cfg, in)
+	return nil
 }

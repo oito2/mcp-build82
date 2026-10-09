@@ -17,9 +17,13 @@ package installer
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +33,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/binpath"
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/fsutil"
+	"github.com/oito2/mcp-build82/internal/prompt"
 )
 
 // Test seams: the operating system the path table is built for, PATH lookups used for
@@ -185,19 +190,41 @@ func targets() ([]target, error) {
 	appData := appDataDir(home)
 
 	claudeDesktop := target{ID: "claude-desktop", Label: "Claude Desktop", Shape: shapeMcpServers}
+	var claudeDesktopDir string
 	switch goos {
 	case "darwin":
-		claudeDesktop.DetectDirs = fixedPaths(filepath.Join(home, "Library", "Application Support", "Claude"))
+		claudeDesktopDir = filepath.Join(home, "Library", "Application Support", "Claude")
 	case "windows":
-		claudeDesktop.DetectDirs = fixedPaths(filepath.Join(appData, "Claude"))
+		claudeDesktopDir = filepath.Join(appData, "Claude")
 	case "linux":
-		claudeDesktop.DetectDirs = fixedPaths(filepath.Join(xdgConfigHome(home), "Claude"))
+		claudeDesktopDir = filepath.Join(xdgConfigHome(home), "Claude")
 	default:
 		claudeDesktop.Unsupported = "Claude Desktop is only available for macOS, Windows and Linux"
 	}
-	if claudeDesktop.DetectDirs != nil {
-		file := filepath.Join(claudeDesktop.DetectDirs()[0], "claude_desktop_config.json")
-		claudeDesktop.InstallPaths = fixedPaths(file)
+	if claudeDesktopDir != "" {
+		// On Windows the MSIX package (the claude.ai download and the Microsoft Store) reads a
+		// virtualized copy of the directory, so those directories are looked at as well.
+		dirs := func() []string { return append([]string{claudeDesktopDir}, claudeDesktopMSIXDirs(home)...) }
+		claudeDesktop.DetectDirs = dirs
+		claudeDesktop.InstallPaths = func() []string {
+			var paths []string
+			for _, dir := range dirs() {
+				if dirExists(dir) {
+					paths = append(paths, filepath.Join(dir, "claude_desktop_config.json"))
+				}
+			}
+			if len(paths) == 0 {
+				paths = append(paths, filepath.Join(claudeDesktopDir, "claude_desktop_config.json"))
+			}
+			return paths
+		}
+		claudeDesktop.RemovePaths = func() []string {
+			var paths []string
+			for _, dir := range dirs() {
+				paths = append(paths, filepath.Join(dir, "claude_desktop_config.json"))
+			}
+			return paths
+		}
 	}
 
 	geminiConfig := filepath.Join(home, ".gemini", "config")
@@ -212,13 +239,7 @@ func targets() ([]target, error) {
 		zedDir = filepath.Join(appData, "Zed")
 	}
 
-	// clineCLIDir is the directory whose presence marks a Cline CLI install; clineCLIData holds
-	// its settings. CLINE_DATA_DIR replaces the default ~/.cline/data as a whole.
-	clineCLIDir := filepath.Join(home, ".cline")
-	clineCLIData := filepath.Join(clineCLIDir, "data")
-	if v := os.Getenv("CLINE_DATA_DIR"); v != "" {
-		clineCLIDir, clineCLIData = v, v
-	}
+	clineCLIDir, clineCLIData := clineCLIDirs(home)
 
 	return []target{
 		{ID: "claude", Label: "Claude Code", DetectCmd: "claude", Shape: shapeCLI, CLI: &cliSpec{
@@ -299,6 +320,48 @@ func clineCLISettings(dataDir string) string {
 	return filepath.Join(dataDir, "settings", "cline_mcp_settings.json")
 }
 
+// clineCLIDirs returns the directory whose presence marks a Cline CLI install and the data
+// directory holding its settings: ~/.cline and ~/.cline/data by default. CLINE_DIR, when it is an
+// absolute path, replaces ~/.cline (and so moves the data directory under it); CLINE_DATA_DIR,
+// when set, replaces the data directory as a whole and is then used as the marker too.
+func clineCLIDirs(home string) (marker, data string) {
+	if v := os.Getenv("CLINE_DATA_DIR"); v != "" {
+		return v, v
+	}
+	marker = filepath.Join(home, ".cline")
+	if v := os.Getenv("CLINE_DIR"); filepath.IsAbs(v) {
+		marker = v
+	}
+	return marker, filepath.Join(marker, "data")
+}
+
+// claudeDesktopMSIXDirs returns the Claude directories of Claude Desktop's MSIX package on
+// Windows: the app's AppData is virtualized under
+// %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude, and that copy of
+// claude_desktop_config.json is the one the app reads. It returns nil on other systems or when no
+// such package directory exists.
+func claudeDesktopMSIXDirs(home string) []string {
+	if goos != "windows" {
+		return nil
+	}
+	local := os.Getenv("LOCALAPPDATA")
+	if local == "" {
+		local = filepath.Join(home, "AppData", "Local")
+	}
+	packages := filepath.Join(local, "Packages")
+	entries, err := os.ReadDir(packages)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "Claude_") {
+			dirs = append(dirs, filepath.Join(packages, e.Name(), "LocalCache", "Roaming", "Claude"))
+		}
+	}
+	return dirs
+}
+
 // appDataDir returns %APPDATA%, falling back to its default location under the home directory.
 // Only meaningful on Windows.
 func appDataDir(home string) string {
@@ -367,61 +430,254 @@ func fileExists(path string) bool {
 
 // --- JSON config read/write/merge ---------------------------------------------------------------
 
-// readConfig parses the JSON object in the config file at `path`. A missing file yields an empty
-// config. strict reports whether the file was plain JSON; when it only parses after removing
-// comments and trailing commas (JSONC), strict is false and the caller must not rewrite it, since
-// re-encoding would drop the comments. It returns an error when the file cannot be read or is not
-// valid JSON(C).
-func readConfig(path string) (m map[string]any, strict bool, err error) {
-	content, ok, err := fsutil.ReadOptional(path)
-	if err != nil {
-		return nil, false, err
+// errUnparsableConfig reports a config file whose content is not a JSON object, even after
+// removing comments and trailing commas.
+var errUnparsableConfig = errors.New("not a JSON object")
+
+// manualEditError reports a config file left unchanged because rewriting it would lose the user's
+// comments or trailing commas; its message says what to change by hand.
+type manualEditError struct{ msg string }
+
+// Error returns the instructions for the manual edit.
+func (e *manualEditError) Error() string { return e.msg }
+
+// onlyManual reports whether `err` is non-nil and every error it holds (through errors.Join) is a
+// *manualEditError, so the target needs a manual step but nothing actually failed.
+func onlyManual(err error) bool {
+	if err == nil {
+		return false
 	}
-	if !ok {
-		return map[string]any{}, true, nil
-	}
-	if err := json.Unmarshal(content, &m); err == nil {
-		if m == nil {
-			m = map[string]any{}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !onlyManual(e) {
+				return false
+			}
 		}
-		return m, true, nil
+		return true
 	}
-	m = nil
-	if err := json.Unmarshal(stripJSONC(content), &m); err != nil {
-		return nil, false, fmt.Errorf("cannot parse %s — invalid JSON: %w", path, err)
-	}
-	if m == nil {
-		m = map[string]any{}
-	}
-	return m, false, nil
+	var manual *manualEditError
+	return errors.As(err, &manual)
 }
 
-// writeJSON atomically writes `data` to `path` as indented JSON with a trailing newline. It keeps
-// the file's existing permissions (0o644 for a new file) and returns any marshal or write error.
-func writeJSON(path string, data map[string]any) error {
-	// These files often hold secrets for other MCP servers, and WriteAtomic's temp-file+rename means
-	// the mode passed here governs the final file, so the existing mode must be carried over.
+// readConfig parses the JSON object in the config file at `path`, as loadConfig does.
+func readConfig(path string) (m map[string]any, strict bool, err error) {
+	m, strict, _, err = loadConfig(path)
+	return m, strict, err
+}
+
+// loadConfig reads the config file at `path` and returns its JSON object, with numbers kept as
+// json.Number, and its content without a UTF-8 byte order mark (nil for a missing file) for a
+// rewrite that keeps it as written. A missing or blank file yields an empty object. strict reports
+// whether the file was plain JSON; when it only parses after removing comments and trailing commas
+// (JSONC), strict is false and the caller must not rewrite it, since re-encoding would drop the
+// comments. It returns an error when the file cannot be read or is not a JSON(C) object.
+func loadConfig(path string) (m map[string]any, strict bool, raw []byte, err error) {
+	raw, err = os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]any{}, true, nil, nil
+	}
+	if err != nil {
+		return nil, false, nil, err
+	}
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}, true, raw, nil
+	}
+	if m, ok := decodeObject(raw); ok {
+		return m, true, raw, nil
+	}
+	if m, ok := decodeObject(stripJSONC(raw)); ok {
+		return m, false, raw, nil
+	}
+	return nil, false, nil, fmt.Errorf("cannot parse %s: %w", path, errUnparsableConfig)
+}
+
+// decodeObject decodes `raw` as exactly one JSON object, keeping numbers as json.Number. Anything
+// after the object other than white space makes it fail.
+func decodeObject(raw []byte) (map[string]any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil || m == nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return m, true
+}
+
+// jsonMember is one key of a JSON object and its value as written.
+type jsonMember struct {
+	key   string
+	value json.RawMessage
+}
+
+// objectMembers decodes `raw`, a JSON object, into its members in the order they are written, each
+// value compacted. A key written more than once keeps its first position and its last value. Blank
+// `raw` has no members. It returns an error when `raw` is not a single JSON object.
+func objectMembers(raw []byte) ([]jsonMember, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, errUnparsableConfig
+	}
+	var members []jsonMember
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return nil, errUnparsableConfig
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, value); err != nil {
+			return nil, err
+		}
+		members = setMember(members, key, compact.Bytes())
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+// memberValue returns the value of `key` in `members`, and whether it is there.
+func memberValue(members []jsonMember, key string) (json.RawMessage, bool) {
+	for _, m := range members {
+		if m.key == key {
+			return m.value, true
+		}
+	}
+	return nil, false
+}
+
+// setMember sets `key` to `value` in `members`: in place when the key is there, otherwise appended
+// at the end. It returns the updated members.
+func setMember(members []jsonMember, key string, value json.RawMessage) []jsonMember {
+	for i := range members {
+		if members[i].key == key {
+			members[i].value = value
+			return members
+		}
+	}
+	return append(members, jsonMember{key: key, value: value})
+}
+
+// deleteMember returns `members` without `key`.
+func deleteMember(members []jsonMember, key string) []jsonMember {
+	out := members[:0]
+	for _, m := range members {
+		if m.key != key {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// encodeMembers returns `members` as one compact JSON object, in order, each value written as held.
+func encodeMembers(members []jsonMember) json.RawMessage {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, m := range members {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		key, _ := marshalNoEscape(m.key) // a string always encodes
+		buf.Write(key)
+		buf.WriteByte(':')
+		buf.Write(m.value)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
+}
+
+// marshalNoEscape encodes `v` as compact JSON without escaping "&", "<" and ">", so values such as
+// URLs and commands keep their form when a file is rewritten.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// editServers rewrites the config file at `path`, whose content is `raw` (a JSON object, or blank),
+// after passing the members of the object under `topKey` through `edit`; a missing or null object
+// counts as empty, and a missing one is added at the end. Every other key and value stays as in
+// `raw`, in the same order. The file is written indented with two spaces and a trailing newline,
+// keeping the mode of an existing file (0o644 for a new one); when `path` is a symbolic link, the
+// file it points to is written and the link is kept.
+func editServers(path string, raw []byte, topKey string, edit func([]jsonMember) []jsonMember) error {
+	top, err := objectMembers(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	var servers []jsonMember
+	if v, ok := memberValue(top, topKey); ok && !bytes.Equal(v, []byte("null")) {
+		if servers, err = objectMembers(v); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	top = setMember(top, topKey, encodeMembers(edit(servers)))
+	var out bytes.Buffer
+	if err := json.Indent(&out, encodeMembers(top), "", "  "); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	out.WriteByte('\n')
+
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
+	// These files often hold secrets for other MCP servers, and WriteAtomic's temp-file+rename
+	// means the mode passed here governs the final file, so the existing mode is carried over.
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
 	}
-	b, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-	return fsutil.WriteAtomic(path, append(b, '\n'), mode)
+	return fsutil.WriteAtomic(path, out.Bytes(), mode)
 }
 
-// mergeServerEntry sets the "build82" key of the object under `topKey` in `m` to `entry`,
-// creating that object when it is missing or not an object, and returns `m`.
-func mergeServerEntry(m map[string]any, topKey string, entry map[string]any) map[string]any {
-	sub, ok := m[topKey].(map[string]any)
-	if !ok {
-		sub = map[string]any{}
+// serversObject returns the object under `topKey` in `m`, an empty one when it is missing or null.
+// It returns an error when the key holds anything else, since replacing it would drop what the
+// user keeps there.
+func serversObject(m map[string]any, topKey, path string) (map[string]any, error) {
+	v, ok := m[topKey]
+	if !ok || v == nil {
+		return map[string]any{}, nil
 	}
-	sub["build82"] = entry
-	m[topKey] = sub
-	return m
+	sub, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: %q is not a JSON object, so the file was left unchanged; fix it, then try again", path, topKey)
+	}
+	return sub, nil
+}
+
+// entryMatches reports whether `current`, an existing build82 entry, holds every key of `want`
+// with an equal JSON value. Keys the user added to the entry are allowed.
+func entryMatches(current any, want map[string]any) bool {
+	cur, ok := current.(map[string]any)
+	if !ok {
+		return false
+	}
+	for k, v := range want {
+		a, errA := json.Marshal(cur[k])
+		b, errB := json.Marshal(v)
+		if errA != nil || errB != nil || !bytes.Equal(a, b) {
+			return false
+		}
+	}
+	return true
 }
 
 // serverEntry builds the build82 entry for the given shape, launching `binaryPath` with
@@ -442,25 +698,39 @@ func serverEntry(shape configShape, binaryPath, moodlePath string) map[string]an
 }
 
 // writeConfig merges a build82 entry into the config file at `path`, in the shape of target `t`,
-// preserving every other key. A file with comments or trailing commas is left untouched and the
-// returned error carries the snippet to add by hand. It also fails when the file cannot be read,
-// parsed or written.
+// preserving every other key, their order and their values as written. A file that already holds
+// the wanted entry is left unchanged. Otherwise a file with comments or trailing commas is left
+// untouched and the returned *manualEditError carries the snippet to add by hand. It also fails
+// when the file cannot be read, parsed or written, or the shape's key holds a non-object value.
 func writeConfig(t target, path, binaryPath, moodlePath string) error {
 	topKey := t.Shape.topKey()
 	if topKey == "" {
 		return fmt.Errorf("target %s has no JSON config shape", t.ID)
 	}
-	m, strict, err := readConfig(path)
+	m, strict, raw, err := loadConfig(path)
+	if err != nil {
+		return err
+	}
+	servers, err := serversObject(m, topKey, path)
 	if err != nil {
 		return err
 	}
 	entry := serverEntry(t.Shape, binaryPath, moodlePath)
+	if current, ok := servers["build82"]; ok && entryMatches(current, entry) {
+		return nil
+	}
 	if !strict {
 		snippet, _ := json.MarshalIndent(map[string]any{"build82": entry}, "", "  ")
-		return fmt.Errorf("%s contains comments or trailing commas; it was left unchanged so they are not lost. "+
-			"Add this inside its %q object manually:\n%s", path, topKey, snippet)
+		return &manualEditError{fmt.Sprintf("%s contains comments or trailing commas; it was left unchanged so they are not lost. "+
+			"Add this inside its %q object manually:\n%s", path, topKey, snippet)}
 	}
-	return writeJSON(path, mergeServerEntry(m, topKey, entry))
+	value, err := marshalNoEscape(entry)
+	if err != nil {
+		return err
+	}
+	return editServers(path, raw, topKey, func(members []jsonMember) []jsonMember {
+		return setMember(members, "build82", value)
+	})
 }
 
 // runCLI runs one of a tool's own CLI commands, turning a failure into an error carrying the
@@ -486,6 +756,9 @@ func cliError(bin string, args []string, out []byte, err error) error {
 // following `mcp add` never collides with an existing one. removed reports whether anything was
 // removed; warnings describe registrations that were deliberately left in place.
 //
+// For a tool with a single configuration (Codex), a failed `mcp get` means "not registered" only
+// when its output says so (notRegisteredOutput); any other failure is returned as an error.
+//
 // For Claude Code, `claude mcp get` shows only the registration that takes precedence (local over
 // project over user), so it is queried again after each removal. Local and user registrations are
 // removed; a project registration lives in the project's shared .mcp.json and is never modified.
@@ -493,8 +766,11 @@ func cliError(bin string, args []string, out []byte, err error) error {
 // removed directly, treating Claude's "No MCP server named" answer as nothing to remove.
 func removeCLIRegistration(c *cliSpec) (removed bool, warnings []string, err error) {
 	if c.Scope == nil {
-		if _, err := runCommand(c.Bin, c.GetArgs...); err != nil {
-			return false, nil, nil
+		if out, err := runCommand(c.Bin, c.GetArgs...); err != nil {
+			if notRegisteredOutput(out) {
+				return false, nil, nil
+			}
+			return false, nil, cliError(c.Bin, c.GetArgs, out, err)
 		}
 		if err := runCLI(c.Bin, c.RemoveArgs("")); err != nil {
 			return false, nil, err
@@ -518,7 +794,7 @@ func removeCLIRegistration(c *cliSpec) (removed bool, warnings []string, err err
 			if err == nil {
 				return true, warnings, nil
 			}
-			if strings.Contains(string(out), "No MCP server named") {
+			if notRegisteredOutput(out) {
 				return removed, warnings, nil
 			}
 			return removed, warnings, cliError(c.Bin, c.RemoveArgs(scopeUser), out, err)
@@ -532,6 +808,13 @@ func removeCLIRegistration(c *cliSpec) (removed bool, warnings []string, err err
 		}
 		removed = true
 	}
+}
+
+// notRegisteredOutput reports whether `out`, the output of a failed `mcp get` or `mcp remove`, says
+// that no server of that name is registered ("No MCP server named ..."), the answer of both the
+// claude and the codex CLI.
+func notRegisteredOutput(out []byte) bool {
+	return strings.Contains(string(out), "No MCP server named")
 }
 
 // projectScopeWarning explains a project-scope registration that build82 leaves untouched. Such a
@@ -566,7 +849,8 @@ func installTarget(t target, binaryPath, moodlePath string) (replaced bool, warn
 	}
 	var errs []error
 	for _, p := range paths {
-		replaced = replaced || fileHasEntry(p, t.Shape)
+		has, _ := fileHasEntry(p, t.Shape) // an unreadable file makes writeConfig fail below
+		replaced = replaced || has
 		if err := writeConfig(t, p, binaryPath, moodlePath); err != nil {
 			errs = append(errs, err)
 		}
@@ -574,9 +858,12 @@ func installTarget(t target, binaryPath, moodlePath string) (replaced bool, warn
 	return replaced, nil, errors.Join(errs...)
 }
 
-// reportInstall prints the outcome of one target's install.
+// reportInstall prints the outcome of one target's install: "manual step needed" when the only
+// problems are files left for the user to edit, "failed" for any other error.
 func reportInstall(t target, replaced bool, warnings []string, err error) {
 	switch {
+	case onlyManual(err):
+		fmt.Printf("%s... manual step needed: %v\n", t.Label, err)
 	case err != nil:
 		fmt.Printf("%s... failed: %v\n", t.Label, err)
 	case replaced:
@@ -598,19 +885,28 @@ func printWarnings(warnings []string) {
 
 // promptMoodlePath asks for the Moodle root, offering the working directory when it is one, and
 // repeats until the answer is a valid Moodle root. An empty answer selects the working directory.
-// It returns the absolute path, or an error when the input ends before a valid root is given.
-func promptMoodlePath(in *bufio.Reader) (string, error) {
+// It returns the absolute path, or an error when the input ends before a valid root is given or
+// `ctx` ends while waiting for an answer (wrapping prompt.ErrInterrupted).
+func promptMoodlePath(ctx context.Context, in *bufio.Reader) (string, error) {
 	cwd, _ := os.Getwd()
 	if extractors.IsMoodleRoot(cwd) {
 		fmt.Printf("Detected a Moodle installation at %s. Correct? [Y/n] ", cwd)
-		answer, _ := readLine(in)
+		answer, _, err := prompt.ReadLine(ctx, in)
+		if err != nil {
+			fmt.Println()
+			return "", err
+		}
 		if !strings.EqualFold(strings.TrimSpace(answer), "n") {
 			return cwd, nil
 		}
 	}
 	for {
 		fmt.Print("Moodle root path: ")
-		line, eof := readLine(in)
+		line, eof, err := prompt.ReadLine(ctx, in)
+		if err != nil {
+			fmt.Println()
+			return "", err
+		}
 		answer := strings.TrimSpace(line)
 		if eof && answer == "" {
 			return "", errors.New("no Moodle path provided (stdin closed)")
@@ -629,18 +925,10 @@ func promptMoodlePath(in *bufio.Reader) (string, error) {
 	}
 }
 
-// confirm prints `prompt` and reports whether the answer read from `in` is "y" (case-insensitive).
-func confirm(in *bufio.Reader, prompt string) bool {
-	fmt.Print(prompt)
-	line, _ := readLine(in)
-	return strings.ToLower(strings.TrimSpace(line)) == "y"
-}
-
-// readLine reads one line from `in`, including its newline; a read error yields what was read so
-// far. eof is true when the input ended or failed before a newline was read.
-func readLine(in *bufio.Reader) (line string, eof bool) {
-	line, err := in.ReadString('\n')
-	return line, err != nil
+// confirm prints `question` and reports whether the answer read from `in` is "y"
+// (case-insensitive). It returns an error wrapping prompt.ErrInterrupted when `ctx` ends first.
+func confirm(ctx context.Context, in *bufio.Reader, question string) (bool, error) {
+	return prompt.Confirm(ctx, in, os.Stdout, question)
 }
 
 // --- top-level flow -------------------------------------------------------------------------------
@@ -676,8 +964,10 @@ func supportedIDs() ([]string, error) {
 // Run is the top-level `build82 install [target]` flow. With a non-empty `targetID` it installs
 // into that target only (skipping it when unsupported or not detected); otherwise it lists the
 // detected tools and installs into all of them after confirmation. It returns an error for an
-// unknown target, an unresolvable binary path or home directory, or a failed single-target install.
-func Run(targetID string) error {
+// unknown target, an unresolvable binary path or home directory, any target whose install failed
+// or needs a manual step, or `ctx` ending — at a prompt (wrapping prompt.ErrInterrupted, nothing
+// changed) or between two targets.
+func Run(ctx context.Context, targetID string) error {
 	binaryPath, err := binpath.Resolve()
 	if err != nil {
 		return fmt.Errorf("failed to resolve the running binary's path: %w", err)
@@ -705,7 +995,7 @@ func Run(targetID string) error {
 			fmt.Printf("Skipped: %s not detected.\n", t.Label)
 			return nil
 		}
-		moodlePath, err := promptMoodlePath(in)
+		moodlePath, err := promptMoodlePath(ctx, in)
 		if err != nil {
 			return err
 		}
@@ -738,17 +1028,28 @@ func Run(targetID string) error {
 		fmt.Printf("  - %s\n", t.Label)
 	}
 
-	moodlePath, err := promptMoodlePath(in)
+	moodlePath, err := promptMoodlePath(ctx, in)
 	if err != nil {
 		return err
 	}
-	if !confirm(in, fmt.Sprintf("Install build82 into all %d detected tool(s)? [y/N] ", len(detected))) {
-		return nil
+	ok, err := confirm(ctx, in, fmt.Sprintf("Install build82 into all %d detected tool(s)? [y/N] ", len(detected)))
+	if err != nil || !ok {
+		return err
 	}
 
-	for _, t := range detected {
+	problems := 0
+	for i, t := range detected {
+		if ctx.Err() != nil {
+			return fmt.Errorf("interrupted after %d of %d tool(s): %w", i, len(detected), ctx.Err())
+		}
 		replaced, warnings, err := installTarget(t, binaryPath, moodlePath)
 		reportInstall(t, replaced, warnings, err)
+		if err != nil {
+			problems++
+		}
+	}
+	if problems > 0 {
+		return fmt.Errorf("%d of %d tool(s) failed or need a manual step; see above", problems, len(detected))
 	}
 	return nil
 }

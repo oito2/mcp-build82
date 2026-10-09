@@ -18,14 +18,15 @@ package toolutil
 import (
 	"errors"
 	"io"
-	"os"
+
+	"github.com/oito2/mcp-build82/internal/fsutil"
 )
 
 // ReadFileTruncated returns at most the first `maxChars` bytes of the file at `path`, without
 // reading the rest of a large file into memory. It returns "" when the file cannot be opened or
 // read; callers treat that as "not available" rather than as an error. It never panics.
 func ReadFileTruncated(path string, maxChars int) string {
-	f, err := os.Open(path)
+	f, err := fsutil.OpenRegular(path)
 	if err != nil {
 		return ""
 	}

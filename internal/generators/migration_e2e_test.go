@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,9 @@ func TestGenerateAll_LogsLegacyGlobalMigrationFailureToStderr(t *testing.T) {
 // TestGenerateAllForPlugin_LogsStaleDuplicateRemovalFailureToStderr verifies that a failed removal
 // of a stale legacy duplicate is logged to stderr and the stale file stays in place.
 func TestGenerateAllForPlugin_LogsStaleDuplicateRemovalFailureToStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory cannot be made with chmod on Windows")
+	}
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
 

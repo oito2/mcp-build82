@@ -1,0 +1,91 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Generate Plugin Context"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "plugin_path": {
+        "description": "Component (e.g. 'local_myplugin'), path relative to the Moodle root (e.g. 'local/myplugin'), or absolute path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "plugin_path"
+    ],
+    "type": "object"
+  },
+  "name": "generate_plugin_context",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "component": {
+        "type": "string"
+      },
+      "failed": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "error"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "generated": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "path": {
+        "type": "string"
+      },
+      "skipped": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "type": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "component",
+      "type",
+      "version",
+      "path"
+    ],
+    "type": "object"
+  }
+}

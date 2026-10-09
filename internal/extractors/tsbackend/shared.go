@@ -24,6 +24,7 @@ import (
 	"github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/phparray"
 )
 
@@ -44,7 +45,8 @@ const maxParseFileSize = 8 << 20
 const maxConcatFragments = 10000
 
 // ParseFile reads path and parses it as PHP, returning the resulting tree and the raw source bytes
-// every Node.Text/Type call also needs.
+// every Node.Text/Type call also needs. Only a regular file is read: a symbolic link or a FIFO at
+// path is an error (see fsutil.ReadRegular).
 func ParseFile(path string) (*gotreesitter.Tree, []byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -53,7 +55,7 @@ func ParseFile(path string) (*gotreesitter.Tree, []byte, error) {
 	if info.Size() > maxParseFileSize {
 		return nil, nil, fmt.Errorf("parse %s: file too large (%d bytes, max %d)", path, info.Size(), maxParseFileSize)
 	}
-	src, err := os.ReadFile(path)
+	src, err := fsutil.ReadRegular(path, maxParseFileSize)
 	if err != nil {
 		return nil, nil, err
 	}

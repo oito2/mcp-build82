@@ -1,0 +1,67 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Get Plugin Info"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "plugin": {
+        "description": "Component, relative path, or absolute path",
+        "type": "string"
+      }
+    },
+    "required": [
+      "plugin"
+    ],
+    "type": "object"
+  },
+  "name": "get_plugin_info",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "ai_context": {
+        "type": "string"
+      },
+      "component": {
+        "type": "string"
+      },
+      "display_name": {
+        "type": "string"
+      },
+      "has_ai_context": {
+        "type": "boolean"
+      },
+      "maturity": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "requires": {
+        "type": "string"
+      },
+      "type": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "has_ai_context"
+    ],
+    "type": "object"
+  }
+}

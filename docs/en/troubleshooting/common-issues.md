@@ -192,9 +192,20 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 
 ### `build82 self-update` fails
 
-**Symptom:** the command exits with an error such as `checksum verification failed, refusing to replace the running binary`, `release <tag> has no asset named <asset>`, or `smoke test failed`.
+**Symptom:** the command exits with an error such as `checksum verification failed, refusing to replace the running binary`, `signature verification failed, refusing to replace the running binary`, `release <tag> has no asset named <asset>`, `refusing to download ...`, `--require-signature refuses to update ...`, `the previous version is still in use`, or `smoke test failed`.
 
-**Cause and solution:** the update is verified against the release's `checksums.txt` and smoke-tested before the running binary is replaced, so a failure leaves your current binary untouched. Retry later, or download the asset manually and verify it as described in the [Installation guide](../getting-started/installation.md). If a new version installed fine but misbehaves, run `build82 self-update --rollback`; `no backup found at <path> — nothing to roll back` means there is no `.bak` file next to the binary.
+**Cause and solution:** the update is signature-checked (when cosign is available), verified against the release's `checksums.txt` and smoke-tested before the running binary is replaced, so a failure leaves your current binary untouched.
+
+| Error | What to do |
+| :--- | :--- |
+| `signature verification failed` | The release's `checksums.txt` is not signed by this repository's release workflow for that tag. Do not install it; report it on the issue tracker. cosign's own output follows the message. |
+| `--require-signature refuses to update` / warning `cosign was not found on PATH` or `older than the v3.0.0` | Install [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v3 or later, or run without `--require-signature` to rely on the checksum alone. |
+| `release <tag> has no asset named checksums.txt.sigstore.json` | The target release predates signed releases (before v1.1.0). Remove cosign from `PATH` for this update. |
+| `refusing to download ...` / `unexpected host` | The release metadata or a redirect pointed outside GitHub's release hosts for this repository. Nothing was downloaded; retry later. |
+| `the previous version is still in use` (Windows) | An MCP client is still running the previous `build82.bak`. Restart your MCP clients, then run `build82 self-update` again. |
+| `checksum verification failed`, `smoke test failed` | Retry later, or download the asset manually and verify it as described in the [Installation guide](../getting-started/installation.md). |
+
+If a new version installed fine but misbehaves, run `build82 self-update --rollback`; `no backup found at <path> — nothing to roll back` means there is no `.bak` file next to the binary.
 
 ---
 

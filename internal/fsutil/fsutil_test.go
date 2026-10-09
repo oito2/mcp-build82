@@ -16,8 +16,11 @@
 package fsutil
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +56,9 @@ func TestReadOptional_ExistingFileReturnsContent(t *testing.T) {
 // TestReadOptional_PermissionDeniedReturnsError confirms a real read failure (not "doesn't exist")
 // is surfaced via err, not silently treated the same as a missing file.
 func TestReadOptional_PermissionDeniedReturnsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits do not restrict reads on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("running as root — permission checks don't apply")
 	}
@@ -125,6 +131,9 @@ func TestWriteAtomic_NoStrayTempFileLeftBehind(t *testing.T) {
 
 // TestWriteAtomic_SetsRequestedPermissions verifies the written file has the requested permission bits.
 func TestWriteAtomic_SetsRequestedPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reports only the read-only attribute as permission bits")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	if err := WriteAtomic(path, []byte("x"), 0o600); err != nil {
@@ -151,5 +160,27 @@ func TestWriteAtomic_DirModeDerivedFromPerm(t *testing.T) {
 	}
 	if got := fi.Mode().Perm(); got != 0o700 {
 		t.Errorf("dir mode = %o, want 700", got)
+	}
+}
+
+// TestReadRegular_ReadsRegularFileAndEnforcesMaxSize verifies that a regular file is read whole,
+// that a positive maxSize refuses a larger file, and that a directory is refused.
+func TestReadRegular_ReadsRegularFileAndEnforcesMaxSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "version.php")
+	if err := os.WriteFile(path, []byte("<?php // 0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadRegular(path, 0); err != nil || string(got) != "<?php // 0123456789" {
+		t.Errorf("got %q, %v", got, err)
+	}
+	if _, err := ReadRegular(path, 5); err == nil || !strings.Contains(err.Error(), "exceeds max readable size") {
+		t.Errorf("expected a size error, got %v", err)
+	}
+	if _, err := ReadRegular(dir, 0); !errors.Is(err, ErrNotRegular) {
+		t.Errorf("directory: err = %v, want ErrNotRegular", err)
+	}
+	if _, err := ReadRegular(filepath.Join(dir, "missing"), 0); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing file: err = %v, want os.ErrNotExist", err)
 	}
 }

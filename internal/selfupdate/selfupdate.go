@@ -24,17 +24,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/oito2/mcp-build82/internal/binpath"
+	"github.com/oito2/mcp-build82/internal/fsutil"
+	"github.com/oito2/mcp-build82/internal/prompt"
 	"github.com/oito2/mcp-build82/internal/version"
 )
 
@@ -55,9 +59,12 @@ var maxAssetSize int64 = 200 << 20 // 200 MiB — generous headroom over any rea
 // It is a variable so tests can lower it.
 var maxReleaseResponseSize int64 = 1 << 20 // 1 MiB
 
+// maxRedirects is how many redirects a release-asset download follows before failing.
+const maxRedirects = 10
+
 // httpClient is the client used for release-metadata requests. It has a 30-second overall timeout
 // and refuses any redirect to a non-https URL, so a response can never push the exchange onto an
-// unencrypted connection (see validateAssetURL for the initial-URL check).
+// unencrypted connection.
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -68,18 +75,27 @@ var httpClient = &http.Client{
 	},
 }
 
-// downloadClient is the client used to download release assets (the binary and checksums.txt). It
-// applies the same https-only redirect policy as httpClient but allows a 5-minute overall timeout,
-// since an asset can be up to maxAssetSize bytes on a slow connection.
+// downloadClient is the client used to download release assets (the binary, checksums.txt and its
+// signature bundle). It allows a 5-minute overall timeout, since an asset can be up to maxAssetSize
+// bytes on a slow connection. downloadToTemp replaces its redirect policy with one that validates
+// every redirect target with validateAssetURL.
 var downloadClient = &http.Client{
 	Timeout:       5 * time.Minute,
 	CheckRedirect: httpClient.CheckRedirect,
 }
 
-// validateAssetURL checks a release-asset download URL (`raw`, a browser_download_url from the
-// release metadata). It returns an error when the URL cannot be parsed, is not https, or its host
-// is neither github.com nor a *.githubusercontent.com subdomain. Run calls it before every asset
-// download.
+// assetHosts are the hosts a release-asset download may be served from: github.com, which answers
+// the asset URL, and the hosts it redirects release assets to. Other *.githubusercontent.com hosts
+// serve user content (raw files, gists) and are refused.
+var assetHosts = map[string]bool{
+	"github.com":                           true,
+	"objects.githubusercontent.com":        true,
+	"release-assets.githubusercontent.com": true,
+}
+
+// validateAssetURL checks a download URL or redirect target `raw`. It returns an error when the
+// URL cannot be parsed, is not https, carries credentials or an explicit port, or its host is not
+// one of assetHosts.
 func validateAssetURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -88,11 +104,27 @@ func validateAssetURL(raw string) error {
 	if u.Scheme != "https" {
 		return fmt.Errorf("asset URL %q must use https", raw)
 	}
-	if u.Host != "github.com" && !strings.HasSuffix(u.Host, ".githubusercontent.com") {
-		return fmt.Errorf("asset URL %q has unexpected host %q", raw, u.Host)
+	if !assetHosts[u.Hostname()] || u.Port() != "" || u.User != nil {
+		return fmt.Errorf("asset URL %q has unexpected host %q: only GitHub's release hosts are accepted", raw, u.Host)
 	}
 	return nil
 }
+
+// validateReleaseAsset checks that `raw` is exactly the download URL of the asset `name` of this
+// repository's release `tag`: https://github.com/oito2/mcp-build82/releases/download/<tag>/<name>,
+// with no query or fragment. It returns an error for any other URL, so a release response cannot
+// point a download anywhere else.
+func validateReleaseAsset(raw, tag, name string) error {
+	want := "https://github.com/" + repoOwner + "/" + repoName + "/releases/download/" + tag + "/" + name
+	if raw != want {
+		return fmt.Errorf("refusing to download %q: it is not the %s asset of the %s release of %s/%s", raw, name, tag, repoOwner, repoName)
+	}
+	return nil
+}
+
+// releaseTagPattern matches the release tags self-update accepts: "vMAJOR.MINOR.PATCH" with an
+// optional pre-release suffix made only of letters, digits, dots and hyphens.
+var releaseTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
 // Release is the subset of the GitHub Releases API response this package needs.
 type Release struct {
@@ -117,6 +149,19 @@ func (r *Release) FindAsset(name string) (Asset, bool) {
 	return Asset{}, false
 }
 
+// ReleasePlatforms returns the GOOS/GOARCH pairs every release is built for, each published as the
+// asset AssetName names. Each call returns a new slice.
+func ReleasePlatforms() [][2]string {
+	return [][2]string{
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+		{"darwin", "amd64"},
+		{"darwin", "arm64"},
+		{"windows", "amd64"},
+		{"windows", "arm64"},
+	}
+}
+
 // AssetName returns the release-asset filename for the given `goos` and `goarch`, in the form
 // `build82_{GOOS}_{GOARCH}`, with a `.exe` suffix on windows.
 func AssetName(goos, goarch string) string {
@@ -129,11 +174,11 @@ func AssetName(goos, goarch string) string {
 
 // FetchLatestRelease queries the GitHub Releases API at `apiBaseURL` using `client` and returns the
 // latest release. A nil Release with a nil error means no release exists (HTTP 404). Any other
-// non-200 status, a request failure, or an undecodable body is returned as an error. Response
-// reads are capped at maxReleaseResponseSize bytes.
-func FetchLatestRelease(client *http.Client, apiBaseURL string) (*Release, error) {
+// non-200 status, a request failure (including `ctx` ending), or an undecodable body is returned
+// as an error. Response reads are capped at maxReleaseResponseSize bytes.
+func FetchLatestRelease(ctx context.Context, client *http.Client, apiBaseURL string) (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", apiBaseURL, repoOwner, repoName)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -319,19 +364,28 @@ func VerifyChecksum(checksumsContent, assetName, filePath string) error {
 	return nil
 }
 
-// downloadToTemp downloads `url` with `client` into a new temp file in `dir` (named from
+// downloadToTemp downloads `url` with `client`, until `ctx` ends, into a new temp file in `dir` (named from
 // `pattern`, as in os.CreateTemp) and returns its path. `dir` should be the directory of the binary
-// to be replaced so a later rename stays on one filesystem. It returns an error on a request
-// failure, a non-200 status, a write or close failure, or a body larger than maxAssetSize; in the
-// last three cases the temp file is removed.
-func downloadToTemp(client *http.Client, url, dir, pattern string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+// to be replaced so a later rename stays on one filesystem. Every redirect target is checked with
+// validateAssetURL, and at most maxRedirects redirects are followed. The file is flushed to disk
+// before it is closed. It returns an error on a request failure, a rejected redirect, a non-200
+// status, a write, sync or close failure, or a body larger than maxAssetSize; in the last cases the
+// temp file is removed.
+func downloadToTemp(ctx context.Context, client *http.Client, url, dir, pattern string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("build request for %s: %w", url, err)
 	}
 	req.Header.Set("User-Agent", "build82/"+version.Current)
 
-	resp, err := client.Do(req)
+	checked := *client
+	checked.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return validateAssetURL(req.URL.String())
+	}
+	resp, err := checked.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("download %s: %w", url, err)
 	}
@@ -346,19 +400,22 @@ func downloadToTemp(client *http.Client, url, dir, pattern string) (string, erro
 	}
 
 	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxAssetSize+1))
+	if err == nil && n > maxAssetSize {
+		err = fmt.Errorf("download %s exceeded max size of %d bytes", url, maxAssetSize)
+	} else if err != nil {
+		err = fmt.Errorf("write %s: %w", tmp.Name(), err)
+	}
+	if err == nil {
+		if serr := tmp.Sync(); serr != nil {
+			err = fmt.Errorf("sync %s: %w", tmp.Name(), serr)
+		}
+	}
+	if cerr := tmp.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("close %s: %w", tmp.Name(), cerr)
+	}
 	if err != nil {
-		_ = tmp.Close()
 		_ = os.Remove(tmp.Name())
-		return "", fmt.Errorf("write %s: %w", tmp.Name(), err)
-	}
-	if n > maxAssetSize {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return "", fmt.Errorf("download %s exceeded max size of %d bytes", url, maxAssetSize)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return "", fmt.Errorf("close %s: %w", tmp.Name(), err)
+		return "", err
 	}
 	return tmp.Name(), nil
 }
@@ -388,18 +445,62 @@ func SmokeTest(binaryPath string) (string, error) {
 	return v, nil
 }
 
-// osRename is os.Rename held in a variable so tests can inject rename failures.
-var osRename = os.Rename
+// osRename is fsutil.Rename (os.Rename with a short retry on Windows) held in a variable so tests
+// can inject rename failures.
+var osRename = fsutil.Rename
+
+// binaryMode returns the permission bits for a new binary replacing the one at `currentPath`: the
+// current binary's own bits with the owner's execute bit always set, so an update neither widens
+// nor narrows who can run it. It returns 0755 when the current binary cannot be inspected.
+func binaryMode(currentPath string) os.FileMode {
+	info, err := os.Stat(currentPath)
+	if err != nil {
+		return 0o755
+	}
+	return info.Mode().Perm() | 0o100
+}
+
+// errBackupInUse reports a backup that can be neither removed nor moved aside, because a running
+// process still holds it.
+var errBackupInUse = errors.New("the previous version is still in use")
+
+// clearBackup removes the backup at `bak`, if any, so the current binary can take its place. On
+// Windows a backup that is still running (an MCP client started it before the previous update)
+// cannot be removed, but it can be renamed: it is then moved aside to "<bak>.old-<n>", which a later
+// update removes once it no longer runs. Leftover "<bak>.old-*" files are removed on a best-effort
+// basis. It returns an error wrapping errBackupInUse, telling the user to restart their MCP
+// clients, when `bak` can be neither removed nor moved aside.
+func clearBackup(bak string) error {
+	dir, prefix := filepath.Dir(bak), filepath.Base(bak)+".old-"
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), prefix) {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	err := os.Remove(bak)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	parked := fmt.Sprintf("%s.old-%d", bak, time.Now().UnixNano())
+	if rerr := osRename(bak, parked); rerr != nil {
+		return fmt.Errorf("%w: %s can be neither removed nor moved aside (%v); restart your MCP clients, then try again", errBackupInUse, bak, err)
+	}
+	return nil
+}
 
 // AtomicReplace swaps the binary at `newBinaryPath` into the place of `currentBinaryPath`, which is
 // first renamed to `currentBinaryPath + ".bak"` (returned as `backupPath`). Both paths must be on
-// the same filesystem so the renames are atomic. The new binary is made executable and smoke-tested
-// before the original is touched; when `wantVersion` is not empty, its `--version` output must also
-// equal that version (compared without a leading "v"), so a failure there leaves the original untouched. If moving the
-// new binary into place fails, the backup is renamed back; if that also fails, the returned error
-// reports that `currentBinaryPath` is missing.
+// the same filesystem so the renames are atomic. The new binary gets the permission bits of the
+// current one (see binaryMode) and is smoke-tested before the original is touched; when
+// `wantVersion` is not empty, its `--version` output must also equal that version (compared without
+// a leading "v"), so a failure there leaves the original untouched. An existing backup is cleared
+// first (see clearBackup), and the directory is synced after the swap. If moving the new binary
+// into place fails, the backup is renamed back; if that also fails, the returned error reports that
+// `currentBinaryPath` is missing.
 func AtomicReplace(currentBinaryPath, newBinaryPath, wantVersion string) (backupPath string, err error) {
-	if err := os.Chmod(newBinaryPath, 0o755); err != nil {
+	if err := os.Chmod(newBinaryPath, binaryMode(currentBinaryPath)); err != nil {
 		return "", fmt.Errorf("chmod new binary: %w", err)
 	}
 
@@ -412,6 +513,9 @@ func AtomicReplace(currentBinaryPath, newBinaryPath, wantVersion string) (backup
 	}
 
 	backupPath = currentBinaryPath + ".bak"
+	if err := clearBackup(backupPath); err != nil {
+		return "", err
+	}
 	if err := osRename(currentBinaryPath, backupPath); err != nil {
 		return "", fmt.Errorf("back up current binary: %w", err)
 	}
@@ -424,6 +528,7 @@ func AtomicReplace(currentBinaryPath, newBinaryPath, wantVersion string) (backup
 		}
 		return "", fmt.Errorf("move new binary into place: %w", err)
 	}
+	fsutil.SyncDir(filepath.Dir(currentBinaryPath))
 	return backupPath, nil
 }
 
@@ -445,6 +550,7 @@ func Rollback(binaryPath string) error {
 	if err := osRename(backupPath, binaryPath); err != nil {
 		return fmt.Errorf("restore backup %s to %s: %w", backupPath, binaryPath, err)
 	}
+	fsutil.SyncDir(filepath.Dir(binaryPath))
 
 	if _, err := SmokeTest(binaryPath); err != nil {
 		return fmt.Errorf("restored %s from %s, but it failed the smoke test: %w", binaryPath, backupPath, err)
@@ -453,12 +559,29 @@ func Rollback(binaryPath string) error {
 	return nil
 }
 
+// signatureBundleName is the release asset holding the Sigstore bundle that signs checksums.txt.
+const signatureBundleName = "checksums.txt.sigstore.json"
+
+// minCosignMajor is the oldest cosign major version that verifies the release's signature bundle
+// without extra flags.
+const minCosignMajor = 3
+
+// cosignTimeout bounds each cosign invocation.
+const cosignTimeout = 2 * time.Minute
+
+// ExitUpdateAvailable is the process exit status of `build82 self-update --check` when a newer
+// release exists.
+const ExitUpdateAvailable = 10
+
 // RunOptions configures a self-update run.
 type RunOptions struct {
 	// Check only reports whether a newer release exists, without downloading anything.
 	Check bool
 	// Yes skips the confirmation prompt.
 	Yes bool
+	// RequireSignature refuses to update, before anything is downloaded, when no usable cosign is
+	// available to verify the release signature.
+	RequireSignature bool
 	// Channel selects the release channel; empty or "stable" is the only supported value.
 	Channel string
 
@@ -466,18 +589,108 @@ type RunOptions struct {
 	APIBaseURL string
 	// Stdout receives progress output; nil means os.Stdout.
 	Stdout io.Writer
+	// Stderr receives warnings; nil means os.Stderr.
+	Stderr io.Writer
 	// Stdin supplies the confirmation answer; nil means os.Stdin.
 	Stdin io.Reader
 }
 
-// Run is the top-level `build82 self-update` flow: it checks the latest release, asks for
-// confirmation (unless `opts.Yes` or `opts.Check`), downloads the platform binary and checksums.txt,
-// verifies the checksum, and atomically replaces the running binary. It returns nil when there is
-// nothing to do or the user declines, and an error for an unsupported channel, a failed query or
-// download, a missing asset, a checksum mismatch or a failed replacement.
-func Run(opts RunOptions) error {
+// deps bundles what Run needs from its environment, so tests can replace the HTTP clients, the
+// running binary's path and the cosign lookup and execution.
+type deps struct {
+	// apiClient performs the release-metadata request; downloadClient downloads the assets.
+	apiClient      *http.Client
+	downloadClient *http.Client
+	// goos and goarch select the release asset to download.
+	goos, goarch string
+	// executable returns the symlink-resolved path of the running binary.
+	executable func() (string, error)
+	// lookCosign returns the path of the cosign binary, or an error when there is none.
+	lookCosign func() (string, error)
+	// runCosign runs the cosign binary at `path` with `args` and returns its combined output.
+	runCosign func(ctx context.Context, path string, args ...string) ([]byte, error)
+}
+
+// defaultDeps returns the production dependencies: the package HTTP clients, the running platform,
+// binpath.Resolve, and cosign looked up on PATH and run as a subprocess.
+func defaultDeps() deps {
+	return deps{
+		apiClient:      httpClient,
+		downloadClient: downloadClient,
+		goos:           runtime.GOOS,
+		goarch:         runtime.GOARCH,
+		executable:     binpath.Resolve,
+		lookCosign:     func() (string, error) { return exec.LookPath("cosign") },
+		runCosign:      runCosign,
+	}
+}
+
+// runCosign runs the cosign binary at `path` with `args`, within cosignTimeout, and returns its
+// combined output and the error of the run.
+func runCosign(ctx context.Context, path string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, cosignTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, path, args...).CombinedOutput()
+}
+
+// findCosign returns the path of a cosign binary able to verify the release signature, or "" and
+// the reason there is none: no cosign found by d.lookCosign, a `cosign version --json` that fails or
+// reports no version, or a version older than minCosignMajor.
+func findCosign(ctx context.Context, d deps) (path, problem string) {
+	path, err := d.lookCosign()
+	if err != nil {
+		return "", "cosign was not found on PATH"
+	}
+	out, err := d.runCosign(ctx, path, "version", "--json")
+	var info struct {
+		GitVersion string `json:"gitVersion"`
+	}
+	if err != nil || json.Unmarshal(out, &info) != nil || info.GitVersion == "" {
+		return "", fmt.Sprintf("could not read the version of %s", path)
+	}
+	major, _, _ := strings.Cut(strings.TrimPrefix(info.GitVersion, "v"), ".")
+	if n, err := strconv.Atoi(major); err != nil || n < minCosignMajor {
+		return "", fmt.Sprintf("%s is cosign %q, older than the v%d.0.0 needed to verify the release signature", path, info.GitVersion, minCosignMajor)
+	}
+	return path, ""
+}
+
+// verifySignature runs `cosign verify-blob` on the checksums.txt at `checksumsPath` with the
+// Sigstore bundle at `bundlePath`, requiring a certificate issued by GitHub Actions to this
+// repository's release workflow for exactly `tag`. It returns an error holding cosign's output
+// when the verification fails.
+func verifySignature(ctx context.Context, d deps, cosignPath, checksumsPath, bundlePath, tag string) error {
+	identity := "https://github.com/" + repoOwner + "/" + repoName + "/.github/workflows/release.yml@refs/tags/" + tag
+	out, err := d.runCosign(ctx, cosignPath, "verify-blob", checksumsPath,
+		"--bundle", bundlePath,
+		"--certificate-identity", identity,
+		"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com")
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// Run is the top-level `build82 self-update` flow. It checks the latest release and, with
+// `opts.Check`, only reports it: `updateAvailable` is true when a newer release exists. Otherwise it
+// looks for cosign v3 or later (warning on stderr when there is none, or refusing with
+// `opts.RequireSignature`), asks for confirmation (unless `opts.Yes`), downloads checksums.txt, the
+// signature bundle when cosign is available and the platform binary — each URL pinned to this
+// repository's release tag and every redirect restricted to GitHub's release hosts — verifies the
+// signature of checksums.txt, then the binary's checksum, and atomically replaces the running
+// binary. It returns a nil error when there is nothing to do or the user declines, and an error for
+// an unsupported channel, a failed query or download, an unexpected tag or asset URL, a missing
+// asset, no usable cosign with `opts.RequireSignature`, a failed signature verification, a checksum
+// mismatch or a failed replacement. Requests and the confirmation prompt stop when `ctx` ends; an
+// interrupted prompt returns an error wrapping prompt.ErrInterrupted, and nothing is changed.
+func Run(ctx context.Context, opts RunOptions) (updateAvailable bool, err error) {
+	return run(ctx, opts, defaultDeps())
+}
+
+// run implements Run with the dependencies `d`.
+func run(ctx context.Context, opts RunOptions, d deps) (bool, error) {
 	if opts.Channel != "" && opts.Channel != "stable" {
-		return fmt.Errorf("unsupported channel %q: only \"stable\" is currently supported", opts.Channel)
+		return false, fmt.Errorf("unsupported channel %q: only \"stable\" is currently supported", opts.Channel)
 	}
 
 	if opts.APIBaseURL == "" {
@@ -487,6 +700,10 @@ func Run(opts RunOptions) error {
 	if out == nil {
 		out = os.Stdout
 	}
+	errOut := opts.Stderr
+	if errOut == nil {
+		errOut = os.Stderr
+	}
 	in := opts.Stdin
 	if in == nil {
 		in = os.Stdin
@@ -494,83 +711,114 @@ func Run(opts RunOptions) error {
 
 	fmt.Fprintf(out, "Current version: %s\n", version.Current)
 
-	rel, err := FetchLatestRelease(httpClient, opts.APIBaseURL)
+	rel, err := FetchLatestRelease(ctx, d.apiClient, opts.APIBaseURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if rel == nil {
 		fmt.Fprintln(out, "No releases found.")
-		return nil
+		return false, nil
+	}
+	tag := rel.TagName
+	if !releaseTagPattern.MatchString(tag) {
+		return false, fmt.Errorf("unexpected release tag format %q", tag)
 	}
 
-	if !IsNewer(version.Current, rel.TagName) {
-		fmt.Fprintf(out, "Already on the latest version (%s).\n", rel.TagName)
-		return nil
+	if !IsNewer(version.Current, tag) {
+		fmt.Fprintf(out, "Already on the latest version (%s).\n", tag)
+		return false, nil
 	}
 
-	fmt.Fprintf(out, "A new version is available: %s (current: %s)\n", rel.TagName, version.Current)
+	fmt.Fprintf(out, "A new version is available: %s (current: %s)\n", tag, version.Current)
 	if opts.Check {
-		return nil
+		return true, nil
+	}
+
+	// cosign is looked up before the confirmation, so a missing cosign is known before anything
+	// is downloaded.
+	cosignPath, cosignProblem := findCosign(ctx, d)
+	if cosignProblem != "" {
+		if opts.RequireSignature {
+			return false, fmt.Errorf("%s; --require-signature refuses to update without verifying the release signature. Nothing was changed", cosignProblem)
+		}
+		fmt.Fprintf(errOut, "Warning: %s; the release signature will not be verified, only the checksum. Install cosign v3 or later to verify it.\n", cosignProblem)
 	}
 
 	if !opts.Yes {
-		reader := bufio.NewReader(in)
-		fmt.Fprintf(out, "Replace the running binary with %s? [y/N] ", rel.TagName)
-		answer, _ := reader.ReadString('\n')
-		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+		ok, err := prompt.Confirm(ctx, bufio.NewReader(in), out, fmt.Sprintf("Replace the running binary with %s? [y/N] ", tag))
+		if err != nil {
+			return false, err
+		}
+		if !ok {
 			fmt.Fprintln(out, "Update cancelled.")
-			return nil
+			return false, nil
 		}
 	}
 
-	assetName := AssetName(runtime.GOOS, runtime.GOARCH)
-	asset, ok := rel.FindAsset(assetName)
-	if !ok {
-		return fmt.Errorf("release %s has no asset named %s", rel.TagName, assetName)
+	assetName := AssetName(d.goos, d.goarch)
+	names := []string{"checksums.txt", assetName}
+	if cosignPath != "" {
+		names = append(names, signatureBundleName)
 	}
-	checksumsAsset, ok := rel.FindAsset("checksums.txt")
-	if !ok {
-		return fmt.Errorf("release %s is missing checksums.txt", rel.TagName)
+	urls := map[string]string{}
+	for _, name := range names {
+		asset, ok := rel.FindAsset(name)
+		if !ok {
+			return false, fmt.Errorf("release %s has no asset named %s", tag, name)
+		}
+		if err := validateReleaseAsset(asset.BrowserDownloadURL, tag, name); err != nil {
+			return false, err
+		}
+		if err := validateAssetURL(asset.BrowserDownloadURL); err != nil {
+			return false, fmt.Errorf("%s: %w", name, err)
+		}
+		urls[name] = asset.BrowserDownloadURL
 	}
 
-	currentBinaryPath, err := binpath.Resolve()
+	currentBinaryPath, err := d.executable()
 	if err != nil {
-		return err
+		return false, err
 	}
 	dir := filepath.Dir(currentBinaryPath)
 
-	if err := validateAssetURL(checksumsAsset.BrowserDownloadURL); err != nil {
-		return fmt.Errorf("checksums.txt: %w", err)
-	}
-	checksumsPath, err := downloadToTemp(downloadClient, checksumsAsset.BrowserDownloadURL, dir, "build82-checksums-*.txt")
+	checksumsPath, err := downloadToTemp(ctx, d.downloadClient, urls["checksums.txt"], dir, "build82-checksums-*.txt")
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = os.Remove(checksumsPath) }()
 
-	checksumsContent, err := os.ReadFile(checksumsPath)
-	if err != nil {
-		return fmt.Errorf("read downloaded checksums.txt: %w", err)
+	if cosignPath != "" {
+		bundlePath, err := downloadToTemp(ctx, d.downloadClient, urls[signatureBundleName], dir, "build82-sigstore-*.json")
+		if err != nil {
+			return false, err
+		}
+		defer func() { _ = os.Remove(bundlePath) }()
+		if err := verifySignature(ctx, d, cosignPath, checksumsPath, bundlePath, tag); err != nil {
+			return false, fmt.Errorf("signature verification failed, refusing to replace the running binary: %w", err)
+		}
+		fmt.Fprintln(out, "Signature verified (cosign).")
 	}
 
-	if err := validateAssetURL(asset.BrowserDownloadURL); err != nil {
-		return fmt.Errorf("%s: %w", assetName, err)
-	}
-	newBinaryPath, err := downloadToTemp(downloadClient, asset.BrowserDownloadURL, dir, "build82-update-*")
+	checksumsContent, err := os.ReadFile(checksumsPath)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("read downloaded checksums.txt: %w", err)
+	}
+
+	newBinaryPath, err := downloadToTemp(ctx, d.downloadClient, urls[assetName], dir, "build82-update-*")
+	if err != nil {
+		return false, err
 	}
 	defer func() { _ = os.Remove(newBinaryPath) }() // no-op once renamed into place
 
 	if err := VerifyChecksum(string(checksumsContent), assetName, newBinaryPath); err != nil {
-		return fmt.Errorf("checksum verification failed, refusing to replace the running binary: %w", err)
+		return false, fmt.Errorf("checksum verification failed, refusing to replace the running binary: %w", err)
 	}
 
-	backupPath, err := AtomicReplace(currentBinaryPath, newBinaryPath, rel.TagName)
+	backupPath, err := AtomicReplace(currentBinaryPath, newBinaryPath, tag)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	fmt.Fprintf(out, "Updated to %s. Previous binary backed up at %s.\n", rel.TagName, backupPath)
-	return nil
+	fmt.Fprintf(out, "Updated to %s. Previous binary backed up at %s.\n", tag, backupPath)
+	return false, nil
 }

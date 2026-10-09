@@ -30,6 +30,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/extractors"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
@@ -69,7 +70,8 @@ type ReleasePluginInput struct {
 // RegisterReleaseTool registers the release_plugin tool on `server`.
 func RegisterReleaseTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "release_plugin",
+		Name:        "release_plugin",
+		Annotations: toolAnnotations("Package Plugin Release", false, true, true, false),
 		Description: "Packages a plugin directory into a distributable ZIP, excluding build82's own " +
 			"generated files and other non-shippable artifacts. With strict:true, also validates the " +
 			"plugin against moodle.org plugin directory submission requirements before packaging.",
@@ -82,34 +84,34 @@ func RegisterReleaseTool(server *mcp.Server) {
 // requirements and refuses to build when any fail. It returns an error result when the component
 // is empty, the configuration or plugin is invalid, the output directory is missing, validation
 // fails, or the ZIP cannot be written; the error return is always nil.
-func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in ReleasePluginInput) (*mcp.CallToolResult, struct{}, error) {
+func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in ReleasePluginInput) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(in.Component) == "" {
-		return textResult(true, "❌ component is required: a component (e.g. 'local_myplugin'), a path relative to the Moodle root (e.g. 'local/myplugin'), or an absolute path."), struct{}{}, nil
+		return textResult(true, "❌ component is required: a component (e.g. 'local_myplugin'), a path relative to the Moodle root (e.g. 'local/myplugin'), or an absolute path."), nil, nil
 	}
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return toolutil.NotInitialized(), nil, nil
 	}
 
 	outputDir := in.OutputDir
 	if outputDir == "" {
 		outputDir, _ = os.Getwd()
 	} else if !dirExists(outputDir) {
-		return textResult(true, fmt.Sprintf("❌ Output directory does not exist: %s", outputDir)), struct{}{}, nil
+		return textResult(true, fmt.Sprintf("❌ Output directory does not exist: %s", outputDir)), nil, nil
 	}
 
 	// Accepts a component, relative path or absolute path, and rejects anything resolving outside
 	// the Moodle root (e.g. "local/../../etc").
 	rp, errResult := resolveAndValidatePlugin(in.Component, cfg.MoodlePath)
 	if errResult != nil {
-		return errResult, struct{}{}, nil
+		return errResult, nil, nil
 	}
 	pluginPath, info := rp.Path, rp.Info
 	if info.Version == "" {
-		return textResult(true, fmt.Sprintf("❌ Could not read version from %s/version.php", relativeToMoodle(cfg.MoodlePath, pluginPath))), struct{}{}, nil
+		return textResult(true, fmt.Sprintf("❌ Could not read version from %s/version.php", relativeToMoodle(cfg.MoodlePath, pluginPath))), nil, nil
 	}
 
 	if in.Strict {
@@ -119,7 +121,7 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 			for _, issue := range issues {
 				fmt.Fprintf(&b, "- %s\n", issue)
 			}
-			return textResult(true, b.String()), struct{}{}, nil
+			return textResult(true, b.String()), nil, nil
 		}
 	}
 
@@ -132,7 +134,7 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 	excluded := mergeBuildIgnore(pluginPath, excludedNames)
 	foundExcluded, skippedLinks, err := createZip(pluginPath, destination, folderName, excluded)
 	if err != nil {
-		return textResult(true, "❌ Failed to create ZIP: "+err.Error()), struct{}{}, nil
+		return textResult(true, "❌ Failed to create ZIP: "+err.Error()), nil, nil
 	}
 
 	var b strings.Builder
@@ -159,7 +161,7 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 			fmt.Fprintf(&b, "- %s\n", rel)
 		}
 	}
-	return textResult(false, b.String()), struct{}{}, nil
+	return textResult(false, b.String()), nil, nil
 }
 
 // requestedComponent returns the component the caller asked to release, used by strict mode to
@@ -236,7 +238,7 @@ func mergeBuildIgnore(pluginPath string, base map[string]struct{}) map[string]st
 	for k := range base {
 		merged[k] = struct{}{}
 	}
-	content, err := os.ReadFile(filepath.Join(pluginPath, ".buildignore"))
+	content, err := fsutil.ReadRegular(filepath.Join(pluginPath, ".buildignore"), 0)
 	if err != nil {
 		return merged
 	}
@@ -365,7 +367,7 @@ func writeZip(pluginPath, destPath, folderName string, excluded map[string]struc
 		if createErr != nil {
 			return createErr
 		}
-		src, openErr := os.Open(path)
+		src, openErr := fsutil.OpenRegular(path)
 		if openErr != nil {
 			return openErr
 		}

@@ -62,7 +62,7 @@ func TestWatchStart_CallbackSeesChangesDuringStart(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.0"}, nil)
 	received := make(chan string, 8)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.0"}, &mcp.ClientOptions{
-		LoggingMessageHandler: func(_ context.Context, r *mcp.LoggingMessageRequest) {
+		LoggingMessageHandler: func(_ context.Context, r *mcp.LoggingMessageRequest) { //nolint:staticcheck // receives the watcher's log notifications
 			if msg, ok := r.Params.Data.(string); ok {
 				received <- msg
 			}
@@ -75,7 +75,7 @@ func TestWatchStart_CallbackSeesChangesDuringStart(t *testing.T) {
 		t.Fatalf("client connect: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
-	if err := session.SetLoggingLevel(ctx, &mcp.SetLoggingLevelParams{Level: "info"}); err != nil {
+	if err := session.SetLoggingLevel(ctx, &mcp.SetLoggingLevelParams{Level: "info"}); err != nil { //nolint:staticcheck // enables the watcher's log notifications
 		t.Fatalf("set logging level: %v", err)
 	}
 

@@ -1,0 +1,55 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "List Dev Plugins"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "name": "list_dev_plugins",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "plugins": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "has_ai_context": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "component",
+            "path",
+            "has_ai_context"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "required": [
+      "plugins"
+    ],
+    "type": "object"
+  }
+}

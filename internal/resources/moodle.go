@@ -18,11 +18,11 @@ package resources
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/config"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
 	"github.com/oito2/mcp-build82/internal/genutil"
 )
@@ -92,7 +92,7 @@ func readMoodleFile(filename string) (string, error) {
 		return notInitializedText, nil
 	}
 	path := generators.GlobalOutputPath(cfg.MoodlePath, filename)
-	content, readErr := os.ReadFile(path)
+	content, readErr := fsutil.ReadRegular(path, 0)
 	if readErr != nil {
 		return fmt.Sprintf("# %s — Not found\n\nExpected at: %s\n\nThis file has not been generated yet.\n"+
 			"Run `init_moodle_context` or `update_indexes` to generate it.",

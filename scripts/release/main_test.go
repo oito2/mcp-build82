@@ -49,11 +49,38 @@ func TestSemverTagPattern_ValidatesStrictly(t *testing.T) {
 }
 
 // TestReleaseLDFlags_StripsAndStampsVersion verifies that the release linker flags strip the symbol
-// table and DWARF info (-s -w) and stamp the version into internal/version.Current.
+// table and DWARF info (-s -w), clear the build ID and stamp the version into
+// internal/version.Current.
 func TestReleaseLDFlags_StripsAndStampsVersion(t *testing.T) {
 	got := strings.Fields(releaseLDFlags("v1.2.3"))
-	want := []string{"-s", "-w", "-X", module + "/internal/version.Current=v1.2.3"}
+	want := []string{"-s", "-w", "-buildid=", "-X", module + "/internal/version.Current=v1.2.3"}
 	if !slices.Equal(got, want) {
 		t.Errorf("releaseLDFlags = %q, want %q", got, want)
+	}
+}
+
+// TestValidVersion_PrereleaseOnlyWhenAllowed verifies that a pre-release suffix is accepted only
+// with allowPrerelease, and that nothing able to break out of the -ldflags value ever is.
+func TestValidVersion_PrereleaseOnlyWhenAllowed(t *testing.T) {
+	if !validVersion("v1.2.3", false) || !validVersion("v1.2.3", true) {
+		t.Error("a strict tag must always be accepted")
+	}
+	if validVersion("v0.0.0-ci", false) || !validVersion("v0.0.0-ci", true) {
+		t.Error("v0.0.0-ci must be accepted only with allowPrerelease")
+	}
+	for _, v := range []string{"v1.2.3- x", "v1.2.3-a'b", "v1.2.3-", "v1.2.3--", "1.2.3-ci", "v1.2.3-ci -X a=b"} {
+		if validVersion(v, true) {
+			t.Errorf("validVersion(%q, true) = true, want false", v)
+		}
+	}
+}
+
+// TestReleaseBuildEnv_PinsEverySetting verifies that the release build environment fixes cgo, the
+// CPU baseline of each architecture, and clears GOFLAGS and GOEXPERIMENT.
+func TestReleaseBuildEnv_PinsEverySetting(t *testing.T) {
+	got := releaseBuildEnv("windows", "arm64")
+	want := []string{"GOOS=windows", "GOARCH=arm64", "CGO_ENABLED=0", "GOAMD64=v1", "GOARM64=v8.0", "GOFLAGS=", "GOEXPERIMENT="}
+	if !slices.Equal(got, want) {
+		t.Errorf("releaseBuildEnv = %q, want %q", got, want)
 	}
 }

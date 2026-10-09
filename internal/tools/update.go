@@ -44,13 +44,15 @@ type UpdateIndexesInput struct {
 // RegisterUpdateTool registers the update_indexes and watch_plugins tools on `server`.
 func RegisterUpdateTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "update_indexes",
+		Name:        "update_indexes",
+		Annotations: toolAnnotations("Update Indexes", false, false, true, false),
 		Description: "Regenerates the 13 global index files, re-detecting the Moodle version in case " +
 			"the installation was upgraded since init. Optionally also regenerates every .indevelopment plugin.",
 	}, withRecover(handleUpdateIndexes))
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "watch_plugins",
+		Name:        "watch_plugins",
+		Annotations: toolAnnotations("Watch Dev Plugins", false, false, true, false),
 		Description: "Starts, stops, or reports the status of the file-watcher that auto-regenerates " +
 			"dev-plugin context on change. Every currently connected session is notified when a " +
 			"regeneration completes, not just the one that started the watcher.",
@@ -59,15 +61,16 @@ func RegisterUpdateTool(server *mcp.Server) {
 
 // handleUpdateIndexes re-detects the Moodle version (persisting it when it changed) and
 // regenerates the global indexes, and the .indevelopment plugins when `in.IncludePlugins` is set.
-// `in.Force` bypasses the cache. It returns an error result when the configuration is missing or
-// invalid; the error return is always nil.
-func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in UpdateIndexesInput) (*mcp.CallToolResult, struct{}, error) {
+// `in.Force` bypasses the cache. The structured output is an UpdateIndexesOutput in either format.
+// A missing or invalid configuration is returned as an error, so that result has no structured
+// output.
+func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in UpdateIndexesInput) (*mcp.CallToolResult, UpdateIndexesOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, UpdateIndexesOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, UpdateIndexesOutput{}, resultError(toolutil.NotInitialized())
 	}
 
 	installInfo := extractors.DetectMoodleInstall(cfg.MoodlePath)
@@ -93,10 +96,8 @@ func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in Updat
 		pluginLines = updatePlugins(cfg.MoodlePath, in.Force)
 	}
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, buildUpdateIndexesOutput(cfg.MoodlePath, globalResults, pluginLines)), struct{}{}, nil
-	}
-	return textResult(false, renderUpdateIndexesReport(cfg.MoodlePath, moodleVersion, globalResults, in.IncludePlugins, pluginLines)), struct{}{}, nil
+	out := buildUpdateIndexesOutput(cfg.MoodlePath, moodleVersion, globalResults, pluginLines)
+	return structuredResult(in.Format, false, renderUpdateIndexesReport(cfg.MoodlePath, moodleVersion, globalResults, in.IncludePlugins, pluginLines), out)
 }
 
 // forceGlobalRegeneration invalidates the cache entries of every output GenerateAll produces for
@@ -163,19 +164,23 @@ func updatePlugins(moodlePath string, force bool) []string {
 	return lines
 }
 
-// UpdateIndexesOutput is the JSON-format response of update_indexes.
+// UpdateIndexesOutput is the structured output of update_indexes: the detected Moodle version, the
+// global index files regenerated, served from the cache and failed (relative to the Moodle root),
+// and one summary line per .indevelopment plugin when include_plugins is set.
 type UpdateIndexesOutput struct {
-	Regenerated []string     `json:"regenerated,omitempty"`
-	Skipped     []string     `json:"skipped,omitempty"`
-	Failed      []FailedFile `json:"failed,omitempty"`
-	Plugins     []string     `json:"plugins,omitempty"`
+	MoodleVersion string       `json:"moodle_version"`
+	Regenerated   []string     `json:"regenerated,omitempty"`
+	Skipped       []string     `json:"skipped,omitempty"`
+	Failed        []FailedFile `json:"failed,omitempty"`
+	Plugins       []string     `json:"plugins,omitempty"`
 }
 
-// buildUpdateIndexesOutput builds the JSON response from the global generator `results` (file
-// names relative to `moodlePath`) and the per-plugin summary `pluginLines`.
-func buildUpdateIndexesOutput(moodlePath string, results []generators.GeneratorResult, pluginLines []string) UpdateIndexesOutput {
+// buildUpdateIndexesOutput builds the structured output from the detected `moodleVersion`, the
+// global generator `results` (file names relative to `moodlePath`) and the per-plugin summary
+// `pluginLines`.
+func buildUpdateIndexesOutput(moodlePath, moodleVersion string, results []generators.GeneratorResult, pluginLines []string) UpdateIndexesOutput {
 	regenerated, skipped, failed := classifyResults(results, moodlePath)
-	return UpdateIndexesOutput{Regenerated: regenerated, Skipped: skipped, Failed: failed, Plugins: pluginLines}
+	return UpdateIndexesOutput{MoodleVersion: moodleVersion, Regenerated: regenerated, Skipped: skipped, Failed: failed, Plugins: pluginLines}
 }
 
 // renderUpdateIndexesReport renders the Markdown report: global index counts, the dev plugin
@@ -237,8 +242,8 @@ type WatchInput struct {
 // plugin's context, a log notification is sent to every session connected at that moment, not only
 // the one that started it. Starting returns an informational result when no watchable files exist;
 // a missing or invalid configuration yields an error result. The error return is always nil.
-func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequest, WatchInput) (*mcp.CallToolResult, struct{}, error) {
-	return func(ctx context.Context, req *mcp.CallToolRequest, in WatchInput) (*mcp.CallToolResult, struct{}, error) {
+func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequest, WatchInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in WatchInput) (*mcp.CallToolResult, any, error) {
 		if in.Action == "" {
 			in.Action = WatchStart
 		}
@@ -249,28 +254,28 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 		case WatchStatus:
 			running := activeWatcher != nil && activeWatcher.Running()
 			if running {
-				return textResult(false, "✔ Watcher is active."), struct{}{}, nil
+				return textResult(false, "✔ Watcher is active."), nil, nil
 			}
-			return textResult(false, "Watcher is not running."), struct{}{}, nil
+			return textResult(false, "Watcher is not running."), nil, nil
 
 		case WatchStop:
 			if activeWatcher == nil {
-				return textResult(false, "No active watcher to stop."), struct{}{}, nil
+				return textResult(false, "No active watcher to stop."), nil, nil
 			}
 			activeWatcher.Stop()
 			activeWatcher = nil
-			return textResult(false, "✔ Watcher stopped."), struct{}{}, nil
+			return textResult(false, "✔ Watcher stopped."), nil, nil
 
 		default: // start
 			if activeWatcher != nil && activeWatcher.Running() {
-				return textResult(false, "⚠ Watcher is already running. Use action: 'stop' first."), struct{}{}, nil
+				return textResult(false, "⚠ Watcher is already running. Use action: 'stop' first."), nil, nil
 			}
 			cfg, err := requireConfig()
 			if err != nil {
-				return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+				return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
 			}
 			if cfg == nil {
-				return toolutil.NotInitialized(), struct{}{}, nil
+				return toolutil.NotInitialized(), nil, nil
 			}
 			if activeWatcher != nil {
 				// A previous watcher that has stopped running; discard it before replacing it.
@@ -283,7 +288,9 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 				// its request context was cancelled, so it uses a fresh background context.
 				logCtx := context.Background()
 				for session := range server.Sessions() {
-					_ = session.Log(logCtx, &mcp.LoggingMessageParams{ // best-effort; ignore error (e.g. transport closed)
+					// MCP logging is deprecated but still part of the protocol; it is the channel through
+					// which every connected client is told about a regeneration.
+					_ = session.Log(logCtx, &mcp.LoggingMessageParams{ //nolint:staticcheck // best-effort; ignore error (e.g. transport closed)
 						Level:  "info",
 						Logger: "build82/watcher",
 						Data:   fmt.Sprintf("[watcher] %s — context regenerated (%s)", ev.Component, ev.File),
@@ -299,14 +306,14 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 					"ℹ️ Watcher not started — no watchable files found.\n\n"+
 						"No .indevelopment plugin with watchable source files (version.php, db/*.php, ...) exists. "+
 						"Run `generate_plugin_context` on a plugin (or `plugin_batch` with mark_as_dev: true) to mark it, "+
-						"then start the watcher again."), struct{}{}, nil
+						"then start the watcher again."), nil, nil
 			}
 			activeWatcher = w
 
 			return textResult(false, fmt.Sprintf(
 				"✅ Watcher started — monitoring %d files across dev plugins.\n\n"+
 					"Context will be regenerated automatically when db/*.php or version.php change.\n"+
-					"Use `watch_plugins action='stop'` to stop.", count)), struct{}{}, nil
+					"Use `watch_plugins action='stop'` to stop.", count)), nil, nil
 		}
 	}
 }

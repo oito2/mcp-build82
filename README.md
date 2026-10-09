@@ -62,8 +62,11 @@ with existing conventions, and keep the docs in sync as you work.
 - Only to build from source: Go 1.26+.
 
 **Download a release binary** (no Go toolchain required). Every release ships a `checksums.txt` —
-verify it before trusting a downloaded binary. Full step-by-step guide with checksum verification
-and troubleshooting: [Installation Guide](docs/en/getting-started/installation.md).
+verify it before trusting a downloaded binary. From v1.1.0 `checksums.txt` is also signed with
+Sigstore and every binary carries a GitHub build provenance attestation
+([how to verify](docs/en/getting-started/installation.md#-verifying-the-signature-and-provenance-optional)).
+Full step-by-step guide with checksum verification and troubleshooting:
+[Installation Guide](docs/en/getting-started/installation.md).
 
 <details>
 <summary><strong>🐧 Linux</strong></summary>
@@ -117,6 +120,8 @@ the quarantine flag: `xattr -d com.apple.quarantine /usr/local/bin/build82`.
 <details>
 <summary><strong>🪟 Windows</strong></summary>
 
+On Windows on Arm, use `build82_windows_arm64.exe` in every command below.
+
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/oito2/mcp-build82/releases/latest/download/build82_windows_amd64.exe" -OutFile "build82_windows_amd64.exe"
 Invoke-WebRequest -Uri "https://github.com/oito2/mcp-build82/releases/latest/download/checksums.txt" -OutFile "checksums.txt"
@@ -155,7 +160,8 @@ build82 install [target]
 
 It detects which supported tools are installed and prompts for the Moodle path. Run it without a
 target to configure every tool found, or pass one explicitly: `claude` (Claude Code),
-`claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`.
+`claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`. Close the client
+first: `install` edits a configuration file the client also writes.
 
 For example, with Claude Code you can also register it manually:
 
@@ -174,15 +180,19 @@ To remove it: `build82 uninstall [target]` — see [Uninstallation](docs/en/gett
 ## Update & Maintenance
 
 ```bash
-build82 self-update --check    # report whether a newer release exists, without installing it
+build82 self-update --check    # report whether a newer release exists (exit 10 if so), without installing it
 build82 self-update            # download, verify, and install the latest release
+build82 self-update --require-signature # refuse to update unless cosign can verify the release signature
 build82 self-update --rollback # restore the previous binary if the new version turns out to be broken
 ```
 
-Downloads are checksum-verified against the release's `checksums.txt` and smoke-tested before the
-running binary is replaced; the previous binary is kept as `<path>.bak`, which `--rollback`
-restores with an atomic rename. If no backup exists, it fails with a clear error and nothing is
-changed.
+Downloads come only from this repository's release on GitHub. When [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+v3 or later is on `PATH`, the release's signature is verified first; without it, a warning is
+printed and only the checksum is checked. Every download is checksum-verified against the
+release's `checksums.txt` and smoke-tested before the running binary is replaced; the previous
+binary is kept as `<path>.bak`, which `--rollback` restores with an atomic rename. If no backup
+exists, it fails with a clear error and nothing is changed. Details:
+[CLI reference](docs/en/reference/cli.md#self-update).
 
 ## Documentation
 

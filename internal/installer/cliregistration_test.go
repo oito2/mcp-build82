@@ -16,6 +16,7 @@
 package installer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -292,7 +293,7 @@ func TestClaude_RunPrintsUpdated(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	out := captureStdout(t, func() {
-		if err := Run("claude"); err != nil {
+		if err := Run(context.Background(), "claude"); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
@@ -373,7 +374,7 @@ func TestClaude_UninstallProjectOnlyWarnsAndSucceeds(t *testing.T) {
 	scopes := map[string]bool{scopeProject: true}
 	calls := fakeClaude(t, scopes)
 	out := captureStdout(t, func() {
-		if err := Uninstall("claude", false); err != nil {
+		if err := Uninstall(context.Background(), "claude", false); err != nil {
 			t.Errorf("a project-scope registration must not make uninstall fail: %v", err)
 		}
 	})

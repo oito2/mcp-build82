@@ -17,6 +17,7 @@ package installer
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -164,7 +165,7 @@ func TestRunPurge_RequiresConfirmation(t *testing.T) {
 
 	// Answering "n" must leave the file untouched.
 	in := bufio.NewReader(strings.NewReader("n\n"))
-	if err := runPurge(cfg, in); err != nil {
+	if err := runPurge(context.Background(), cfg, in); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := os.Stat(targetFile); err != nil {
@@ -173,7 +174,7 @@ func TestRunPurge_RequiresConfirmation(t *testing.T) {
 
 	// Answering "y" deletes it.
 	in = bufio.NewReader(strings.NewReader("y\n"))
-	if err := runPurge(cfg, in); err != nil {
+	if err := runPurge(context.Background(), cfg, in); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, err := os.Stat(targetFile); err == nil {

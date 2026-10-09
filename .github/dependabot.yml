@@ -1,9 +1,16 @@
 version: 2
 updates:
-  # Opens a pull request when a newer version of an action used in .github/workflows is released.
+  # Bumps the SHA-pinned GitHub Actions (and their "# vX" comments).
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: ci
+  # Bumps the Go module dependencies in go.mod.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps

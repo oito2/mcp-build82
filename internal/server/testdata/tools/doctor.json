@@ -1,0 +1,343 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Doctor"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "name": "doctor",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "cache": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "file_bytes": {
+            "type": "integer"
+          },
+          "hits": {
+            "type": "integer"
+          },
+          "misses": {
+            "type": "integer"
+          },
+          "skips": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hits",
+          "misses",
+          "skips"
+        ],
+        "type": [
+          "null",
+          "object"
+        ]
+      },
+      "capability_usage": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "configuration": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "cross_plugin_consistency": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "deprecated_api_usage": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "development_plugins": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "checks": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "detail": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "status"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "component": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "component",
+            "checks"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "global_index_files": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "hint": {
+        "type": "string"
+      },
+      "lang_string_usage": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "legacy_files": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "moodle_installation": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "system_dependencies": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "verdict": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "system_dependencies",
+      "configuration",
+      "moodle_installation",
+      "global_index_files",
+      "development_plugins",
+      "legacy_files",
+      "cross_plugin_consistency",
+      "deprecated_api_usage",
+      "capability_usage",
+      "lang_string_usage",
+      "verdict"
+    ],
+    "type": "object"
+  }
+}

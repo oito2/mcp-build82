@@ -10,15 +10,41 @@ All 13 MCP tools exposed by build82, read from the registrations and input struc
 
 | Topic | Behavior |
 |-------|----------|
-| `format` parameter | Optional `"text"` (default; any value other than `"json"` is treated as text) or `"json"`. Accepted by 9 tools: `init_moodle_context`, `generate_plugin_context`, `plugin_batch`, `update_indexes`, `search_plugins`, `search_api`, `get_plugin_info`, `list_dev_plugins`, `doctor`. The JSON is returned as one indented text block. |
-| No `format` parameter | `watch_plugins`, `explain_plugin`, `release_plugin`, `create_plugin_skeleton` — output is always plain text/Markdown. |
-| `doctor` | `format: "json"` returns the structured report described under [`doctor`](#doctor); any other value returns the Markdown report. |
+| `format` parameter | Optional `"text"` (default; any value other than `"json"` is treated as text) or `"json"`. Accepted by 9 tools: `init_moodle_context`, `generate_plugin_context`, `plugin_batch`, `update_indexes`, `search_plugins`, `search_api`, `get_plugin_info`, `list_dev_plugins`, `doctor`. It selects the text block only: Markdown for `text`, the structured output as one indented JSON block for `json`. |
+| Structured output | Those 9 tools declare an `outputSchema`, and every successful result carries the same document as `structuredContent`, **whatever the `format`** (each tool's "JSON" below describes it). Clients that read `structuredContent` — Claude Code shows it to the agent instead of the text block — therefore receive JSON in either format. |
+| No `format` parameter | `watch_plugins`, `explain_plugin`, `release_plugin`, `create_plugin_skeleton` — output is always plain text/Markdown, with no `outputSchema` and no `structuredContent`. |
+| Errors | A failed call (invalid argument, missing configuration, unknown plugin, missing index) is an error result (`isError: true`) whose only content is the message text, in either format, and carries no `structuredContent`. The only exception is `doctor`, whose failed diagnosis is an error result that still carries the full structured report. |
+| `doctor` | Its structured report is described under [`doctor`](#doctor). |
 | Initialization guard | Every tool except `init_moodle_context`, `doctor` and `watch_plugins` (`stop`/`status`) needs a resolvable configuration (`BUILD82_MOODLE_PATH` or `~/.build82`). Otherwise it returns an error result: ``❌ build82 is not initialized. Run `init_moodle_context` first.`` |
 | Configuration failure | If the configuration location cannot be resolved (e.g. no home directory): error result `❌ Failed to resolve build82 configuration: <cause>`. |
 | Panics | A panic inside any tool is recovered and returned as an error result: `❌ Internal error while handling this request: <cause>`. |
+| Plugin files | Files read from plugin directories (and the generated files under `.build82/`) are opened only when they are regular files: a symbolic link at the file is not followed and a FIFO or device is never waited on, so a planted special file cannot hang the server. |
 | Plugin identifiers | Tools that take a plugin accept different forms; see each tool. `get_plugin_info`, `plugin_batch mode="list"`, `generate_plugin_context`, `explain_plugin` and `release_plugin` all accept a component (`local_myplugin`), a Moodle-relative path (`local/myplugin`) or an absolute path. |
 | Path containment | Every plugin path must resolve inside the configured Moodle root. |
 | Reported paths | Generation and plugin reports do not include absolute paths (`doctor` and `init_moodle_context` do report the configured Moodle path, config file and cache file). Generated-file lists are relative (to the Moodle root for global files, to the plugin for plugin files); plugin locations (`Path`, `Source`, the skeleton location) are relative to the Moodle root. |
+
+
+### Annotations
+
+Every tool declares all four MCP hints explicitly, plus a title, so clients never fall back to the protocol defaults (which assume a destructive, open-world tool). No tool reaches outside the Moodle installation (`openWorldHint: false` everywhere).
+
+| Tool | Title | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+|------|-------|:---:|:---:|:---:|
+| `init_moodle_context` | Initialize Moodle Context | false | false | true |
+| `generate_plugin_context` | Generate Plugin Context | false | false | true |
+| `plugin_batch` | Generate Context for Many Plugins | false | false | true |
+| `update_indexes` | Update Indexes | false | false | true |
+| `watch_plugins` | Watch Dev Plugins | false | false | true |
+| `search_plugins` | Search Plugins | true | false | true |
+| `search_api` | Search Moodle API | true | false | true |
+| `get_plugin_info` | Get Plugin Info | true | false | true |
+| `list_dev_plugins` | List Dev Plugins | true | false | true |
+| `doctor` | Doctor | true | false | true |
+| `explain_plugin` | Explain Plugin | true | false | true |
+| `release_plugin` | Package Plugin Release | false | true (replaces an existing ZIP of the same name) | true |
+| `create_plugin_skeleton` | Create Plugin Skeleton | false | false | false (a second call fails: the plugin exists) |
+
+The exact input and output schemas of every tool are kept as golden files in `internal/server/testdata/tools/`.
 
 ---
 
@@ -32,7 +58,7 @@ Initializes context for a Moodle installation: validates the path, detects the v
 | `force` | boolean | ❌ | `false` | Re-initialize even if a configuration is already resolvable |
 | `format` | `text`/`json` | ❌ | `text` | Output format |
 
-**Validation** (all must hold, otherwise error `❌ Invalid Moodle path: <reason>`): the directory exists; `version.php` exists; `lib/` exists; `config.php` or `config-dist.php` exists. With `format: "json"`, a failed validation returns an error result whose JSON carries no reason: `{"success": false, "moodle_path": "<path>", "moodle_version": "", "moodle_full_version": "", "config_path": ""}`; use the text format to see which check failed.
+**Validation** (all must hold, otherwise error `❌ Invalid Moodle path: <reason>`): the directory exists; `version.php` exists; `lib/` exists; `config.php` or `config-dist.php` exists.
 
 **Side effects:** writes `~/.build82` (see [Configuration](./configuration.md)); runs the 13 global generators plus the ctags step, writing under `{moodle_root}/.build82/` and updating `{moodle_root}/.build82/.cache.json`; migrates legacy flat files into `.build82/`. See [Generated Files](./generated-files.md).
 
@@ -80,7 +106,7 @@ Generates or refreshes context for multiple plugins.
 
 **Side effects:** same per-plugin writes as `generate_plugin_context`; updates `MOODLE_AI_INDEX.md` and `.cache.json`.
 
-**Returns:** text report grouped Regenerated / Cached / Failed, cache hit/miss/skip counters, and a marker tip or count. JSON: array of `{Path, Component, Generated, Skipped, Failed, Error}` (one per plugin; counts are file counts).
+**Returns:** text report grouped Regenerated / Cached / Failed, cache hit/miss/skip counters, and a marker tip or count. JSON: `{mode, plugins[]}`, each plugin `{component, path, generated, skipped, failed, error?}` (`path` relative to the Moodle root; counts are file counts). In `dev` mode with no marked plugin, the call succeeds with an empty `plugins` list and a tip as text.
 
 ---
 
@@ -96,7 +122,7 @@ Regenerates the 13 global indexes (and `tags`), re-detecting the Moodle version.
 
 **Side effects:** rewrites `~/.build82` when the detected version differs from the stored one; writes the global files and `.cache.json`; with `include_plugins`, the per-plugin files.
 
-**Returns:** text report with Moodle version, counts of Regenerated/Cached/Failed global files, per-plugin lines (when requested) and cache counters. JSON: `regenerated[]`, `skipped[]`, `failed[]` (`{file, error}`), `plugins[]` (one summary line per dev plugin).
+**Returns:** text report with Moodle version, counts of Regenerated/Cached/Failed global files, per-plugin lines (when requested) and cache counters. JSON: `moodle_version`, `regenerated[]`, `skipped[]`, `failed[]` (`{file, error}`), `plugins[]` (one summary line per dev plugin).
 
 ---
 
@@ -171,11 +197,13 @@ Returns a plugin's generated context — or live-detected metadata if not yet ge
 
 **Behavior, in order:**
 
-1. If the plugin cannot be found inside the Moodle root, the plugin index is searched for the value; matching rows are returned as "possible matches" (non-error). No match: error `❌ Plugin not found: <plugin>`.
-2. If `{plugin}/.build82/PLUGIN_AI_CONTEXT.md` exists, its full content is returned (JSON: `{path, ai_context}`).
-3. Otherwise the plugin is detected live and a Field/Value table is returned (Type, Version, Requires, Display name, Path) with a note that `generate_plugin_context` has not been run. JSON: `{Name, Type, Component, Path, Version, Requires, DisplayName, Maturity, MoodlePath}`. Error `❌ Failed to detect plugin: <cause>` if detection fails.
+1. If the plugin cannot be found inside the Moodle root, the plugin index is searched for the value; matching rows are returned as "possible matches" in an error result. No match: error `❌ Plugin not found: <plugin>`.
+2. If `{plugin}/.build82/PLUGIN_AI_CONTEXT.md` exists, its full content is the text block.
+3. Otherwise the plugin is detected live and a Field/Value table is returned (Type, Version, Requires, Display name, Path) with a note that `generate_plugin_context` has not been run. Error `❌ Failed to detect plugin: <cause>` if detection fails.
 
-Every path in the response is relative to the Moodle root (JSON: `path` in the cached form, `Path` in the live form). Read-only.
+JSON (both cases): `{path, component, type, name, version, requires, display_name, maturity, has_ai_context, ai_context?}` — the detected metadata, plus the full `PLUGIN_AI_CONTEXT.md` in `ai_context` when it exists.
+
+Every path in the response is relative to the Moodle root. Read-only.
 
 ---
 
@@ -187,7 +215,7 @@ Lists every plugin marked `.indevelopment`.
 |-----------|------|:---:|---------|-------------|
 | `format` | `text`/`json` | ❌ | `text` | Output format |
 
-**Returns:** table `Component | Path | Has AI Context` (`✔` when `.build82/PLUGIN_AI_CONTEXT.md` exists), sorted by path. JSON: array of `{Component, Path, HasAiContext}`. With no marked plugin, the response is the text `No .indevelopment plugins found.` in both formats. Read-only.
+**Returns:** table `Component | Path | Has AI Context` (`✔` when `.build82/PLUGIN_AI_CONTEXT.md` exists), sorted by path. JSON: `{plugins[]}`, each `{component, path, has_ai_context}`. With no marked plugin, the call succeeds with an empty `plugins` list and the text `No .indevelopment plugins found.`. Read-only.
 
 **Example:**
 ```
@@ -246,7 +274,7 @@ The assistant will call `list_dev_plugins`.
 
 ## `doctor`
 
-Read-only environment diagnostic. Returns a Markdown report by default, or a structured JSON report with `format: "json"`.
+Read-only environment diagnostic. Returns a Markdown report by default, or the structured report as JSON text with `format: "json"`; the structured report is the `structuredContent` in both formats, also when the verdict is `fail` (an error result).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|:---:|---------|-------------|
@@ -270,7 +298,7 @@ Read-only environment diagnostic. Returns a Markdown report by default, or a str
 
 **Verdict line:** `❌ Issues found` (any failure), `⚠️ Warnings found` (any warning), otherwise `✅ All checks passed.`
 
-**JSON output (`format: "json"`):** one object with an array per report section, plus the overall verdict. Every check is `{label, status, detail}` where `status` is `ok`, `warn` or `fail` (`detail` is omitted when empty).
+**Structured output (JSON):** one object with an array per report section, plus the overall verdict. Every check is `{label, status, detail}` where `status` is `ok`, `warn` or `fail` (`detail` is omitted when empty).
 
 | Key | Content |
 |-----|---------|

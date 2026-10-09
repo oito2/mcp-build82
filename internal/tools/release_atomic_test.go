@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,7 +117,7 @@ func TestCreateZip_SuccessLeavesOnlyFinalArchive(t *testing.T) {
 			t.Errorf("archive contains its own output file: %s", f.Name)
 		}
 	}
-	if info, err := os.Stat(dest); err != nil || info.Mode().Perm() != 0o644 {
+	if info, err := os.Stat(dest); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o644) {
 		t.Errorf("expected a 0644 archive, got %v (err %v)", info.Mode().Perm(), err)
 	}
 }

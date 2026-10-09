@@ -18,6 +18,7 @@ package generators
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -406,6 +407,9 @@ func TestGenerateAllForPlugin_MinimalPlugin(t *testing.T) {
 // TestGenerateAllForPlugin_LogsIndevelopmentMarkerWriteFailureToStderr verifies that a failure to
 // write the .indevelopment marker (e.g. an unwritable .build82/ directory) is logged to stderr.
 func TestGenerateAllForPlugin_LogsIndevelopmentMarkerWriteFailureToStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory cannot be made with chmod on Windows")
+	}
 	moodlePath := copyFixtureMoodleTree(t)
 	pluginPath := filepath.Join(moodlePath, "local", "demo")
 	contextDir := filepath.Join(pluginPath, ContextDir)

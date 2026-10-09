@@ -1,0 +1,89 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Update Indexes"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "force": {
+        "description": "Bypass the cache entirely",
+        "type": "boolean"
+      },
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "include_plugins": {
+        "description": "Also regenerate context for all .indevelopment plugins",
+        "type": "boolean"
+      }
+    },
+    "type": "object"
+  },
+  "name": "update_indexes",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "failed": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "error"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "moodle_version": {
+        "type": "string"
+      },
+      "plugins": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "regenerated": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "skipped": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "required": [
+      "moodle_version"
+    ],
+    "type": "object"
+  }
+}

@@ -25,7 +25,7 @@ import (
 
 // stdioPurityExceptions lists the only source files, relative to the module root, allowed to write
 // to stdout. Each belongs to a CLI-only code path (help and version text, install and uninstall
-// prompts, self-update progress, the release tool) that never runs in the same process as the
+// prompts, self-update progress, the release and link-check tools) that never runs in the same process as the
 // MCP stdio server.
 var stdioPurityExceptions = map[string]bool{
 	filepath.Join("cmd", "build82", "main.go"):               true,
@@ -33,6 +33,7 @@ var stdioPurityExceptions = map[string]bool{
 	filepath.Join("internal", "installer", "uninstall.go"):   true,
 	filepath.Join("internal", "selfupdate", "selfupdate.go"): true,
 	filepath.Join("scripts", "release", "main.go"):           true, // release build tool, never runs as the MCP server
+	filepath.Join("scripts", "linkcheck", "main.go"):         true, // documentation link checker, never runs as the MCP server
 }
 
 // stdoutCallPattern matches fmt.Print, fmt.Println, fmt.Printf and any use of os.Stdout.

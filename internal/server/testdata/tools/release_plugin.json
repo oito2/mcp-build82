@@ -1,0 +1,32 @@
+{
+  "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Package Plugin Release"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "component": {
+        "description": "Component (e.g. 'local_myplugin'), path relative to the Moodle root (e.g. 'local/myplugin'), or absolute path",
+        "type": "string"
+      },
+      "output_dir": {
+        "description": "Directory to write the ZIP into (defaults to the current working directory; must already exist)",
+        "type": "string"
+      },
+      "strict": {
+        "description": "Validate moodle.org plugin directory submission requirements before packaging; refuses to build the ZIP if any fail (default: false, package unconditionally)",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "component"
+    ],
+    "type": "object"
+  },
+  "name": "release_plugin",
+  "outputSchema": null
+}

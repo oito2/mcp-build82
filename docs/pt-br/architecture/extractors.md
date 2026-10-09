@@ -215,7 +215,7 @@ Varreduras somente com regex usadas exclusivamente pela tool `doctor`, e por nen
 
 ### `shared.go` — acesso seguro a arquivos
 
-O `readFileCapped` se recusa a carregar em memória arquivos maiores que 8 MiB, e a varredura de diretório compartilhada ignora arquivos que são symlinks, de modo que analisar código de plugins de terceiros não confiáveis não esgota a memória nem lê arquivos fora da árvore do plugin. O backend tree-sitter aplica o mesmo limite de tamanho.
+O `readFileCapped` se recusa a carregar em memória arquivos maiores que 8 MiB e só lê arquivos regulares (`fsutil.ReadRegular`: um link simbólico no arquivo não é seguido, e um FIFO ou dispositivo é recusado sem bloquear), e a varredura de diretório compartilhada ignora arquivos que são symlinks, de modo que analisar código de plugins de terceiros não confiáveis não esgota a memória, não lê arquivos fora da árvore do plugin nem trava num FIFO plantado. O backend tree-sitter aplica o mesmo limite de tamanho e a mesma regra de arquivo regular.
 
 ---
 

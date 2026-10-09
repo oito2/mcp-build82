@@ -1,0 +1,21 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Watch Dev Plugins"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "description": "'start' (default) to begin watching, 'stop' to stop, 'status' to check.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "name": "watch_plugins",
+  "outputSchema": null
+}

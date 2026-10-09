@@ -19,15 +19,19 @@
 // Usage:
 //
 //	go run ./scripts/release v1.0.0
+//	go run ./scripts/release -allow-prerelease v0.0.0-ci
 //
-// It shells out to `go build` for each target platform and is not one of build82's own
-// subcommands.
+// The version must match vMAJOR.MINOR.PATCH. The -allow-prerelease flag also accepts a "-suffix" of
+// letters, digits, dots and hyphens (e.g. v0.0.0-ci); CI uses it to exercise the full packaging
+// without a real release tag. It shells out to `go build` for each target platform and is not one
+// of build82's own subcommands.
 package main
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -36,6 +40,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/oito2/mcp-build82/internal/selfupdate"
 )
 
 // Identity of the project used in build flags, asset names and release URLs.
@@ -47,24 +53,10 @@ const (
 	distDir  = "dist"
 )
 
-// platforms is the set of GOOS/GOARCH combinations built for every release. Each entry yields an
-// asset named by internal/selfupdate.AssetName.
-var platforms = [][2]string{
-	{"linux", "amd64"},
-	{"linux", "arm64"},
-	{"darwin", "amd64"},
-	{"darwin", "arm64"},
-	{"windows", "amd64"},
-}
-
-// assetName returns the release asset file name for the given `goos` and `goarch`, in the form
-// build82_<goos>_<goarch>, with a .exe suffix on windows.
+// assetName returns the release asset file name for the given `goos` and `goarch`, the name
+// self-update looks for (internal/selfupdate.AssetName).
 func assetName(goos, goarch string) string {
-	ext := ""
-	if goos == "windows" {
-		ext = ".exe"
-	}
-	return fmt.Sprintf("%s_%s_%s%s", binary, goos, goarch, ext)
+	return selfupdate.AssetName(goos, goarch)
 }
 
 // semverTagPattern matches exactly "vMAJOR.MINOR.PATCH". The version argument is interpolated
@@ -72,15 +64,33 @@ func assetName(goos, goarch string) string {
 // inject extra linker flags.
 var semverTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 
-// main builds the release artifacts for the version given as the only argument (a strict "vX.Y.Z"
-// tag) into dist/: one binary per entry of platforms, the MCPB bundle, checksums.txt and
-// server.json. It exits with status 1 and a message on stderr on a usage error or any failure.
+// prereleaseTagPattern additionally accepts a pre-release suffix of letters, digits, dots and
+// hyphens; it is only used with -allow-prerelease.
+var prereleaseTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
+
+// validVersion reports whether `version` is an acceptable release tag: a strict
+// vMAJOR.MINOR.PATCH, or, when `allowPrerelease` is set, one with an optional pre-release suffix.
+func validVersion(version string, allowPrerelease bool) bool {
+	if allowPrerelease {
+		return prereleaseTagPattern.MatchString(version)
+	}
+	return semverTagPattern.MatchString(version)
+}
+
+// main builds the release artifacts for the version given as the only argument into dist/: one
+// binary per entry of selfupdate.ReleasePlatforms, the MCPB bundle, checksums.txt and server.json.
+// It exits with status 1 and a message on stderr on a usage error or any failure.
 func main() {
-	if len(os.Args) != 2 || !semverTagPattern.MatchString(os.Args[1]) {
-		fmt.Fprintln(os.Stderr, "usage: go run ./scripts/release vX.Y.Z")
+	allowPrerelease := flag.Bool("allow-prerelease", false, "also accept a pre-release suffix such as v0.0.0-ci")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: go run ./scripts/release [-allow-prerelease] vX.Y.Z")
+	}
+	flag.Parse()
+	if flag.NArg() != 1 || !validVersion(flag.Arg(0), *allowPrerelease) {
+		flag.Usage()
 		os.Exit(1)
 	}
-	version := os.Args[1]
+	version := flag.Arg(0)
 
 	repoRoot, err := repoRootDir()
 	if err != nil {
@@ -94,7 +104,8 @@ func main() {
 		fatal(fmt.Errorf("create %s: %w", dist, err))
 	}
 
-	checksums := make(map[string]string, len(platforms))
+	platforms := selfupdate.ReleasePlatforms()
+	checksums := make(map[string]string, len(platforms)+1)
 	for _, p := range platforms {
 		goos, goarch := p[0], p[1]
 		name := assetName(goos, goarch)
@@ -139,7 +150,8 @@ func main() {
 // buildBundle writes the MCPB bundle to `out` for `version`, using the binaries already built in
 // `dist` and the icons under `repoRoot`. MCPB selects a binary per OS, not per CPU architecture:
 // the two darwin binaries are merged into one universal binary, both linux binaries ship behind a
-// launcher script that picks one by `uname -m`, and windows/amd64 ships as-is. The manifest tool
+// launcher script that picks one by `uname -m`, and windows/amd64 ships as-is (Windows on Arm runs
+// it through its x64 emulation; the native windows/arm64 binary is a separate release asset). The manifest tool
 // list is read from the in-process server. It returns the first error encountered.
 func buildBundle(repoRoot, dist, version, out string) error {
 	tmp, err := os.MkdirTemp("", "build82-mcpb-")
@@ -183,21 +195,34 @@ func repoRootDir() (string, error) {
 }
 
 // releaseLDFlags returns the linker flags for a release build: -s and -w drop the symbol table and
-// DWARF debug info (panic stack traces still work, they rely on the runtime's own pclntab), and -X
-// stamps version into internal/version.Current.
+// DWARF debug info (panic stack traces still work, they rely on the runtime's own pclntab), an
+// empty -buildid keeps the output reproducible, and -X stamps version into
+// internal/version.Current.
 func releaseLDFlags(version string) string {
-	return fmt.Sprintf("-s -w -X %s/internal/version.Current=%s", module, version)
+	return fmt.Sprintf("-s -w -buildid= -X %s/internal/version.Current=%s", module, version)
 }
 
-// buildOne cross-compiles ./cmd/build82 for `goos`/`goarch` into the file `out` (CGO disabled),
-// stamping `version` into the binary, and streams the build output to the console. It returns the
-// error of the failed `go build`, if any.
+// releaseBuildEnv returns the environment entries that pin a release build of `goos`/`goarch`,
+// appended after the caller's environment so they win: cgo off, the baseline CPU level of each
+// architecture, and no GOFLAGS or GOEXPERIMENT, so a local build gives the same binaries as CI
+// whatever the developer's shell sets.
+func releaseBuildEnv(goos, goarch string) []string {
+	return []string{
+		"GOOS=" + goos, "GOARCH=" + goarch, "CGO_ENABLED=0",
+		"GOAMD64=v1", "GOARM64=v8.0", "GOFLAGS=", "GOEXPERIMENT=",
+	}
+}
+
+// buildOne cross-compiles ./cmd/build82 for `goos`/`goarch` into the file `out` with the pinned
+// environment of releaseBuildEnv and -trimpath (so the binary embeds no local path), stamping
+// `version` into the binary, and streams the build output to the console. It returns the error of
+// the failed `go build`, if any.
 func buildOne(repoRoot, goos, goarch, version, out string) error {
-	cmd := exec.Command("go", "build",
+	cmd := exec.Command("go", "build", "-trimpath",
 		"-ldflags", releaseLDFlags(version),
 		"-o", out, "./cmd/build82")
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
+	cmd.Env = append(os.Environ(), releaseBuildEnv(goos, goarch)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

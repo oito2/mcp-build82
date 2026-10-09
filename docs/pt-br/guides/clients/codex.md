@@ -24,7 +24,7 @@ Exige o comando `codex` no `PATH` (caso contrário imprime `Skipped: OpenAI Code
 codex mcp add build82 --env BUILD82_MOODLE_PATH=<raiz-do-moodle> -- <caminho-absoluto-do-build82>
 ```
 
-Ou seja, é o próprio Codex que grava a entrada em `~/.codex/config.toml`, o mesmo resultado da Opção 2. Imprime `OpenAI Codex CLI... configured.` Executar o comando de novo substitui o registro existente: quando o `codex mcp get build82` informa um registro, o instalador primeiro executa `codex mcp remove build82` e depois o adiciona de novo com o caminho atual do binário e o `BUILD82_MOODLE_PATH`, imprimindo `OpenAI Codex CLI... updated.`
+Ou seja, é o próprio Codex que grava a entrada em `~/.codex/config.toml`, o mesmo resultado da Opção 2. Imprime `OpenAI Codex CLI... configured.` Executar o comando de novo substitui o registro existente: quando o `codex mcp get build82` informa um registro, o instalador primeiro executa `codex mcp remove build82` e depois o adiciona de novo com o caminho atual do binário e o `BUILD82_MOODLE_PATH`, imprimindo `OpenAI Codex CLI... updated.` Se o `codex mcp get build82` falhar com qualquer coisa diferente da resposta `No MCP server named ...` (por exemplo, um `config.toml` ilegível), nada é adicionado: o comando imprime `OpenAI Codex CLI... failed: ...` com a saída do Codex e sai com código 1.
 
 ### Opção 2 — Pela CLI do Codex
 
@@ -68,7 +68,7 @@ Use o caminho absoluto em `command` se o Codex não herdar o `PATH` do seu shell
 build82 uninstall codex
 ```
 
-Isso executa `codex mcp get build82` para verificar se existe um registro e, somente se existir, `codex mcp remove build82`. Imprime `OpenAI Codex CLI... removed.`, ou `OpenAI Codex CLI... not registered.` (código de saída 0) quando nada está registrado, e imprime `Skipped: OpenAI Codex CLI not detected.` se o `codex` não estiver no `PATH`. Você também pode executar `codex mcp remove build82` por conta própria, ou apagar a tabela `[mcp_servers.build82]` do `config.toml`.
+Isso executa `codex mcp get build82` para verificar se existe um registro e, somente se existir, `codex mcp remove build82`. Imprime `OpenAI Codex CLI... removed.`, ou `OpenAI Codex CLI... not registered.` (código de saída 0) quando a saída diz `No MCP server named ...`; qualquer outra falha do `codex mcp get` é reportada como `OpenAI Codex CLI... failed: ...` (código de saída 1). Imprime `Skipped: OpenAI Codex CLI not detected.` se o `codex` não estiver no `PATH`. Você também pode executar `codex mcp remove build82` por conta própria, ou apagar a tabela `[mcp_servers.build82]` do `config.toml`.
 
 Referência oficial: [documentação de MCP do Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 

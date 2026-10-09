@@ -16,12 +16,14 @@
 package installer
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -31,8 +33,8 @@ const (
 	testMoodle = "/var/www/moodle"
 )
 
-// fakeHome points every home/config environment variable at a fresh temp dir and pins the OS the
-// target table is built for.
+// fakeHome points every home/config environment variable at a fresh temp dir, clears the Cline
+// overrides, isolates PATH, and pins the OS the target table is built for.
 func fakeHome(t *testing.T, targetOS string) string {
 	t.Helper()
 	home := t.TempDir()
@@ -40,6 +42,12 @@ func fakeHome(t *testing.T, targetOS string) string {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	t.Setenv("CLINE_DIR", "")
+	t.Setenv("CLINE_DATA_DIR", "")
+	// An empty PATH directory keeps a claude, codex or opencode installed on the machine out of
+	// reach of the real lookPath and runCommand.
+	t.Setenv("PATH", t.TempDir())
 	prev := goos
 	goos = targetOS
 	t.Cleanup(func() { goos = prev })
@@ -255,7 +263,7 @@ func TestClaudeDesktop_LinuxDetectInstallUninstall(t *testing.T) {
 	if !strings.Contains(string(content), `"sidebarMode"`) || !strings.Contains(string(content), `"coworkUserFilesPath"`) {
 		t.Errorf("existing top-level keys must be preserved, got %s", content)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Errorf("config file mode must stay 0600, got %v (err %v)", info.Mode().Perm(), err)
 	}
 	if removed, _, err := uninstallTarget(tg); err != nil || !removed {
@@ -279,7 +287,7 @@ func TestClaudeDesktop_UnsupportedOnOtherOS(t *testing.T) {
 		t.Error("claude-desktop must never be detected on an unsupported OS")
 	}
 	out := captureStdout(t, func() {
-		if err := Uninstall("claude-desktop", false); err != nil {
+		if err := Uninstall(context.Background(), "claude-desktop", false); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
@@ -565,7 +573,7 @@ func TestCline_InstallsIntoEveryDetectedLocation(t *testing.T) {
 func TestUninstall_ReportsNotRegisteredWhenNothingWasRemoved(t *testing.T) {
 	fakeHome(t, "linux")
 	out := captureStdout(t, func() {
-		if err := Uninstall("cursor", false); err != nil {
+		if err := Uninstall(context.Background(), "cursor", false); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
@@ -587,7 +595,7 @@ func TestUninstall_CLITargetNotRegistered(t *testing.T) {
 		return nil
 	})
 	out := captureStdout(t, func() {
-		if err := Uninstall("claude", false); err != nil {
+		if err := Uninstall(context.Background(), "claude", false); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})

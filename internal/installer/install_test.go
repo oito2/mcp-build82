@@ -59,24 +59,6 @@ func TestTargets_HomeDirUnresolvableReturnsError(t *testing.T) {
 	}
 }
 
-// TestMergeServerEntry_PreservesExistingKeys verifies that merging a build82 entry keeps other servers and top-level keys.
-func TestMergeServerEntry_PreservesExistingKeys(t *testing.T) {
-	m := map[string]any{
-		"mcpServers": map[string]any{
-			"some-other-server": map[string]any{"command": "/usr/bin/other"},
-		},
-	}
-	m = mergeServerEntry(m, "mcpServers", map[string]any{"command": "/usr/bin/build82"})
-
-	sub := m["mcpServers"].(map[string]any)
-	if _, ok := sub["some-other-server"]; !ok {
-		t.Error("expected the pre-existing server entry to survive the merge")
-	}
-	if _, ok := sub["build82"]; !ok {
-		t.Error("expected the build82 entry to be added")
-	}
-}
-
 // TestWriteConfig_McpServersShape verifies the entry written for the mcpServers shape.
 func TestWriteConfig_McpServersShape(t *testing.T) {
 	dir := t.TempDir()

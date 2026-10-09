@@ -16,11 +16,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,10 +33,14 @@ import (
 // cannot be exercised in-process.
 
 // buildBuildBinary compiles the command into a temporary directory and returns the path of the
-// binary. It fails the test when the build fails.
+// binary (with the ".exe" suffix on Windows). It fails the test when the build fails.
 func buildBuildBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "build82")
+	name := "build82"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build build82: %v\n%s", err, out)
@@ -80,6 +87,8 @@ func TestMain_UsageErrorsExitWithCode2(t *testing.T) {
 		{"install", "--bogus"},
 		{"self-update", "--channel"},
 		{"self-update", "--bogus"},
+		{"self-update", "--rollback", "--check"},
+		{"self-update", "--check", "--require-signature"},
 		{"uninstall", "--bogus"},
 	}
 	for _, args := range tests {
@@ -211,5 +220,202 @@ func TestMain_SelfUpdateRollbackWithNoBackupFailsClearly(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no backup found") {
 		t.Errorf("expected a 'no backup found' error, got:\n%s", stderr.String())
+	}
+}
+
+// TestMain_SubcommandHelpPrintsWithoutRunning verifies that -h/--help after install, uninstall or
+// self-update prints that subcommand's help on stdout and exits 0 without running it, and that a
+// help flag after "--" is not taken as a help request.
+func TestMain_SubcommandHelpPrintsWithoutRunning(t *testing.T) {
+	bin := buildBuildBinary(t)
+	cases := map[string][]string{
+		"Usage: build82 install [target]":   {"install", "--help"},
+		"Usage: build82 uninstall [target]": {"uninstall", "-h"},
+		"Usage: build82 self-update":        {"self-update", "--check", "--help"},
+	}
+	for want, args := range cases {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "PATH="+t.TempDir())
+		cmd.Stdin = strings.NewReader("")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Errorf("%v: expected exit 0, got %v (stderr %q)", args, err, stderr.String())
+		}
+		if !strings.HasPrefix(stdout.String(), want) || stderr.Len() != 0 {
+			t.Errorf("%v: stdout=%q stderr=%q, want stdout starting with %q", args, stdout.String(), stderr.String(), want)
+		}
+	}
+
+	cmd := exec.Command(bin, "uninstall", "--", "--help")
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "PATH="+t.TempDir())
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || !strings.Contains(stderr.String(), `unknown target "--help"`) {
+		t.Errorf(`uninstall -- --help: expected "--help" taken as the target (exit 1, unknown target), got err=%v stderr=%q`, err, stderr.String())
+	}
+}
+
+// TestMain_UsageErrorsPointToSubcommandHelp verifies that a usage error of a subcommand names that
+// subcommand's help, and that a server flag error names the global help.
+func TestMain_UsageErrorsPointToSubcommandHelp(t *testing.T) {
+	bin := buildBuildBinary(t)
+	cases := map[string][]string{
+		"Run 'build82 install --help' for usage.":     {"install", "--bogus"},
+		"Run 'build82 uninstall --help' for usage.":   {"uninstall", "a", "b"},
+		"Run 'build82 self-update --help' for usage.": {"self-update", "--", "extra"},
+		"Run 'build82 --help' for usage.":             {"--port", "1"},
+	}
+	for want, args := range cases {
+		cmd := exec.Command(bin, args...)
+		cmd.Stdin = strings.NewReader("")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+			t.Errorf("%v: expected exit 2, got %v", args, err)
+		}
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("%v: expected %q on stderr, got %q", args, want, stderr.String())
+		}
+	}
+}
+
+// TestMain_CtrlCAtPromptExitsWithoutChanges verifies that an interrupt while `build82 uninstall`
+// waits at its confirmation prompt exits at once with status 1 and "Interrupted; nothing was
+// changed.", leaving the client configuration untouched.
+func TestMain_CtrlCAtPromptExitsWithoutChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Interrupt cannot be sent to a process on Windows")
+	}
+	bin := buildBuildBinary(t)
+	home := t.TempDir()
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(cursorDir, "mcp.json")
+	original := []byte(`{"mcpServers":{"build82":{"command":"/x"}}}`)
+	if err := os.WriteFile(config, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "uninstall")
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME=", "PATH="+t.TempDir())
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	prompted := make(chan struct{})
+	go func() {
+		r := bufio.NewReader(stdout)
+		var seen strings.Builder
+		buf := make([]byte, 256)
+		for {
+			n, err := r.Read(buf)
+			seen.Write(buf[:n])
+			if strings.Contains(seen.String(), "[y/N]") {
+				close(prompted)
+				_, _ = io.Copy(io.Discard, r)
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-prompted:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("the confirmation prompt never appeared (stderr %q)", stderr.String())
+	}
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the process did not exit after the interrupt")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Errorf("expected exit status 1, got %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Interrupted; nothing was changed.") {
+		t.Errorf("expected the interrupt message on stderr, got %q", stderr.String())
+	}
+	if got, err := os.ReadFile(config); err != nil || !bytes.Equal(got, original) {
+		t.Errorf("expected %s untouched, got %q (err=%v)", config, got, err)
+	}
+}
+
+// TestMain_StdioAcceptsMessagesAboveTheSDKDefault verifies that the stdio server accepts an
+// inbound JSON-RPC message larger than the SDK's default line limit (16 MiB) and answers it,
+// instead of dropping the connection.
+func TestMain_StdioAcceptsMessagesAboveTheSDKDefault(t *testing.T) {
+	bin := buildBuildBinary(t)
+	cmd := exec.Command(bin)
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "BUILD82_MOODLE_PATH=")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	big := strings.Repeat("x", 20<<20)
+	go func() {
+		_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`+"\n")
+		_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","method":"notifications/initialized"}`+"\n")
+		_, _ = io.WriteString(stdin, `{"jsonrpc":"2.0","id":2,"method":"ping","params":{"_meta":{"padding":"`+big+`"}}}`+"\n")
+	}()
+
+	answered := make(chan bool, 1)
+	go func() {
+		r := bufio.NewReader(stdout)
+		for {
+			line, err := r.ReadString('\n')
+			if strings.Contains(line, `"id":2`) {
+				answered <- !strings.Contains(line, `"error"`)
+				return
+			}
+			if err != nil {
+				answered <- false
+				return
+			}
+		}
+	}()
+	select {
+	case ok := <-answered:
+		if !ok {
+			t.Fatal("the 20 MiB request was not answered successfully")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("no answer to the 20 MiB request")
 	}
 }

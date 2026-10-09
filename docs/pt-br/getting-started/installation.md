@@ -38,6 +38,7 @@ Não requer toolchain Go. Cada release publica um asset por plataforma, chamado 
 | `build82_darwin_amd64` | macOS, Intel |
 | `build82_darwin_arm64` | macOS, Apple Silicon |
 | `build82_windows_amd64.exe` | Windows, x86-64 |
+| `build82_windows_arm64.exe` | Windows, ARM64 |
 | `build82.mcpb` | Bundle de extensão do Claude Desktop: macOS (universal), Windows x86-64, Linux x86-64 e arm64 — veja [Claude Desktop](../guides/clients/claude-desktop.md#extensão-desktop-mcpb) |
 
 Todo release também traz um `checksums.txt` (SHA-256, uma linha `<hash>  <nome do asset>` por asset) e
@@ -134,7 +135,7 @@ build82 --version
 
 ### 🪟 Windows
 
-Baixe o binário `amd64` com o PowerShell:
+Baixe o binário `amd64` com o PowerShell (no Windows em Arm, use `build82_windows_arm64.exe` em todos os comandos):
 
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/oito2/mcp-build82/releases/latest/download/build82_windows_amd64.exe" -OutFile "build82_windows_amd64.exe"
@@ -176,6 +177,34 @@ build82 --version
 
 > **Usuários de WSL:** se você roda o Moodle dentro do WSL, siga as instruções de **Linux** acima
 > dentro da sua distribuição WSL — um `.exe` do Windows não roda lá.
+
+---
+
+### 🔏 Verificando a assinatura e a proveniência (opcional)
+
+A partir da v1.1.0, toda release também traz o `checksums.txt.sigstore.json`, uma assinatura
+[Sigstore](https://www.sigstore.dev/) sem chave do `checksums.txt` feita pelo workflow de release
+deste repositório, e atestações de proveniência de build do GitHub para cada binário e para o
+`build82.mcpb`. Com o [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v3 ou
+mais novo, confira que o `checksums.txt` foi gerado pelo workflow de release daquela tag exata
+(troque `vX.Y.Z`):
+
+```bash
+curl -LO https://github.com/oito2/mcp-build82/releases/download/vX.Y.Z/checksums.txt
+curl -LO https://github.com/oito2/mcp-build82/releases/download/vX.Y.Z/checksums.txt.sigstore.json
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-identity https://github.com/oito2/mcp-build82/.github/workflows/release.yml@refs/tags/vX.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Com o [GitHub CLI](https://cli.github.com/), confira a proveniência de um binário baixado:
+
+```bash
+gh attestation verify build82_linux_amd64 --repo oito2/mcp-build82
+```
+
+O `build82 self-update` faz a mesma verificação com o cosign automaticamente quando ele está no
+`PATH`.
 
 ---
 
@@ -231,7 +260,7 @@ O build82 pode configurar seu cliente MCP para você:
 build82 install [target]
 ```
 
-Execute sem um target para detectar todo cliente suportado encontrado na sua máquina (ele lista os clientes e pede confirmação), ou passe um explicitamente (`claude`, `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`); um target explícito que não seja detectado é ignorado. Ele pergunta o caminho do Moodle e escreve a configuração específica do cliente sozinho: para `claude` e `codex` executa o próprio comando `mcp add` da ferramenta, para os demais mescla uma entrada `build82` no arquivo de configuração JSON do cliente (um arquivo com comentários ou vírgulas finais nunca é reescrito; o comando imprime o trecho para colar manualmente). Cada cliente imprime `<Rótulo>... configured.`, ou `<Rótulo>... updated.` quando o build82 já estava registrado nele: executar `build82 install` de novo substitui o registro, atualizando o caminho do binário e o `BUILD82_MOODLE_PATH`. Os locais exatos e os detalhes por cliente estão nos [guias de cliente](../guides/clients/claude-code.md), que também cobrem a configuração manual.
+Execute sem um target para detectar todo cliente suportado encontrado na sua máquina (ele lista os clientes e pede confirmação), ou passe um explicitamente (`claude`, `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`); um target explícito que não seja detectado é ignorado. Ele pergunta o caminho do Moodle e escreve a configuração específica do cliente sozinho: para `claude` e `codex` executa o próprio comando `mcp add` da ferramenta, para os demais mescla uma entrada `build82` no arquivo de configuração JSON do cliente mantendo as demais chaves na ordem original (um arquivo com comentários ou vírgulas finais nunca é reescrito; o comando imprime `<Rótulo>... manual step needed:` com o trecho para colar manualmente e sai com código 1). **Feche cada cliente antes de rodar o `install`**: ele edita um arquivo que o cliente também grava, e um cliente que salva as configurações enquanto o comando roda pode sobrescrever a mudança. Cada cliente imprime `<Rótulo>... configured.`, ou `<Rótulo>... updated.` quando o build82 já estava registrado nele: executar `build82 install` de novo substitui o registro, atualizando o caminho do binário e o `BUILD82_MOODLE_PATH`. Os locais exatos e os detalhes por cliente estão nos [guias de cliente](../guides/clients/claude-code.md), que também cobrem a configuração manual.
 
 Para remover o registro depois:
 
@@ -260,12 +289,13 @@ A IA chamará a tool `doctor` via MCP e retornará um relatório: versão do Moo
 ## ⬆️ Mantendo o build82 Atualizado
 
 ```bash
-build82 self-update --check   # relata se existe um release mais novo, sem instalar
+build82 self-update --check   # relata se existe um release mais novo (saída 10 se houver), sem instalar
 build82 self-update           # baixa, verifica e instala o release mais recente
+build82 self-update --require-signature # recusa atualizar se o cosign não puder verificar a assinatura do release
 build82 self-update --rollback # restaura o binário anterior caso a nova versão se revele quebrada
 ```
 
-Os downloads têm o checksum verificado contra o `checksums.txt` do release e passam por um smoke test antes que o binário em execução seja substituído; o binário anterior é mantido ao lado como `<caminho>.bak`.
+Os downloads vêm apenas de `https://github.com/oito2/mcp-build82/releases/download/<tag>/`, e os redirecionamentos só vão para os hosts de assets de release do GitHub. Quando o [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v3 ou mais novo está no `PATH`, o `self-update` verifica primeiro a assinatura Sigstore do `checksums.txt` do release; sem ele, um aviso é impresso e só o checksum é conferido (o `--require-signature` transforma isso em erro, antes de qualquer download). Depois, todo download tem o checksum verificado contra o `checksums.txt` e passa por um smoke test antes que o binário em execução seja substituído; o novo binário mantém as permissões do que ele substitui, e o binário anterior é mantido ao lado como `<caminho>.bak`. A sequência completa está na [referência da CLI](../reference/cli.md#self-update).
 
 Se uma nova versão passa nesse smoke test mas se revela quebrada no uso real depois, o `build82 self-update --rollback` promove o backup `.bak` de volta ao lugar do binário atual com um rename atômico, e então roda seu próprio smoke test contra o binário restaurado, puramente como confirmação diagnóstica (o resultado não desfaz o rollback de qualquer forma). Se não houver backup `.bak`, ele falha com um erro claro e deixa o binário atual intocado.
 

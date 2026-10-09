@@ -26,6 +26,7 @@ import (
 
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/extractors"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/genutil"
 	"github.com/oito2/mcp-build82/internal/legacyhooks"
 	"github.com/oito2/mcp-build82/internal/phparray"
@@ -426,8 +427,8 @@ func GeneratePluginCallbackIndex(info extractors.PluginInfo, preloaded *Preloade
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Callback Index", fmt.Sprintf("Legacy and Hook API callbacks for %s.", genutil.EscapeMdCell(info.Component))))
 
-		libContent, _ := os.ReadFile(filepath.Join(info.Path, "lib.php"))
-		locallibContent, _ := os.ReadFile(filepath.Join(info.Path, "locallib.php"))
+		libContent, _ := fsutil.ReadRegular(filepath.Join(info.Path, "lib.php"), 0)
+		locallibContent, _ := fsutil.ReadRegular(filepath.Join(info.Path, "locallib.php"), 0)
 
 		b.WriteString("### Legacy lib.php Callbacks\n\n| Function | Hook Replacement Available |\n|---|---|\n")
 		for _, suffix := range legacyCallbackSuffixesForIndex {

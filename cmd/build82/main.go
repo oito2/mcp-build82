@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/oito2/mcp-build82/internal/binpath"
 	"github.com/oito2/mcp-build82/internal/installer"
+	"github.com/oito2/mcp-build82/internal/prompt"
 	"github.com/oito2/mcp-build82/internal/selfupdate"
 	"github.com/oito2/mcp-build82/internal/server"
 	"github.com/oito2/mcp-build82/internal/transport"
@@ -55,11 +57,14 @@ Server flags (only apply with --http):
   --allowed-host <host>  Additional allowed Host header value (repeatable)
 
 self-update flags:
-  --check                Report whether an update is available, without installing it
+  --check                Report whether an update is available, without installing it; exits
+                          with status 10 when one is available
   --channel <name>        Release channel (default "stable"; reserved for future use)
   --yes, -y               Skip the confirmation prompt before replacing the running binary
-  --rollback              Restore the previous binary from its .bak backup and exit; ignores
-                          --check/--channel/--yes if also passed
+  --require-signature     Refuse to update unless cosign v3+ is installed to verify the release
+                          signature (by default, without cosign only the checksum is verified)
+  --rollback              Restore the previous binary from its .bak backup and exit; cannot be
+                          combined with other self-update flags
 
 uninstall flags:
   --purge                 Also delete generated files and the config file (asks for its own confirmation)
@@ -67,7 +72,78 @@ uninstall flags:
 Flags:
   -h, --help             Show this help text and exit
   --version              Print the version and exit
+
+Run 'build82 <command> --help' for the options of install, uninstall and self-update.
 `
+
+// installHelp is the help text of `build82 install --help`.
+const installHelp = `Usage: build82 install [target]
+
+Registers build82 as an MCP server in the given AI tool or, with no target, in every detected tool
+after confirmation. Asks for the Moodle root first. Close the tool while it runs.
+
+Targets: claude, claude-desktop, antigravity, codex, opencode, cursor, zed, cline
+
+Arguments after "--" are taken as the target even when they start with "-".
+`
+
+// uninstallHelp is the help text of `build82 uninstall --help`.
+const uninstallHelp = `Usage: build82 uninstall [target] [--purge]
+
+Removes build82's MCP server registration from the given AI tool or, with no target, from every
+tool that has one, after confirmation.
+
+  --purge               Also delete generated files and the ~/.build82 config file (asks for its
+                        own confirmation)
+
+Targets: claude, claude-desktop, antigravity, codex, opencode, cursor, zed, cline
+
+Arguments after "--" are taken as the target even when they start with "-".
+`
+
+// selfUpdateHelp is the help text of `build82 self-update --help`.
+const selfUpdateHelp = `Usage: build82 self-update [--check] [--channel <name>] [--yes] [--require-signature]
+       build82 self-update --rollback
+
+Updates build82 to the latest release, after confirmation. When cosign v3 or later is on PATH, the
+release signature is verified too; the checksum always is.
+
+  --check               Only report whether an update is available (exit status 10 when one is,
+                        0 when up to date)
+  --channel <name>      Release channel (default "stable"; reserved for future use)
+  --yes, -y             Update without asking
+  --require-signature   Refuse to update unless cosign verifies the release signature
+  --rollback            Restore the previous binary from its .bak backup; cannot be combined with
+                        other flags
+`
+
+// subcommandHelp returns the help text of `build82 <subcommand> --help`, or "" for a name that has
+// none.
+func subcommandHelp(subcommand string) string {
+	switch subcommand {
+	case "install":
+		return installHelp
+	case "uninstall":
+		return uninstallHelp
+	case "self-update":
+		return selfUpdateHelp
+	}
+	return ""
+}
+
+// wantsHelp reports whether `args` asks for help with -h or --help before any "--", after which
+// every argument is positional.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--":
+			return false
+		case "-h", "--help":
+			return true
+		}
+	}
+	return false
+}
 
 // usageExitCode is the process exit status for command-line usage errors: unknown flags, missing
 // flag values, server-only flags without --http, and unexpected arguments.
@@ -95,7 +171,8 @@ func flagValue(args []string, i int) (string, int, error) {
 }
 
 // parseServeFlags parses the server-mode flags in `args` (--http, --port, --host, --token,
-// --allowed-host) and returns them, with defaults of port 3000 and host 127.0.0.1. It returns an
+// --allowed-host) and returns them, with defaults of port 3000 and host 127.0.0.1. A "--" ends the
+// flags; the server takes no positional argument, so anything after it is an error. It returns an
 // error for an unknown argument, a flag that is missing its value, or a server-only flag (--port,
 // --host, --token, --allowed-host) used without --http. An out-of-range or non-numeric port
 // produces a warning on stderr and keeps the default. --help/-h and --version print their output
@@ -105,6 +182,12 @@ func parseServeFlags(args []string) (serveFlags, error) {
 	var serverOnly []string
 	for i := 0; i < len(args); i++ {
 		var err error
+		if args[i] == "--" {
+			if i+1 < len(args) {
+				return f, fmt.Errorf("unexpected argument %q", args[i+1])
+			}
+			break
+		}
 		switch args[i] {
 		case "--http":
 			f.http = true
@@ -153,42 +236,51 @@ func parseServeFlags(args []string) (serveFlags, error) {
 	return f, nil
 }
 
-// parseSelfUpdateFlags parses the flags of `build82 self-update` (--check, --yes/-y, --channel)
-// from `args` and returns them as run options, defaulting the channel to "stable". It returns an
-// error for an unknown argument or a --channel without a value. --rollback is accepted and
-// ignored here, because main handles it before calling this function. It is separate from
+// parseSelfUpdateFlags parses the flags of `build82 self-update` (--check, --yes/-y,
+// --require-signature, --channel, --rollback) from `args` and returns them as run options,
+// defaulting the channel to "stable", plus whether --rollback was given. A "--" ends the flags;
+// self-update takes no positional argument. It returns an error for an
+// unknown argument, a --channel without a value, --rollback combined with any other flag, or
+// --require-signature combined with --check, which downloads nothing. It is separate from
 // parseServeFlags because the two flag sets are disjoint.
-func parseSelfUpdateFlags(args []string) (selfupdate.RunOptions, error) {
-	opts := selfupdate.RunOptions{Channel: "stable"}
+func parseSelfUpdateFlags(args []string) (opts selfupdate.RunOptions, rollback bool, err error) {
+	opts = selfupdate.RunOptions{Channel: "stable"}
+	var others []string
 	for i := 0; i < len(args); i++ {
-		var err error
+		if args[i] == "--" {
+			if i+1 < len(args) {
+				return opts, false, fmt.Errorf("unexpected argument %q for self-update", args[i+1])
+			}
+			break
+		}
 		switch args[i] {
 		case "--check":
 			opts.Check = true
+			others = append(others, args[i])
 		case "--yes", "-y":
 			opts.Yes = true
+			others = append(others, args[i])
+		case "--require-signature":
+			opts.RequireSignature = true
+			others = append(others, args[i])
 		case "--rollback":
+			rollback = true
 		case "--channel":
+			others = append(others, args[i])
 			if opts.Channel, i, err = flagValue(args, i); err != nil {
-				return opts, err
+				return opts, false, err
 			}
 		default:
-			return opts, fmt.Errorf("unknown argument %q for self-update", args[i])
+			return opts, false, fmt.Errorf("unknown argument %q for self-update", args[i])
 		}
 	}
-	return opts, nil
-}
-
-// hasFlag reports whether `flag` appears verbatim among `args`. It detects --rollback before
-// the regular self-update flag parsing, because a rollback is a distinct operation that does not
-// go through selfupdate.Run.
-func hasFlag(args []string, flag string) bool {
-	for _, a := range args {
-		if a == flag {
-			return true
-		}
+	if rollback && len(others) > 0 {
+		return opts, false, fmt.Errorf("--rollback cannot be combined with %s", others[0])
 	}
-	return false
+	if opts.Check && opts.RequireSignature {
+		return opts, false, errors.New("--require-signature cannot be combined with --check, which downloads nothing")
+	}
+	return opts, rollback, nil
 }
 
 // parseInstallArgs parses the arguments of `build82 install [target]`. It returns the optional
@@ -206,13 +298,17 @@ func parseUninstallArgs(args []string) (target string, purge bool, err error) {
 }
 
 // parseTargetArgs implements the shared argument walk of install and uninstall: at most one
-// positional target, plus --purge when `allowPurge` is set.
+// positional target, plus --purge when `allowPurge` is set. After "--" every argument is
+// positional, even one starting with "-".
 func parseTargetArgs(cmd string, args []string, allowPurge bool) (target string, purge bool, err error) {
+	positionalOnly := false
 	for _, a := range args {
 		switch {
-		case allowPurge && a == "--purge":
+		case !positionalOnly && a == "--":
+			positionalOnly = true
+		case !positionalOnly && allowPurge && a == "--purge":
 			purge = true
-		case strings.HasPrefix(a, "-"):
+		case !positionalOnly && strings.HasPrefix(a, "-"):
 			return "", false, fmt.Errorf("unknown argument %q for %s", a, cmd)
 		case target == "":
 			target = a
@@ -223,34 +319,63 @@ func parseTargetArgs(cmd string, args []string, allowPurge bool) (target string,
 	return target, purge, nil
 }
 
-// exitUsage prints `err` to stderr as a usage error with a pointer to --help and exits the
-// process with status usageExitCode. It does nothing when `err` is nil.
-func exitUsage(err error) {
+// exitUsage prints `err` to stderr as a usage error with a pointer to the help of `subcommand`
+// (`build82 <subcommand> --help`, or `build82 --help` when it is empty) and exits the process with
+// status usageExitCode. It does nothing when `err` is nil.
+func exitUsage(subcommand string, err error) {
 	if err == nil {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Error: %v\nRun 'build82 --help' for usage.\n", err)
+	help := "build82 --help"
+	if subcommand != "" {
+		help = "build82 " + subcommand + " --help"
+	}
+	fmt.Fprintf(os.Stderr, "Error: %v\nRun '%s' for usage.\n", err, help)
 	os.Exit(usageExitCode)
 }
 
-// exitOnError prints `err` to stderr as "Error: ..." and exits the process with status 1. It does
-// nothing when `err` is nil. It is shared by the install, self-update and uninstall subcommands.
+// exitOnError prints `err` to stderr and exits the process with status 1: as
+// "Interrupted; nothing was changed." when a prompt was interrupted (prompt.ErrInterrupted),
+// otherwise as "Error: ...". It does nothing when `err` is nil. It is shared by the install,
+// self-update and uninstall subcommands.
 func exitOnError(err error) {
 	if err == nil {
 		return
+	}
+	if errors.Is(err, prompt.ErrInterrupted) {
+		fmt.Fprintln(os.Stderr, "Interrupted; nothing was changed.")
+		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "Error:", err)
 	os.Exit(1)
 }
 
+// interruptContext returns a context cancelled by the first SIGINT or SIGTERM, so a subcommand
+// waiting at a prompt or on the network stops cleanly. After that first signal the default
+// handling is restored, so a second Ctrl-C ends the process at once.
+func interruptContext() context.Context {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx
+}
+
 // main dispatches on the first argument: no arguments or server flags start the MCP server
 // (stdio by default, Streamable HTTP with --http), the install, self-update and uninstall
-// subcommands run their own flows, --help and --version print and return, and any other bareword
-// is rejected as an unknown command with exit status 1. Unknown flags, missing flag values and
-// unexpected arguments are usage errors that exit with status 2.
+// subcommands run their own flows (or print their own help with -h/--help before any "--"),
+// --help and --version print and return, and any other bareword is rejected as an unknown
+// command with exit status 1. Unknown flags, missing flag values and unexpected arguments are
+// usage errors that exit with status 2. A Ctrl-C at a subcommand prompt exits with status 1.
 func main() {
 	if len(os.Args) < 2 {
 		runServe(nil)
+		return
+	}
+
+	if help := subcommandHelp(os.Args[1]); help != "" && wantsHelp(os.Args[2:]) {
+		fmt.Print(help)
 		return
 	}
 
@@ -259,23 +384,24 @@ func main() {
 		runServe(os.Args[1:])
 	case "install":
 		target, err := parseInstallArgs(os.Args[2:])
-		exitUsage(err)
-		exitOnError(installer.Run(target))
+		exitUsage("install", err)
+		exitOnError(installer.Run(interruptContext(), target))
 	case "self-update":
-		args := os.Args[2:]
-		if hasFlag(args, "--rollback") {
-			_, err := parseSelfUpdateFlags(args)
-			exitUsage(err)
+		opts, rollback, err := parseSelfUpdateFlags(os.Args[2:])
+		exitUsage("self-update", err)
+		if rollback {
 			runRollback()
-		} else {
-			opts, err := parseSelfUpdateFlags(args)
-			exitUsage(err)
-			exitOnError(selfupdate.Run(opts))
+			return
+		}
+		updateAvailable, err := selfupdate.Run(interruptContext(), opts)
+		exitOnError(err)
+		if updateAvailable {
+			os.Exit(selfupdate.ExitUpdateAvailable)
 		}
 	case "uninstall":
 		target, purge, err := parseUninstallArgs(os.Args[2:])
-		exitUsage(err)
-		exitOnError(installer.Uninstall(target, purge))
+		exitUsage("uninstall", err)
+		exitOnError(installer.Uninstall(interruptContext(), target, purge))
 	case "--help", "-h":
 		fmt.Print(helpText)
 	case "--version":
@@ -317,13 +443,17 @@ func runRollback() {
 // --http is set, or over stdio otherwise. It returns only when the server stops.
 func runServe(args []string) {
 	flags, err := parseServeFlags(args)
-	exitUsage(err)
+	exitUsage("", err)
 	if !flags.http {
 		runStdio()
 		return
 	}
 	runHTTP(flags)
 }
+
+// stdioMaxLineLength bounds the size in bytes of one inbound JSON-RPC message on stdio, well above
+// the SDK default so a large request (such as a long plugin list for plugin_batch) is accepted.
+const stdioMaxLineLength = 64 << 20
 
 // runStdio serves MCP over stdin/stdout until the client disconnects, exiting with status 1 on a
 // fatal error. The startup line goes to stderr, because stdout carries the protocol stream, and
@@ -332,7 +462,7 @@ func runStdio() {
 	fmt.Fprintln(os.Stderr, "build82 server running on stdio")
 
 	srv := server.NewServer()
-	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	if err := srv.Run(context.Background(), &mcp.StdioTransport{MaxLineLength: stdioMaxLineLength}); err != nil {
 		fmt.Fprintln(os.Stderr, "Fatal error:", err)
 		os.Exit(1)
 	}

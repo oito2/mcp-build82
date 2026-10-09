@@ -50,7 +50,8 @@ type ExplainPluginInput struct {
 // RegisterExplainTool registers the explain_plugin tool on `server`.
 func RegisterExplainTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "explain_plugin",
+		Name:        "explain_plugin",
+		Annotations: toolAnnotations("Explain Plugin", true, false, true, false),
 		Description: "Returns a compact, section-selectable explanation of a plugin — metadata, database, " +
 			"events, classes, services/capabilities, or runtime flow — optimized to be cheaper to read than " +
 			"the full generated index files.",
@@ -74,33 +75,33 @@ var validExplainSections = map[ExplainSection]bool{
 // `in.Section` (default "all"). For "all" it returns the cached PLUGIN_AI_CONTEXT.md when present
 // and otherwise builds the sections from the plugin source. It returns an error result for an
 // unknown section, a missing configuration, or an invalid plugin; the error return is always nil.
-func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in ExplainPluginInput) (*mcp.CallToolResult, struct{}, error) {
+func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in ExplainPluginInput) (*mcp.CallToolResult, any, error) {
 	if in.Section == "" {
 		in.Section = SectionAll
 	}
 	if !validExplainSections[in.Section] {
 		return textResult(true, fmt.Sprintf(
 			"❌ Unknown section %q. Valid values: all, overview, database, events, classes, services, flow.",
-			in.Section)), struct{}{}, nil
+			in.Section)), nil, nil
 	}
 
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return toolutil.NotInitialized(), nil, nil
 	}
 
 	rp, errResult := resolveAndValidatePlugin(in.Plugin, cfg.MoodlePath)
 	if errResult != nil {
-		return errResult, struct{}{}, nil
+		return errResult, nil, nil
 	}
 
 	// Fast path: for section "all", reuse the cached PLUGIN_AI_CONTEXT.md when it exists.
 	if in.Section == SectionAll {
 		if content := readPluginFileTruncated(rp.Path, "PLUGIN_AI_CONTEXT.md", 1<<20); content != "" {
-			return textResult(false, content), struct{}{}, nil
+			return textResult(false, content), nil, nil
 		}
 	}
 
@@ -122,7 +123,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 	}
 
 	if in.Section == SectionOverview {
-		return textResult(false, b.String()), struct{}{}, nil
+		return textResult(false, b.String()), nil, nil
 	}
 	b.WriteString("\n---\n\n")
 
@@ -135,7 +136,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 			}
 		}
 		if in.Section == SectionDatabase {
-			return textResult(false, b.String()), struct{}{}, nil
+			return textResult(false, b.String()), nil, nil
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -147,7 +148,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", c.FQN, c.Kind, c.Extends)
 		}
 		if in.Section == SectionClasses {
-			return textResult(false, b.String()), struct{}{}, nil
+			return textResult(false, b.String()), nil, nil
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -161,7 +162,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 			}
 		}
 		if in.Section == SectionEvents {
-			return textResult(false, b.String()), struct{}{}, nil
+			return textResult(false, b.String()), nil, nil
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -182,7 +183,7 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 			}
 		}
 		if in.Section == SectionServices {
-			return textResult(false, b.String()), struct{}{}, nil
+			return textResult(false, b.String()), nil, nil
 		}
 		b.WriteString("\n---\n\n")
 	}
@@ -204,10 +205,10 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 			}
 		}
 		if in.Section == SectionFlow {
-			return textResult(false, b.String()), struct{}{}, nil
+			return textResult(false, b.String()), nil, nil
 		}
 	}
 
 	b.WriteString("\n_Run `generate_plugin_context` to create the full, cached AI context file for this plugin._\n")
-	return textResult(false, b.String()), struct{}{}, nil
+	return textResult(false, b.String()), nil, nil
 }

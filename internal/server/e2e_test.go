@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -277,19 +278,25 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 	})
 
 	t.Run("invariant_8_never_abort_batch_on_one_bad_plugin", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("the broken plugin relies on a read-only directory, which chmod cannot make on Windows")
+		}
 		result := callTool(t, session, "plugin_batch", map[string]any{"mode": "all", "format": "json"})
 		if result.IsError {
 			t.Fatalf("plugin_batch must not abort the whole batch — got IsError: %s", toolText(t, result))
 		}
 
-		var results []struct {
-			Path      string
-			Component string
-			Failed    int
+		var batch struct {
+			Plugins []struct {
+				Path      string
+				Component string
+				Failed    int
+			}
 		}
-		if err := json.Unmarshal([]byte(toolText(t, result)), &results); err != nil {
+		if err := json.Unmarshal([]byte(toolText(t, result)), &batch); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
+		results := batch.Plugins
 		if len(results) != 3 {
 			t.Fatalf("expected 3 plugins (demo, assignsubmission_file, broken), got %d: %+v", len(results), results)
 		}
@@ -330,10 +337,11 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 	t.Run("invariant_5_deterministic_ordering", func(t *testing.T) {
 		fetchPaths := func() []string {
 			result := callTool(t, session, "plugin_batch", map[string]any{"mode": "all", "format": "json"})
-			var results []struct{ Path string }
-			if err := json.Unmarshal([]byte(toolText(t, result)), &results); err != nil {
+			var batch struct{ Plugins []struct{ Path string } }
+			if err := json.Unmarshal([]byte(toolText(t, result)), &batch); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
+			results := batch.Plugins
 			paths := make([]string, len(results))
 			for i, r := range results {
 				paths[i] = r.Path
@@ -366,13 +374,16 @@ func TestE2E_Phase8Invariants(t *testing.T) {
 		if result.IsError {
 			t.Fatalf("expected success after simulated restart, got IsError: %s", toolText(t, result))
 		}
-		var results []struct {
-			Component          string
-			Generated, Skipped int
+		var batch struct {
+			Plugins []struct {
+				Component          string
+				Generated, Skipped int
+			}
 		}
-		if err := json.Unmarshal([]byte(toolText(t, result)), &results); err != nil {
+		if err := json.Unmarshal([]byte(toolText(t, result)), &batch); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
+		results := batch.Plugins
 		for _, r := range results {
 			if r.Component == "local_broken" {
 				continue // never produces successful output to cache

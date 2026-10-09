@@ -38,21 +38,62 @@ Rode os mesmos checks que o CI roda antes de abrir um PR:
 ```bash
 gofmt -l .        # não deve imprimir nada
 go vet ./...
+GOOS=windows go vet ./... && GOOS=darwin go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
+GOOS=windows golangci-lint run ./... && GOOS=darwin golangci-lint run ./...   # com o mesmo binário fixado
 go build ./...
 go test -race ./...
 BUILD82_EXTRACTOR_BACKEND=treesitter go test -race ./...
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+go mod tidy -diff
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+go run ./scripts/linkcheck
 ```
 
-Os sete precisam passar (a suíte de testes roda uma vez por backend de extração) — [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) os roda (no patch mais recente do Go 1.26.x, `ubuntu-24.04`) a
-cada push e pull request contra `main` e bloqueia o merge caso contrário. O `golangci-lint` usa o
-[`.golangci.yml`](../../.golangci.yml) do repositório (linters padrão, com as exclusões padrão
-para erros não checados de `Close`/`fmt.Fprint*`) e precisa reportar `0 issues`; o CI fixa a mesma
-versão. A flag `-race` exige cgo, ou seja, um compilador C funcional na sua máquina; sem um, use `go test ./...` localmente e confie no CI para a execução com race. Os testes exercitam
-comportamento real sempre que praticável — eventos reais de `fsnotify` para o watcher, um par real
-de cliente/servidor MCP em memória para as tools, binários reais compilados para os checks de
-install/self-update/CLI — em vez de mockar o SDK ou o filesystem.
+Todos precisam passar (a suíte de testes roda uma vez por backend de extração). O
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) os roda a cada push e pull request
+contra `main` (no patch mais recente do Go 1.26.x) e bloqueia o merge caso contrário:
+
+| Job do CI | Roda em | Verificações |
+| :--- | :--- | :--- |
+| `test` | `ubuntu-24.04`, `macos-latest`, `windows-latest` | vet, build, `go test -race` com os dois backends; no Linux também `gofmt`, golangci-lint e vet para `GOOS=windows`/`darwin` |
+| `quality` | `ubuntu-24.04` | `go mod tidy -diff`, actionlint, o verificador de links da documentação, govulncheck, o piso de cobertura e a suíte de testes com `TMPDIR` atrás de um link simbólico (reproduz o `/var` → `/private/var` do macOS) |
+| `release-contract` | `ubuntu-24.04` | `go run ./scripts/release -allow-prerelease v0.0.0-ci`, o teste de contrato da release do self-update contra esse `dist/` e `mcp-publisher validate` |
+
+O `golangci-lint` usa o [`.golangci.yml`](../../.golangci.yml) do repositório (linters padrão, com
+as exclusões padrão para erros não checados de `Close`/`fmt.Fprint*`) e precisa reportar
+`0 issues`. A flag `-race` exige cgo, ou seja, um compilador C funcional na sua máquina; sem um, use
+`go test ./...` localmente e confie no CI para a execução com race.
+
+**Piso de cobertura:** o job `quality` mede a cobertura total de instruções com
+`go test -race -coverprofile=cover.out -coverpkg=./... ./...` e falha quando ela fica abaixo do
+`COVERAGE_FLOOR` do `ci.yml` (86,0% na v1.1.0, medido 86,7%). O piso só pode subir: aumente-o
+quando uma release melhorar a cobertura.
+
+**Schemas das tools:** os schemas de entrada e de saída e as anotações de cada tool MCP ficam como
+arquivos golden em [`internal/server/testdata/tools/`](../../internal/server/testdata/tools/). Uma
+mudança intencional no contrato de uma tool é registrada com
+`go test ./internal/server -run TestTools_SchemasMatchGolden -update`.
+
+Os testes exercitam comportamento real sempre que praticável — eventos reais de `fsnotify` para o
+watcher, um par real de cliente/servidor MCP em memória para as tools, binários reais compilados
+para os checks de install/self-update/CLI — em vez de mockar o SDK ou o filesystem. Testes que
+dependem de comportamento só do Unix (FIFOs, `chmod` em diretórios, bits de permissão) se pulam no
+Windows; os arquivos de texto são obtidos com fim de linha LF em todo sistema (veja o
+[`.gitattributes`](../../.gitattributes)).
+
+### Versões fixadas de ferramentas
+
+Estas versões ficam fixadas nos workflows e **não** são atualizadas pelo Dependabot (que atualiza
+semanalmente as actions fixadas por SHA e os módulos Go). Revise-as antes de cada release:
+
+| Ferramenta | Versão | Onde |
+| :--- | :--- | :--- |
+| golangci-lint | v2.14.0 | `GOLANGCI_LINT_VERSION` no `ci.yml` e no `release.yml` |
+| govulncheck | v1.8.0 | `GOVULNCHECK_VERSION` no `ci.yml` e no `release.yml` |
+| actionlint | v1.7.12 | `ACTIONLINT_VERSION` no `ci.yml` |
+| mcp-publisher | v1.8.1 (+ SHA-256 do tarball) | [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml) |
+| cosign | v3.0.6 | `cosign-release` no `release.yml` |
 
 ## Organização do projeto
 
@@ -65,8 +106,12 @@ install/self-update/CLI — em vez de mockar o SDK ou o filesystem.
 - `internal/server/` — junta tudo em um único `*mcp.Server`.
 - `internal/installer/` — as tabelas de alvo de `install`/`uninstall`.
 - `internal/selfupdate/` — o `self-update`.
-- `internal/config/`, `internal/cache/`, `internal/watcher/` — fundacionais, sem dependência de
-  MCP.
+- `internal/prompt/` — perguntas interativas da CLI que param no primeiro Ctrl-C.
+- `internal/config/`, `internal/cache/`, `internal/watcher/`, `internal/fsutil/` — fundacionais,
+  sem dependência de MCP (o `fsutil` também tem os leitores que só abrem arquivos regulares,
+  usados para arquivos de plugin).
+- `scripts/release/` — gera os artefatos da release; `scripts/linkcheck/` — o verificador de links
+  da documentação; `scripts/smoke/` — o smoke test com cliente real.
 
 ## Fazendo uma mudança
 
@@ -130,47 +175,74 @@ projeto é simples o suficiente para fazer diretamente:
 
 ```bash
 go run ./scripts/release vX.Y.Z
+go run ./scripts/release -allow-prerelease v0.0.0-ci   # CI e simulações locais
 ```
 
 Isso compila o `build82` para cada `GOOS`/`GOARCH` suportado (linux/amd64, linux/arm64,
-darwin/amd64, darwin/arm64, windows/amd64) dentro de `dist/`, com
-`-ldflags "-s -w -X github.com/oito2/mcp-build82/internal/version.Current=vX.Y.Z"`: o `-s -w`
-remove a tabela de símbolos e as informações de depuração DWARF para reduzir os binários (os stack
-traces de panic são mantidos), e o `-X` faz o binário compilado reportar a versão correta
-(`build82 --version`) para que a comparação semver do `self-update` funcione corretamente contra ele. Em seguida empacota o `dist/build82.mcpb`, um bundle
-de extensão desktop [MCPB](https://github.com/modelcontextprotocol/mcpb) (manifest versão 0.3) com
-um binário universal de macOS (os dois builds darwin unidos em um único Mach-O pelo próprio script,
-já que o MCPB escolhe o binário por sistema operacional, mas não por arquitetura de CPU), os dois
-binários Linux atrás de um script de inicialização
-([`scripts/release/build82-linux.sh`](../../scripts/release/build82-linux.sh), que executa o que
-corresponde ao `uname -m`), o binário windows/amd64 e os ícones de `docs/img/icons/`. A lista de
-tools do manifesto é lida do próprio servidor. Por fim escreve `dist/checksums.txt`
-(formato padrão `sha256sum`, cobrindo todos os binários e o bundle) e o `dist/server.json`, o
-descritor do [MCP Registry](https://modelcontextprotocol.io/registry/) (schema `2025-12-11`) que
-aponta para o bundle. O `server.json` embute o SHA-256 do bundle, então não é versionado no
-repositório (está no `.gitignore`): a única cópia válida é a gerada junto do bundle que ela descreve
-e publicada como asset da release.
+darwin/amd64, darwin/arm64, windows/amd64, windows/arm64 — a lista fica em
+`internal/selfupdate.ReleasePlatforms`) dentro de `dist/`, com `-trimpath` e
+`-ldflags "-s -w -buildid= -X github.com/oito2/mcp-build82/internal/version.Current=vX.Y.Z"`, num
+ambiente fixado (`CGO_ENABLED=0`, `GOAMD64=v1`, `GOARM64=v8.0`, `GOFLAGS` e `GOEXPERIMENT` vazios).
+O `-s -w` remove a tabela de símbolos e as informações de depuração DWARF (os stack traces de panic
+são mantidos), o `-buildid=` e o `-trimpath` tornam o build reproduzível — o mesmo patch do Go gera
+binários idênticos byte a byte localmente e no CI — e o `-X` faz o binário reportar a versão correta
+(`build82 --version`) para que a comparação semver do `self-update` funcione contra ele. Em seguida
+empacota o `dist/build82.mcpb`, um bundle de extensão desktop
+[MCPB](https://github.com/modelcontextprotocol/mcpb) (manifest versão 0.3) com um binário universal
+de macOS (os dois builds darwin unidos em um único Mach-O pelo próprio script, já que o MCPB escolhe
+o binário por sistema operacional, mas não por arquitetura de CPU), os dois binários Linux atrás de
+um script de inicialização ([`scripts/release/build82-linux.sh`](../../scripts/release/build82-linux.sh),
+que executa o que corresponde ao `uname -m`), o binário windows/amd64 (o Windows em Arm o executa
+pela emulação x64; o binário nativo windows/arm64 é um asset separado) e os ícones de
+`docs/img/icons/`. A lista de tools do manifesto é lida do próprio servidor. Por fim escreve
+`dist/checksums.txt` (formato padrão `sha256sum`, cobrindo todos os binários e o bundle) e o
+`dist/server.json`, o descritor do [MCP Registry](https://modelcontextprotocol.io/registry/)
+(schema `2025-12-11`) que aponta para o bundle. O `server.json` embute o SHA-256 do bundle, então
+não é versionado no repositório (está no `.gitignore`): a cópia a publicar é a gerada junto do
+bundle que ela descreve e anexada à release.
 
-Os assets da release se chamam `build82_<os>_<arch>` (`.exe` no Windows), mais o `build82.mcpb`. Depois, siga um dos caminhos:
+Os assets da release se chamam `build82_<os>_<arch>` (`.exe` no Windows), mais o `build82.mcpb`, o
+`checksums.txt`, a assinatura Sigstore dele, `checksums.txt.sigstore.json`, e o `server.json`.
 
-1. **Automático (caminho normal):** envie uma tag `vX.Y.Z` (`git tag vX.Y.Z && git push --tags`).
-   O [`release.yml`](../../.github/workflows/release.yml) dispara em tags que casam com `v*.*.*` e
-   roda dois jobs:
-   - `release`: configura o patch mais recente do Go 1.26.x e roda as mesmas verificações do CI (`gofmt`, `go vet`,
-     `golangci-lint`, `go build`, `go test -race` com o backend regex e com o tree-sitter, `govulncheck`), executa
-     `go run ./scripts/release <tag>`, valida o `dist/server.json` com `mcp-publisher validate`
-     (qualquer verificação que falhe interrompe a release) e cria a release no GitHub com
-     `gh release create`, anexando tudo em `dist/` (binários, `build82.mcpb`, `checksums.txt` e
-     `server.json`).
-   - `publish-registry`: depois que o `release` termina com sucesso, baixa o `server.json` anexado
-     à release e o publica no MCP Registry (veja
-     [Publicando no MCP Registry](#publicando-no-mcp-registry)).
-2. **Manual:** marque a release com uma tag e depois crie a release no GitHub você mesmo, enviando cada arquivo em
-   `dist/` (incluindo `build82.mcpb`, `checksums.txt` e `server.json`), e publique no MCP Registry
-   manualmente como descrito abaixo.
+### Checklist da release
 
-Um binário compilado sem o `-ldflags` acima reporta `"dev"` como sua versão — o `self-update` trata
-isso como sempre desatualizado, o que é correto para uma build de desenvolvimento local, mas
+1. Revise as [versões fixadas de ferramentas](#versões-fixadas-de-ferramentas) e mova as entradas
+   de `[Unreleased]` do [`CHANGELOG.md`](../../CHANGELOG.md) para a nova versão.
+2. Simule localmente: `go run ./scripts/release vX.Y.Z`, depois `./dist/build82_linux_amd64 --version`,
+   `BUILD82_DIST_DIR="$PWD/dist" go test -run TestReleaseContract ./internal/selfupdate`,
+   `mcp-publisher validate` (dentro de `dist/`) e `npx @anthropic-ai/mcpb validate` no bundle
+   extraído.
+3. Rode o smoke test com cliente real, [`scripts/smoke/claude.sh`](../../scripts/smoke/claude.sh):
+   ele compila o build82, o registra numa única sessão `claude -p --strict-mcp-config` contra uma
+   cópia de `testdata/moodle` (ou a raiz do Moodle passada como argumento), faz ao Claude Code
+   perguntas em linguagem natural que exercitam as tools e falha quando uma resposta não traz o
+   conteúdo esperado. Ele pega o que o cliente em memória não pega, como o que o Claude Code de fato
+   mostra ao modelo.
+4. Envie para a `main` **sem a tag** e espere o CI ficar verde nos três sistemas operacionais; se
+   falhar, corrija com um commit novo (nada foi publicado).
+5. Envie a tag `vX.Y.Z`. O [`release.yml`](../../.github/workflows/release.yml) roda cinco jobs:
+   - `validate`: a tag precisa ser exatamente `vMAJOR.MINOR.PATCH`.
+   - `checks`: as verificações do CI no Linux, no macOS e no Windows, sem cache do Go.
+   - `build` (só leitura, sem token OIDC): `go run ./scripts/release <tag>`, a conferência da
+     versão do binário Linux, o teste de contrato da release no `dist/` real,
+     `mcp-publisher validate` e o upload do `dist/` como artefato do workflow (mantido por 7 dias).
+   - `sign-publish` (o único job com `contents: write`, `id-token: write` e `attestations: write`;
+     não faz checkout de código): baixa o artefato, roda `sha256sum --check --strict checksums.txt`,
+     assina o `checksums.txt` sem chave com o cosign em `checksums.txt.sigstore.json`, verifica essa
+     assinatura com a identidade exata que o `self-update` exige, registra atestações de
+     proveniência para os binários e o bundle e cria a release no GitHub com
+     `gh release create --generate-notes`.
+   - `publish-registry`: publica o `server.json` anexado à release (veja abaixo).
+6. Confira a release: `gh release view vX.Y.Z`, a busca no MCP Registry abaixo e, com os assets
+   baixados, `sha256sum -c --ignore-missing checksums.txt`,
+   `gh attestation verify build82_linux_amd64 --repo oito2/mcp-build82` e
+   `cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json --certificate-identity https://github.com/oito2/mcp-build82/.github/workflows/release.yml@refs/tags/vX.Y.Z --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+7. Rode o `build82 self-update` de ponta a ponta a partir da versão anterior, com e sem o cosign no
+   `PATH`. Para exercitar um updater novo contra a release real, compile o código da tag carimbado
+   com a versão anterior (`-ldflags "-X github.com/oito2/mcp-build82/internal/version.Current=vANTERIOR"`).
+
+Um binário compilado sem o `-ldflags` de release reporta `"dev"` como sua versão — o `self-update`
+trata isso como sempre desatualizado, o que é correto para uma build de desenvolvimento local, mas
 significa que binários de release **precisam** passar por `scripts/release`, não um `go build`
 simples.
 
@@ -178,8 +250,8 @@ simples.
 
 O job `publish-registry` do [`release.yml`](../../.github/workflows/release.yml) publica cada
 release com tag automaticamente, com o CLI oficial
-[`mcp-publisher`](https://modelcontextprotocol.io/registry/github-actions) (versão fixada em
-`MCP_PUBLISHER_VERSION` no workflow) autenticado via OIDC do GitHub Actions
+[`mcp-publisher`](https://modelcontextprotocol.io/registry/github-actions) (versão e SHA-256 do
+tarball fixados em [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml)) autenticado via OIDC do GitHub Actions
 (`mcp-publisher login github-oidc`, permissão `id-token: write`, sem segredo). Ele só roda depois
 que a release existe, porque a entrada do registry aponta para o asset `build82.mcpb` da release e
 para os ícones da tag. Se falhar, reexecute só esse job na página da execução do workflow.
@@ -195,8 +267,8 @@ mcp-publisher publish
 ```
 
 O `mcp-publisher publish` lê o `server.json` do diretório atual. Publique a cópia anexada à release,
-não uma gerada localmente: um build local não é idêntico byte a byte ao do CI, então o `fileSha256`
-dele não bateria com o bundle publicado. Confira o resultado com
+não uma gerada localmente: um build local só é idêntico byte a byte ao do CI quando usa o mesmo
+patch do Go; caso contrário, o `fileSha256` dele não bateria com o bundle publicado. Confira o resultado com
 `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.oito2/mcp-build82"`.
 
 ## Licença

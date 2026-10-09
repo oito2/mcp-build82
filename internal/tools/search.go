@@ -27,6 +27,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/extractors"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
 	"github.com/oito2/mcp-build82/internal/moodletype"
 	"github.com/oito2/mcp-build82/internal/toolutil"
@@ -76,7 +77,7 @@ func cachedLines(filePath string) []string {
 	if len(indexCache) >= indexCacheMax {
 		indexCache = map[string]indexCacheEntry{}
 	}
-	content, readErr := os.ReadFile(filePath)
+	content, readErr := fsutil.ReadRegular(filePath, 0)
 	if readErr != nil {
 		return nil
 	}
@@ -190,6 +191,14 @@ func min3(a, b, c int) int {
 
 // --- 5a. search_plugins ---------------------------------------------------------
 
+// SearchPluginsOutput is the structured output of search_plugins: the query, whether the matches
+// come from the fuzzy fallback, and the matching rows of the plugin index (Markdown table rows).
+type SearchPluginsOutput struct {
+	Query   string   `json:"query"`
+	Fuzzy   bool     `json:"fuzzy"`
+	Matches []string `json:"matches"`
+}
+
 // SearchPluginsInput is the input of the search_plugins tool.
 type SearchPluginsInput struct {
 	Query  string `json:"query" jsonschema:"Search term (component name, plugin type, etc.)"`
@@ -202,21 +211,25 @@ type SearchPluginsInput struct {
 func RegisterSearchTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_plugins",
+		Annotations: toolAnnotations("Search Plugins", true, false, true, false),
 		Description: "Searches the plugin index (component, type, name, version, path) for a query string.",
 	}, withRecover(handleSearchPlugins))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_api",
+		Annotations: toolAnnotations("Search Moodle API", true, false, true, false),
 		Description: "Searches the public Moodle API index (lib/ functions) for a query string, filterable by visibility.",
 	}, withRecover(handleSearchApi))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_plugin_info",
+		Annotations: toolAnnotations("Get Plugin Info", true, false, true, false),
 		Description: "Returns the generated AI context for a plugin (or live-detected metadata if not yet generated).",
 	}, withRecover(handleGetPluginInfo))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_dev_plugins",
+		Annotations: toolAnnotations("List Dev Plugins", true, false, true, false),
 		Description: "Lists every plugin currently marked .indevelopment.",
 	}, withRecover(handleListDevPlugins))
 }
@@ -234,24 +247,25 @@ func normalizeLimit(limit, def int) int {
 
 // handleSearchPlugins searches the generated plugin index for `in.Query`, falling back to fuzzy
 // matching when there is no exact match, and returns at most `in.Limit` rows (default 20, max
-// 100). It returns an error result when the configuration is missing or invalid, the query is
-// longer than maxQueryLen, or the index has not been generated; the error return is always nil.
-func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in SearchPluginsInput) (*mcp.CallToolResult, struct{}, error) {
+// 100). The structured output is a SearchPluginsOutput in either format; no match is a success
+// with an empty list. A missing or invalid configuration, a query longer than maxQueryLen, or a
+// missing index is returned as an error, so that result has no structured output.
+func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in SearchPluginsInput) (*mcp.CallToolResult, SearchPluginsOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, SearchPluginsOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, SearchPluginsOutput{}, resultError(toolutil.NotInitialized())
 	}
 	if len(in.Query) > maxQueryLen {
-		return textResult(true, fmt.Sprintf("❌ query too long (max %d characters).", maxQueryLen)), struct{}{}, nil
+		return nil, SearchPluginsOutput{}, toolError(fmt.Sprintf("❌ query too long (max %d characters).", maxQueryLen))
 	}
 	limit := normalizeLimit(in.Limit, 20)
 
 	indexPath := generators.GlobalOutputPath(cfg.MoodlePath, "MOODLE_PLUGIN_INDEX.md")
 	if _, err := os.Stat(indexPath); err != nil {
-		return textResult(true, "❌ Plugin index not found. Run `init_moodle_context` or `update_indexes` first."), struct{}{}, nil
+		return nil, SearchPluginsOutput{}, toolError("❌ Plugin index not found. Run `init_moodle_context` or `update_indexes` first.")
 	}
 
 	matches := filterTableRows(searchInFile(indexPath, in.Query))
@@ -264,11 +278,12 @@ func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in Searc
 		matches = matches[:limit]
 	}
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, map[string]any{"query": in.Query, "fuzzy": fuzzy, "matches": matches}), struct{}{}, nil
+	if matches == nil {
+		matches = []string{}
 	}
+	out := SearchPluginsOutput{Query: in.Query, Fuzzy: fuzzy, Matches: matches}
 	if len(matches) == 0 {
-		return textResult(false, fmt.Sprintf("No plugins matched %q.", in.Query)), struct{}{}, nil
+		return structuredResult(in.Format, false, fmt.Sprintf("No plugins matched %q.", in.Query), out)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Plugin Search — %q\n\n", in.Query)
@@ -279,7 +294,7 @@ func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in Searc
 	for _, m := range matches {
 		fmt.Fprintf(&b, "%s\n", m)
 	}
-	return textResult(false, b.String()), struct{}{}, nil
+	return structuredResult(in.Format, false, b.String(), out)
 }
 
 // filterTableRows returns the Markdown table rows among `lines`: those starting with "|",
@@ -323,6 +338,16 @@ const (
 	ApiVisAll        ApiVisibilityFilter = "all"
 )
 
+// SearchApiOutput is the structured output of search_api: the query, the visibility filter
+// applied, whether the matches come from the fuzzy fallback, and the matching function entries of
+// the API index (Markdown list items).
+type SearchApiOutput struct {
+	Query      string              `json:"query"`
+	Visibility ApiVisibilityFilter `json:"visibility"`
+	Fuzzy      bool                `json:"fuzzy"`
+	Matches    []string            `json:"matches"`
+}
+
 // SearchApiInput is the input of the search_api tool.
 type SearchApiInput struct {
 	Query      string              `json:"query" jsonschema:"Search term (function name, keyword in summary, etc.)"`
@@ -334,18 +359,19 @@ type SearchApiInput struct {
 // handleSearchApi searches the generated API index for `in.Query`, falling back to fuzzy matching
 // when there is no exact match. `in.Visibility` (default "public") keeps non-deprecated,
 // deprecated or all functions, and at most `in.Limit` entries (default 30, max 100) are returned.
-// It returns an error result when the configuration is missing or invalid, the query is longer
-// than maxQueryLen, or the index has not been generated; the error return is always nil.
-func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApiInput) (*mcp.CallToolResult, struct{}, error) {
+// The structured output is a SearchApiOutput in either format; no match is a success with an empty
+// list. A missing or invalid configuration, a query longer than maxQueryLen, or a missing index is
+// returned as an error, so that result has no structured output.
+func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApiInput) (*mcp.CallToolResult, SearchApiOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, SearchApiOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, SearchApiOutput{}, resultError(toolutil.NotInitialized())
 	}
 	if len(in.Query) > maxQueryLen {
-		return textResult(true, fmt.Sprintf("❌ query too long (max %d characters).", maxQueryLen)), struct{}{}, nil
+		return nil, SearchApiOutput{}, toolError(fmt.Sprintf("❌ query too long (max %d characters).", maxQueryLen))
 	}
 	if in.Visibility == "" {
 		in.Visibility = ApiVisPublic
@@ -354,7 +380,7 @@ func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApi
 
 	indexPath := generators.GlobalOutputPath(cfg.MoodlePath, "MOODLE_API_INDEX.md")
 	if _, err := os.Stat(indexPath); err != nil {
-		return textResult(true, "❌ API index not found. Run `init_moodle_context` or `update_indexes` first."), struct{}{}, nil
+		return nil, SearchApiOutput{}, toolError("❌ API index not found. Run `init_moodle_context` or `update_indexes` first.")
 	}
 
 	lines := searchInFile(indexPath, in.Query)
@@ -385,11 +411,12 @@ func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApi
 		matches = matches[:limit]
 	}
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, map[string]any{"query": in.Query, "visibility": in.Visibility, "fuzzy": fuzzy, "matches": matches}), struct{}{}, nil
+	if matches == nil {
+		matches = []string{}
 	}
+	out := SearchApiOutput{Query: in.Query, Visibility: in.Visibility, Fuzzy: fuzzy, Matches: matches}
 	if len(matches) == 0 {
-		return textResult(false, fmt.Sprintf("No functions matched %q.", in.Query)), struct{}{}, nil
+		return structuredResult(in.Format, false, fmt.Sprintf("No functions matched %q.", in.Query), out)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# API Search — %q (visibility: %s)\n\n", in.Query, in.Visibility)
@@ -399,7 +426,7 @@ func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApi
 	for _, m := range matches {
 		fmt.Fprintf(&b, "%s\n", m)
 	}
-	return textResult(false, b.String()), struct{}{}, nil
+	return structuredResult(in.Format, false, b.String(), out)
 }
 
 // filterFunctionLines returns the function entries among `lines`: those that are Markdown list
@@ -422,17 +449,33 @@ type GetPluginInfoInput struct {
 	Format Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// GetPluginInfoOutput is the structured output of get_plugin_info: the plugin's path relative to
+// the Moodle root, its detected metadata, and its generated PLUGIN_AI_CONTEXT.md when it exists.
+type GetPluginInfoOutput struct {
+	Path         string `json:"path"`
+	Component    string `json:"component,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Requires     string `json:"requires,omitempty"`
+	DisplayName  string `json:"display_name,omitempty"`
+	Maturity     string `json:"maturity,omitempty"`
+	HasAIContext bool   `json:"has_ai_context"`
+	AIContext    string `json:"ai_context,omitempty"`
+}
+
 // handleGetPluginInfo returns the generated PLUGIN_AI_CONTEXT.md of the plugin named by
-// `in.Plugin`, or its live-detected metadata when that file does not exist. When the plugin cannot
-// be found, it lists index entries matching the identifier or returns an error result. The error
-// return is always nil.
-func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPluginInfoInput) (*mcp.CallToolResult, struct{}, error) {
+// `in.Plugin` as text, or its live-detected metadata when that file does not exist. The structured
+// output is a GetPluginInfoOutput in either format, holding the metadata and, when generated, the
+// AI context. A plugin that cannot be found is returned as an error — listing the index entries
+// matching the identifier when there are any — so that result has no structured output.
+func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPluginInfoInput) (*mcp.CallToolResult, GetPluginInfoOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, GetPluginInfoOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, GetPluginInfoOutput{}, resultError(toolutil.NotInitialized())
 	}
 
 	pluginPath, ok := resolvePluginPathWithinMoodle(in.Plugin, cfg.MoodlePath)
@@ -448,39 +491,38 @@ func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPl
 		possible := filterTableRows(searchInFile(indexPath, in.Plugin))
 		if len(possible) > 0 {
 			var b strings.Builder
-			fmt.Fprintf(&b, "Plugin %q not found directly, but found possible matches:\n\n", in.Plugin)
+			fmt.Fprintf(&b, "❌ Plugin %q not found directly, but found possible matches:\n\n", in.Plugin)
 			b.WriteString("| Component | Type | Name | Version | Path |\n|---|---|---|---|---|\n")
 			for _, m := range possible {
 				fmt.Fprintf(&b, "%s\n", m)
 			}
-			return textResult(false, b.String()), struct{}{}, nil
+			return nil, GetPluginInfoOutput{}, toolError(b.String())
 		}
-		return textResult(true, fmt.Sprintf("❌ Plugin not found: %s", in.Plugin)), struct{}{}, nil
+		return nil, GetPluginInfoOutput{}, toolError(fmt.Sprintf("❌ Plugin not found: %s", in.Plugin))
 	}
 
 	// Reported relative to the Moodle root so no absolute host path appears in the output.
 	relPath := relativeToMoodle(cfg.MoodlePath, pluginPath)
-
-	if content, err := os.ReadFile(generators.PluginOutputPath(pluginPath, "PLUGIN_AI_CONTEXT.md")); err == nil {
-		if in.Format == FormatJSON {
-			return jsonResult(false, map[string]any{"path": relPath, "ai_context": string(content)}), struct{}{}, nil
-		}
-		return textResult(false, string(content)), struct{}{}, nil
+	info, detectErr := extractors.DetectPlugin(pluginPath)
+	out := GetPluginInfoOutput{Path: relPath}
+	if detectErr == nil {
+		out.Component, out.Type, out.Name, out.Version = info.Component, info.Type, info.Name, info.Version
+		out.Requires, out.DisplayName, out.Maturity = info.Requires, info.DisplayName, info.Maturity
 	}
 
-	info, err := extractors.DetectPlugin(pluginPath)
-	if err != nil {
-		return textResult(true, "❌ Failed to detect plugin: "+err.Error()), struct{}{}, nil
+	if content, err := fsutil.ReadRegular(generators.PluginOutputPath(pluginPath, "PLUGIN_AI_CONTEXT.md"), 0); err == nil {
+		out.HasAIContext, out.AIContext = true, string(content)
+		return structuredResult(in.Format, false, string(content), out)
 	}
-	info.Path = relPath
-	if in.Format == FormatJSON {
-		return jsonResult(false, info), struct{}{}, nil
+
+	if detectErr != nil {
+		return nil, GetPluginInfoOutput{}, toolError("❌ Failed to detect plugin: " + detectErr.Error())
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n| Field | Value |\n|---|---|\n| Type | %s |\n| Version | %s |\n| Requires | %s |\n"+
 		"| Display name | %s |\n| Path | %s |\n\n_generate_plugin_context has not been run yet for this plugin._\n",
 		info.Component, info.Type, info.Version, info.Requires, info.DisplayName, relPath)
-	return textResult(false, b.String()), struct{}{}, nil
+	return structuredResult(in.Format, false, b.String(), out)
 }
 
 // --- 5d. list_dev_plugins ---------------------------------------------------------
@@ -490,51 +532,60 @@ type ListDevPluginsInput struct {
 	Format Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
+// ListDevPluginsOutput is the structured output of list_dev_plugins: one entry per plugin marked
+// .indevelopment, sorted by path.
+type ListDevPluginsOutput struct {
+	Plugins []DevPlugin `json:"plugins"`
+}
+
+// DevPlugin is one .indevelopment plugin of a ListDevPluginsOutput: its component ("_(unknown)_"
+// when it cannot be detected), its path relative to the Moodle root, and whether its
+// PLUGIN_AI_CONTEXT.md has been generated.
+type DevPlugin struct {
+	Component    string `json:"component"`
+	Path         string `json:"path"`
+	HasAIContext bool   `json:"has_ai_context"`
+}
+
 // handleListDevPlugins lists the plugins marked .indevelopment with their path relative to the
-// Moodle root and whether a generated PLUGIN_AI_CONTEXT.md exists. It returns an error result when
-// the configuration is missing or invalid; the error return is always nil.
-func handleListDevPlugins(ctx context.Context, req *mcp.CallToolRequest, in ListDevPluginsInput) (*mcp.CallToolResult, struct{}, error) {
+// Moodle root and whether a generated PLUGIN_AI_CONTEXT.md exists. The structured output is a
+// ListDevPluginsOutput in either format; no dev plugin is a success with an empty list. A missing
+// or invalid configuration is returned as an error, so that result has no structured output.
+func handleListDevPlugins(ctx context.Context, req *mcp.CallToolRequest, in ListDevPluginsInput) (*mcp.CallToolResult, ListDevPluginsOutput, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, ListDevPluginsOutput{}, configError(err)
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return nil, ListDevPluginsOutput{}, resultError(toolutil.NotInitialized())
 	}
 
 	dirs := generators.FindDevPlugins(cfg.MoodlePath)
 	sort.Strings(dirs)
 
+	out := ListDevPluginsOutput{Plugins: make([]DevPlugin, 0, len(dirs))}
 	if len(dirs) == 0 {
-		return textResult(false, "No .indevelopment plugins found."), struct{}{}, nil
+		return structuredResult(in.Format, false, "No .indevelopment plugins found.", out)
 	}
 
-	type row struct {
-		Component, Path string
-		HasAiContext    bool
-	}
-	rows := make([]row, len(dirs))
-	for i, d := range dirs {
+	for _, d := range dirs {
 		component := "_(unknown)_"
 		if info, err := extractors.DetectPlugin(d); err == nil {
 			component = info.Component
 		}
 		_, statErr := os.Stat(generators.PluginOutputPath(d, "PLUGIN_AI_CONTEXT.md"))
 		rel, _ := filepath.Rel(cfg.MoodlePath, d)
-		rows[i] = row{Component: component, Path: filepath.ToSlash(rel), HasAiContext: statErr == nil}
+		out.Plugins = append(out.Plugins, DevPlugin{Component: component, Path: filepath.ToSlash(rel), HasAIContext: statErr == nil})
 	}
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, rows), struct{}{}, nil
-	}
 	var b strings.Builder
 	b.WriteString("# Dev Plugins\n\n| Component | Path | Has AI Context |\n|---|---|---|\n")
-	for _, r := range rows {
+	for _, r := range out.Plugins {
 		mark := ""
-		if r.HasAiContext {
+		if r.HasAIContext {
 			mark = "✔"
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", r.Component, r.Path, mark)
 	}
-	return textResult(false, b.String()), struct{}{}, nil
+	return structuredResult(in.Format, false, b.String(), out)
 }

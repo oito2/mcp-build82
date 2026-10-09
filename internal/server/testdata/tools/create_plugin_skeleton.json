@@ -1,0 +1,45 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Create Plugin Skeleton"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "display_name": {
+        "description": "Human-readable name for lang/en/{component}.php (default: derived from name)",
+        "type": "string"
+      },
+      "features": {
+        "description": "Comma-separated stub files to scaffold: database, tasks, services, events, capabilities, settings",
+        "type": "string"
+      },
+      "maturity": {
+        "description": "$plugin-\u003ematurity constant: MATURITY_ALPHA (default), MATURITY_BETA, MATURITY_RC, or MATURITY_STABLE",
+        "type": "string"
+      },
+      "name": {
+        "description": "Plugin name, lowercase letters/digits/underscores only, must start with a letter",
+        "type": "string"
+      },
+      "requires": {
+        "description": "$plugin-\u003erequires value (default: the configured Moodle installation's build number)",
+        "type": "string"
+      },
+      "type": {
+        "description": "Plugin type (local, mod, block, auth, tool, enrol, theme, report, format, filter, qtype, ...)",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "name"
+    ],
+    "type": "object"
+  },
+  "name": "create_plugin_skeleton",
+  "outputSchema": null
+}

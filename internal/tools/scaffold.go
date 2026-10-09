@@ -55,7 +55,8 @@ type CreatePluginSkeletonInput struct {
 // RegisterCreatePluginSkeletonTool registers the create_plugin_skeleton tool on `server`.
 func RegisterCreatePluginSkeletonTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "create_plugin_skeleton",
+		Name:        "create_plugin_skeleton",
+		Annotations: toolAnnotations("Create Plugin Skeleton", false, false, false, false),
 		Description: "Materializes a new Moodle plugin's directory structure on disk: version.php with " +
 			"real values filled in, lang/en/{component}.php, the type's mandatory entry-point file(s), and " +
 			"stub db/*.php files for any requested features. Deterministic scaffolding only — no generated " +
@@ -76,36 +77,36 @@ type skeletonFile struct {
 // call created is removed. It returns an error result for a missing configuration, unknown type,
 // invalid name, maturity or requires value, an existing target, or a write failure; the error
 // return is always nil.
-func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, in CreatePluginSkeletonInput) (*mcp.CallToolResult, struct{}, error) {
+func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, in CreatePluginSkeletonInput) (*mcp.CallToolResult, any, error) {
 	cfg, err := requireConfig()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
 	}
 	if cfg == nil {
-		return toolutil.NotInitialized(), struct{}{}, nil
+		return toolutil.NotInitialized(), nil, nil
 	}
 
 	typeDir, ok := moodletype.PluginTypeToDir[in.Type]
 	if !ok {
-		return textResult(true, fmt.Sprintf("❌ Unknown plugin type %q.", in.Type)), struct{}{}, nil
+		return textResult(true, fmt.Sprintf("❌ Unknown plugin type %q.", in.Type)), nil, nil
 	}
 	if !skeletonNamePattern.MatchString(in.Name) {
-		return textResult(true, "❌ name must start with a lowercase letter and contain only lowercase letters, digits, and underscores."), struct{}{}, nil
+		return textResult(true, "❌ name must start with a lowercase letter and contain only lowercase letters, digits, and underscores."), nil, nil
 	}
 
 	pluginPath := filepath.Clean(filepath.Join(cfg.MoodlePath, typeDir, in.Name))
 	if !moodletype.IsWithinMoodle(pluginPath, cfg.MoodlePath) {
-		return textResult(true, "❌ Resolved plugin path escapes the Moodle root."), struct{}{}, nil
+		return textResult(true, "❌ Resolved plugin path escapes the Moodle root."), nil, nil
 	}
 	if dirExists(pluginPath) || fileExists(pluginPath) {
-		return textResult(true, fmt.Sprintf("❌ %s already exists — create_plugin_skeleton never overwrites an existing plugin.", relativeToMoodle(cfg.MoodlePath, pluginPath))), struct{}{}, nil
+		return textResult(true, fmt.Sprintf("❌ %s already exists — create_plugin_skeleton never overwrites an existing plugin.", relativeToMoodle(cfg.MoodlePath, pluginPath))), nil, nil
 	}
 
 	maturity := in.Maturity
 	if maturity == "" {
 		maturity = "MATURITY_ALPHA"
 	} else if _, ok := validMoodleMaturities[maturity]; !ok {
-		return textResult(true, fmt.Sprintf("❌ Unrecognized maturity %q (expected MATURITY_ALPHA, MATURITY_BETA, MATURITY_RC, or MATURITY_STABLE).", maturity)), struct{}{}, nil
+		return textResult(true, fmt.Sprintf("❌ Unrecognized maturity %q (expected MATURITY_ALPHA, MATURITY_BETA, MATURITY_RC, or MATURITY_STABLE).", maturity)), nil, nil
 	}
 
 	displayName := in.DisplayName
@@ -125,7 +126,7 @@ func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, i
 		// anything else could inject PHP code (e.g. "0; eval(...);").
 		return textResult(true, fmt.Sprintf(
 			"❌ requires must be a plain Moodle build number (digits, optionally with a decimal point), got %q.", requires,
-		)), struct{}{}, nil
+		)), nil, nil
 	}
 
 	component := in.Type + "_" + in.Name
@@ -152,7 +153,7 @@ func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, i
 				msg += fmt.Sprintf("\n\nCleanup of the partially created %s also failed: %v",
 					relativeToMoodle(cfg.MoodlePath, createdRoot), rmErr)
 			}
-			return textResult(true, msg), struct{}{}, nil
+			return textResult(true, msg), nil, nil
 		}
 		written = append(written, f.path)
 	}
@@ -166,7 +167,7 @@ func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, i
 	}
 	b.WriteString("\nDeterministic skeleton only — no business logic was generated. Use the " +
 		"`scaffold_plugin` prompt, or write the implementation directly, to fill it in.\n")
-	return textResult(false, b.String()), struct{}{}, nil
+	return textResult(false, b.String()), nil, nil
 }
 
 // writeSkeletonFile writes one scaffolded file atomically. It defaults to fsutil.WriteAtomic and

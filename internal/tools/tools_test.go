@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -165,26 +166,20 @@ func TestResolveBatchPlugins_DevMode_EmptyIsInformationalNotError(t *testing.T) 
 }
 
 // TestWithRecover_ConvertsPanicToErrorResult verifies that withRecover converts a panic inside a
-// handler into an IsError result instead of letting it escape.
+// handler into a tool error (which the SDK turns into an IsError result without structured
+// content) instead of letting it escape.
 func TestWithRecover_ConvertsPanicToErrorResult(t *testing.T) {
-	panicky := func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, struct{}, error) {
+	panicky := func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, DoctorOutput, error) {
 		panic("boom: simulated extractor failure")
 	}
 	wrapped := withRecover(panicky)
 
-	result, _, err := wrapped(context.Background(), &mcp.CallToolRequest{}, struct{}{})
-	if err != nil {
-		t.Fatalf("expected no Go error (panic should be converted to an IsError result), got: %v", err)
+	result, out, err := wrapped(context.Background(), &mcp.CallToolRequest{}, struct{}{})
+	if err == nil || !strings.Contains(err.Error(), "boom: simulated extractor failure") {
+		t.Fatalf("expected the panic message as a tool error, got: %v", err)
 	}
-	if result == nil || !result.IsError {
-		t.Fatalf("expected an IsError result, got: %+v", result)
-	}
-	if len(result.Content) != 1 {
-		t.Fatalf("expected exactly one content block, got %d", len(result.Content))
-	}
-	tc, ok := result.Content[0].(*mcp.TextContent)
-	if !ok || !strings.Contains(tc.Text, "boom: simulated extractor failure") {
-		t.Errorf("expected the panic message in the result text, got: %+v", result.Content[0])
+	if result != nil || out.Verdict != "" {
+		t.Errorf("expected no result and a zero output, got %+v, %+v", result, out)
 	}
 }
 
@@ -498,6 +493,9 @@ func anyContains(issues []string, substr string) bool {
 // TestHandleGenerateContext_LogsAiIndexFailureToStderr verifies a failure writing
 // MOODLE_AI_INDEX.md is logged to stderr while the tool call itself still succeeds.
 func TestHandleGenerateContext_LogsAiIndexFailureToStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory cannot be made with chmod on Windows")
+	}
 	freshCache(t)
 	moodlePath := t.TempDir()
 	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
@@ -534,8 +532,8 @@ func TestHandleGenerateContext_LogsAiIndexFailureToStderr(t *testing.T) {
 
 // TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError verifies that a failure to resolve the
 // user's home directory is returned by requireConfig as an error, and that a tool guarded by it
-// (handleGenerateContext stands in for all of them) renders it as an IsError result instead of
-// the not-initialized response.
+// (handleGenerateContext stands in for all of them) returns it as a tool error (an IsError result
+// once through the SDK) instead of the not-initialized response.
 func TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
 	t.Setenv("BUILD82_MOODLE_PATH", "")
 	t.Setenv("BUILD82_MOODLE_VERSION", "")
@@ -543,15 +541,12 @@ func TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
 
-	res, _, err := handleGenerateContext(context.Background(), nil, GenerateContextInput{PluginPath: "local/demo"})
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
+	_, _, err := handleGenerateContext(context.Background(), nil, GenerateContextInput{PluginPath: "local/demo"})
+	if err == nil {
+		t.Fatal("expected a tool error when the home directory cannot be resolved")
 	}
-	if !res.IsError {
-		t.Fatalf("expected an IsError result when the home directory cannot be resolved, got %+v", res)
-	}
-	text := res.Content[0].(*mcp.TextContent).Text
-	if strings.Contains(text, "not initialized") {
+	text := err.Error()
+	if !strings.Contains(text, "Failed to resolve build82 configuration") || strings.Contains(text, "not initialized") {
 		t.Errorf("expected a config-resolution error, not the generic NotInitialized message, got: %s", text)
 	}
 }
@@ -559,6 +554,9 @@ func TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
 // TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr verifies a failed config.Save when
 // persisting a changed Moodle version is logged to stderr.
 func TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory cannot be made with chmod on Windows")
+	}
 	freshCache(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)

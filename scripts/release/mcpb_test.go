@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -363,6 +364,9 @@ func TestWriteMCPB_BundleIsCompleteAndReproducible(t *testing.T) {
 // report arch. It returns stdout, stderr and the exit code.
 func runLauncher(t *testing.T, arch string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the Linux launcher is a POSIX shell script; Windows shells cannot fake uname -m the same way")
+	}
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no POSIX shell available")
 	}

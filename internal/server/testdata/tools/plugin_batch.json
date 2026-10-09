@@ -1,0 +1,96 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Generate Context for Many Plugins"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "force": {
+        "description": "Bypass the mtime cache and regenerate all context files unconditionally.",
+        "type": "boolean"
+      },
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "mark_as_dev": {
+        "description": "For mode 'all'/'list', also mark processed plugins with .indevelopment.",
+        "type": "boolean"
+      },
+      "mode": {
+        "description": "'dev' (default) — only .indevelopment plugins. 'all' — every plugin. 'list' — plugins in the plugins parameter.",
+        "type": "string"
+      },
+      "parallel": {
+        "description": "Opt-in bounded worker pool size (e.g. 4). 0 (default) processes plugins sequentially, avoiding I/O saturation on large installations.",
+        "type": "integer"
+      },
+      "plugins": {
+        "description": "Required when mode is 'list'. Component (local_myplugin), relative path (local/myplugin), or absolute path per entry.",
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "name": "plugin_batch",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string"
+      },
+      "plugins": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "failed": {
+              "type": "integer"
+            },
+            "generated": {
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            },
+            "skipped": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "component",
+            "path",
+            "generated",
+            "skipped",
+            "failed"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      }
+    },
+    "required": [
+      "mode",
+      "plugins"
+    ],
+    "type": "object"
+  }
+}

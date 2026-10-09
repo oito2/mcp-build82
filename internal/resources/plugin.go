@@ -29,6 +29,7 @@ import (
 
 	"github.com/oito2/mcp-build82/internal/config"
 	"github.com/oito2/mcp-build82/internal/extractors"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
 	"github.com/oito2/mcp-build82/internal/genutil"
 	"github.com/oito2/mcp-build82/internal/moodletype"
@@ -226,7 +227,7 @@ func readPluginFile(component, filename string) (string, error) {
 		return fmt.Sprintf("# Plugin not found\n\nCould not resolve %q to a plugin directory under the configured Moodle root.", component), nil
 	}
 	path := generators.PluginOutputPath(pluginPath, filename)
-	content, readErr := os.ReadFile(path)
+	content, readErr := fsutil.ReadRegular(path, 0)
 	if readErr != nil {
 		return fmt.Sprintf("# %s — Not found\n\nExpected at: %s\n\nThis file has not been generated yet.\n"+
 			"Run `generate_plugin_context` on this plugin to generate it.",

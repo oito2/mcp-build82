@@ -65,6 +65,9 @@ as convenções existentes e manter os docs sincronizados enquanto você trabalh
 **Baixe um binário de release** (sem precisar de toolchain Go). Toda release inclui um
 `checksums.txt` — verifique antes de confiar num binário baixado. Guia completo, passo a passo,
 com verificação de checksum e solução de problemas: [Guia de Instalação](getting-started/installation.md).
+A partir da v1.1.0 o `checksums.txt` também é assinado com o Sigstore e cada binário traz uma
+atestação de proveniência de build do GitHub
+([como verificar](getting-started/installation.md#-verificando-a-assinatura-e-a-proveniência-opcional)).
 
 <details>
 <summary><strong>🐧 Linux</strong></summary>
@@ -118,6 +121,8 @@ remova o atributo de quarentena: `xattr -d com.apple.quarantine /usr/local/bin/b
 <details>
 <summary><strong>🪟 Windows</strong></summary>
 
+No Windows em Arm, use `build82_windows_arm64.exe` em todos os comandos abaixo.
+
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/oito2/mcp-build82/releases/latest/download/build82_windows_amd64.exe" -OutFile "build82_windows_amd64.exe"
 Invoke-WebRequest -Uri "https://github.com/oito2/mcp-build82/releases/latest/download/checksums.txt" -OutFile "checksums.txt"
@@ -158,7 +163,8 @@ build82 install [alvo]
 Ele detecta quais ferramentas suportadas estão instaladas e pede o caminho do Moodle. Rode sem
 alvo para configurar todas as ferramentas encontradas, ou passe um explicitamente: `claude`
 (Claude Code), `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`,
-`cline`.
+`cline`. Feche o cliente antes: o `install` edita um arquivo de configuração que o cliente também
+grava.
 
 Por exemplo, no Claude Code você também pode registrá-lo manualmente:
 
@@ -177,15 +183,19 @@ Para remover: `build82 uninstall [alvo]` — veja [Desinstalação](getting-star
 ## Atualização e manutenção
 
 ```bash
-build82 self-update --check    # reporta se existe uma release mais nova, sem instalar
+build82 self-update --check    # reporta se existe uma release mais nova (saída 10 se houver), sem instalar
 build82 self-update            # baixa, verifica e instala a última release
+build82 self-update --require-signature # recusa atualizar se o cosign não puder verificar a assinatura da release
 build82 self-update --rollback # restaura o binário anterior caso a nova versão se revele quebrada
 ```
 
-Os downloads são verificados por checksum contra o `checksums.txt` da release e testados antes de
-o binário em execução ser substituído; o binário anterior é mantido como `<caminho>.bak`, que o
-`--rollback` restaura com um rename atômico. Se não houver backup, ele falha com um erro claro e
-nada é alterado.
+Os downloads vêm apenas da release deste repositório no GitHub. Quando o
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v3 ou mais novo está no
+`PATH`, a assinatura da release é verificada primeiro; sem ele, um aviso é impresso e só o checksum
+é conferido. Todo download é verificado por checksum contra o `checksums.txt` da release e testado
+antes de o binário em execução ser substituído; o binário anterior é mantido como `<caminho>.bak`,
+que o `--rollback` restaura com um rename atômico. Se não houver backup, ele falha com um erro claro
+e nada é alterado. Detalhes: [referência da CLI](reference/cli.md#self-update).
 
 ## Documentação
 

@@ -17,6 +17,7 @@ package installer
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestPromptMoodlePath_EOFReturnsError(t *testing.T) {
 	for _, input := range []string{"", "/definitely/not/moodle", "/definitely/not/moodle\n"} {
 		in := bufio.NewReader(strings.NewReader(input))
 		captureStdout(t, func() {
-			if path, err := promptMoodlePath(in); err == nil {
+			if path, err := promptMoodlePath(context.Background(), in); err == nil {
 				t.Errorf("input %q: expected an error, got path %q", input, path)
 			}
 		})
@@ -51,7 +52,7 @@ func TestPromptMoodlePath_AcceptsValidRoot(t *testing.T) {
 
 	in := bufio.NewReader(strings.NewReader(root + "\n"))
 	captureStdout(t, func() {
-		if path, err := promptMoodlePath(in); err != nil || path != root {
+		if path, err := promptMoodlePath(context.Background(), in); err != nil || path != root {
 			t.Errorf("got %q, %v; want %q", path, err, root)
 		}
 	})

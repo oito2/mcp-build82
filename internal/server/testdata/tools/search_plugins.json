@@ -1,0 +1,57 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Search Plugins"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "limit": {
+        "description": "Max results, 1-100 (default 20)",
+        "type": "integer"
+      },
+      "query": {
+        "description": "Search term (component name, plugin type, etc.)",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "name": "search_plugins",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "fuzzy": {
+        "type": "boolean"
+      },
+      "matches": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query",
+      "fuzzy",
+      "matches"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Initialize Moodle Context"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "force": {
+        "description": "Re-initialize even if configuration already exists",
+        "type": "boolean"
+      },
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "type": "string"
+      },
+      "moodle_path": {
+        "description": "Absolute path to the Moodle installation root directory",
+        "type": "string"
+      }
+    },
+    "required": [
+      "moodle_path"
+    ],
+    "type": "object"
+  },
+  "name": "init_moodle_context",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "already_initialized": {
+        "type": "boolean"
+      },
+      "config_path": {
+        "type": "string"
+      },
+      "failed": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "error"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "generated": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "moodle_full_version": {
+        "type": "string"
+      },
+      "moodle_path": {
+        "type": "string"
+      },
+      "moodle_version": {
+        "type": "string"
+      },
+      "skipped": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "success": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "success",
+      "moodle_path",
+      "moodle_version",
+      "moodle_full_version",
+      "config_path"
+    ],
+    "type": "object"
+  }
+}

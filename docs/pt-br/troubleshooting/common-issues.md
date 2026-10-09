@@ -192,9 +192,20 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 
 ### `build82 self-update` falha
 
-**Sintoma:** o comando termina com um erro como `checksum verification failed, refusing to replace the running binary`, `release <tag> has no asset named <asset>` ou `smoke test failed`.
+**Sintoma:** o comando termina com um erro como `checksum verification failed, refusing to replace the running binary`, `signature verification failed, refusing to replace the running binary`, `release <tag> has no asset named <asset>`, `refusing to download ...`, `--require-signature refuses to update ...`, `the previous version is still in use` ou `smoke test failed`.
 
-**Causa e solução:** a atualização é verificada contra o `checksums.txt` do release e passa por um smoke test antes de o binário em execução ser substituído; portanto, uma falha deixa seu binário atual intocado. Tente novamente mais tarde, ou baixe o asset manualmente e verifique-o como descrito no [Guia de Instalação](../getting-started/installation.md). Se uma nova versão foi instalada mas se comporta mal, rode `build82 self-update --rollback`; `no backup found at <caminho> — nothing to roll back` significa que não há arquivo `.bak` ao lado do binário.
+**Causa e solução:** a atualização tem a assinatura conferida (quando o cosign está disponível), é verificada contra o `checksums.txt` do release e passa por um smoke test antes de o binário em execução ser substituído; portanto, uma falha deixa seu binário atual intocado.
+
+| Erro | O que fazer |
+| :--- | :--- |
+| `signature verification failed` | O `checksums.txt` do release não foi assinado pelo workflow de release deste repositório para aquela tag. Não instale; reporte no issue tracker. A saída do próprio cosign vem depois da mensagem. |
+| `--require-signature refuses to update` / aviso `cosign was not found on PATH` ou `older than the v3.0.0` | Instale o [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v3 ou mais novo, ou rode sem `--require-signature` para confiar só no checksum. |
+| `release <tag> has no asset named checksums.txt.sigstore.json` | O release de destino é anterior aos releases assinados (antes da v1.1.0). Tire o cosign do `PATH` para esta atualização. |
+| `refusing to download ...` / `unexpected host` | Os metadados do release ou um redirecionamento apontaram para fora dos hosts de release do GitHub deste repositório. Nada foi baixado; tente mais tarde. |
+| `the previous version is still in use` (Windows) | Um cliente MCP ainda está executando o `build82.bak` anterior. Reinicie os clientes MCP e rode `build82 self-update` de novo. |
+| `checksum verification failed`, `smoke test failed` | Tente novamente mais tarde, ou baixe o asset manualmente e verifique-o como descrito no [Guia de Instalação](../getting-started/installation.md). |
+
+Se uma nova versão foi instalada mas se comporta mal, rode `build82 self-update --rollback`; `no backup found at <caminho> — nothing to roll back` significa que não há arquivo `.bak` ao lado do binário.
 
 ---
 

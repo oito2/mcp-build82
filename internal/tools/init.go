@@ -35,8 +35,8 @@ type InitInput struct {
 	Format     Format `json:"format,omitempty" jsonschema:"'text' (default) for Markdown, 'json' for a structured response"`
 }
 
-// InitOutput is the JSON-format response of init_moodle_context. It mirrors the data rendered by
-// the text response.
+// InitOutput is the structured output of init_moodle_context. It mirrors the data rendered by the
+// text response.
 type InitOutput struct {
 	Success            bool         `json:"success"`
 	AlreadyInitialized bool         `json:"already_initialized,omitempty"`
@@ -52,7 +52,8 @@ type InitOutput struct {
 // RegisterInitTool registers the init_moodle_context tool on `server`.
 func RegisterInitTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "init_moodle_context",
+		Name:        "init_moodle_context",
+		Annotations: toolAnnotations("Initialize Moodle Context", false, false, true, false),
 		Description: "Initializes AI context for a Moodle installation. Validates the path, detects " +
 			"the version, saves configuration, and generates all global index files (API index, events, " +
 			"tasks, services, DB tables, classes, capabilities, plugin map, dev rules, workspace). " +
@@ -81,40 +82,34 @@ func validateMoodlePath(path string) (string, bool) {
 
 // handleInit validates `in.MoodlePath`, detects the Moodle version, saves the configuration and
 // generates all global index files. When a configuration already exists and `in.Force` is false,
-// it reports that without changing anything. Problems are returned as error results; the error
-// return is always nil.
-func handleInit(ctx context.Context, req *mcp.CallToolRequest, in InitInput) (*mcp.CallToolResult, struct{}, error) {
+// it reports that without changing anything. The structured output is an InitOutput in either
+// format; problems are returned as errors, so those results have no structured output.
+func handleInit(ctx context.Context, req *mcp.CallToolRequest, in InitInput) (*mcp.CallToolResult, InitOutput, error) {
 	// The config path is resolved once and passed to the output builders. A failure to resolve
 	// the home directory is reported as an error rather than falling back to a relative path.
 	configPath, err := config.FilePath()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, InitOutput{}, configError(err)
 	}
 
 	existing, err := config.Load()
 	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), struct{}{}, nil
+		return nil, InitOutput{}, configError(err)
 	}
 	if existing != nil && !in.Force {
 		msg := fmt.Sprintf(
 			"ℹ️ build82 is already initialized.\n\nMoodle path: %s\nVersion: %s\n\n"+
 				"Pass force: true to re-initialize, or use `update_indexes` to refresh existing context.",
 			existing.MoodlePath, existing.MoodleVersion)
-		if in.Format == FormatJSON {
-			return jsonResult(false, InitOutput{
-				Success: true, AlreadyInitialized: true,
-				MoodlePath: existing.MoodlePath, MoodleVersion: existing.MoodleVersion,
-				MoodleFullVersion: existing.MoodleFullVersion, ConfigPath: configPath,
-			}), struct{}{}, nil
-		}
-		return textResult(false, msg), struct{}{}, nil
+		return structuredResult(in.Format, false, msg, InitOutput{
+			Success: true, AlreadyInitialized: true,
+			MoodlePath: existing.MoodlePath, MoodleVersion: existing.MoodleVersion,
+			MoodleFullVersion: existing.MoodleFullVersion, ConfigPath: configPath,
+		})
 	}
 
 	if reason, ok := validateMoodlePath(in.MoodlePath); !ok {
-		if in.Format == FormatJSON {
-			return jsonResult(true, InitOutput{Success: false, MoodlePath: in.MoodlePath}), struct{}{}, nil
-		}
-		return textResult(true, "❌ Invalid Moodle path: "+reason), struct{}{}, nil
+		return nil, InitOutput{}, toolError("❌ Invalid Moodle path: " + reason)
 	}
 
 	installInfo := extractors.DetectMoodleInstall(in.MoodlePath)
@@ -124,18 +119,16 @@ func handleInit(ctx context.Context, req *mcp.CallToolRequest, in InitInput) (*m
 	}
 
 	if err := config.Save(config.Config{MoodlePath: in.MoodlePath, MoodleVersion: version, MoodleFullVersion: fullVersion}); err != nil {
-		return textResult(true, "❌ Failed to save config: "+err.Error()), struct{}{}, nil
+		return nil, InitOutput{}, toolError("❌ Failed to save config: " + err.Error())
 	}
 
 	results := generators.GenerateAll(in.MoodlePath, version)
 
-	if in.Format == FormatJSON {
-		return jsonResult(false, buildInitOutput(in.MoodlePath, version, fullVersion, configPath, results)), struct{}{}, nil
-	}
-	return textResult(false, renderInitReport(in.MoodlePath, version, fullVersion, configPath, results)), struct{}{}, nil
+	return structuredResult(in.Format, false, renderInitReport(in.MoodlePath, version, fullVersion, configPath, results),
+		buildInitOutput(in.MoodlePath, version, fullVersion, configPath, results))
 }
 
-// buildInitOutput builds the JSON response of a successful initialization from the generator
+// buildInitOutput builds the structured output of a successful initialization from the generator
 // `results`, with file names relative to `moodlePath`.
 func buildInitOutput(moodlePath, version, fullVersion, configPath string, results []generators.GeneratorResult) InitOutput {
 	generated, skipped, failed := classifyResults(results, moodlePath)

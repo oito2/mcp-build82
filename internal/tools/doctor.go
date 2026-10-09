@@ -31,6 +31,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/config"
 	"github.com/oito2/mcp-build82/internal/extractors"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
@@ -109,7 +110,8 @@ type DoctorOutput struct {
 // RegisterDoctorTool registers the doctor tool on `server`.
 func RegisterDoctorTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "doctor",
+		Name:        "doctor",
+		Annotations: toolAnnotations("Doctor", true, false, true, false),
 		Description: "Runs a full environment diagnostic: system dependencies, configuration, Moodle " +
 			"installation, generated index freshness, dev plugins, legacy files pending migration, " +
 			"cross-plugin consistency, deprecated core API usage, own-capability check consistency, " +
@@ -119,18 +121,17 @@ func RegisterDoctorTool(server *mcp.Server) {
 
 // handleDoctor runs the diagnostic sections (system dependencies, configuration, Moodle
 // installation, index freshness, dev plugins and their consistency checks, cache) and renders them
-// as Markdown or, with `in.Format` set to JSON, as a DoctorOutput. It stops early when the
+// as Markdown or, with `in.Format` set to JSON, as a DoctorOutput, which is the structured output
+// in either format. It stops early when the
 // configuration cannot be resolved (error result) or does not exist (reported as a failed check
-// with a hint). The overall verdict is the worst status found. The error return is always nil.
-func handleDoctor(ctx context.Context, req *mcp.CallToolRequest, in DoctorInput) (*mcp.CallToolResult, struct{}, error) {
+// with a hint). The overall verdict is the worst status found. The error return is always nil:
+// even a failed diagnosis carries its structured report.
+func handleDoctor(ctx context.Context, req *mcp.CallToolRequest, in DoctorInput) (*mcp.CallToolResult, DoctorOutput, error) {
 	var b strings.Builder
 	out := DoctorOutput{}
-	finish := func(isError bool) (*mcp.CallToolResult, struct{}, error) {
-		if in.Format == FormatJSON {
-			out.normalize()
-			return jsonResult(isError, out), struct{}{}, nil
-		}
-		return textResult(isError, b.String()), struct{}{}, nil
+	finish := func(isError bool) (*mcp.CallToolResult, DoctorOutput, error) {
+		out.normalize()
+		return structuredResult(in.Format, isError, b.String(), out)
 	}
 	b.WriteString("# build82 Doctor\n\n")
 
@@ -563,7 +564,7 @@ var apiIndexFunctionLinePattern = regexp.MustCompile("^- `([a-zA-Z_][a-zA-Z0-9_]
 // extractors.ExtractMoodleApi. A stale index is reported separately by the "Global Index Files"
 // freshness check.
 func deprecatedFunctionNames(moodlePath string) map[string]struct{} {
-	if content, err := os.ReadFile(generators.GlobalOutputPath(moodlePath, "MOODLE_API_INDEX.md")); err == nil {
+	if content, err := fsutil.ReadRegular(generators.GlobalOutputPath(moodlePath, "MOODLE_API_INDEX.md"), 0); err == nil {
 		return parseDeprecatedNamesFromIndex(string(content))
 	}
 	deprecated := map[string]struct{}{}
