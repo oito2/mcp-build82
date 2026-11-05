@@ -23,9 +23,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -530,11 +534,11 @@ func TestHandleGenerateContext_LogsAiIndexFailureToStderr(t *testing.T) {
 	}
 }
 
-// TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError verifies that a failure to resolve the
-// user's home directory is returned by requireConfig as an error, and that a tool guarded by it
+// TestLoadConfig_HomeDirUnresolvableSurfacesAsToolError verifies that a failure to resolve the
+// user's home directory is returned by loadConfig as an error, and that a tool guarded by it
 // (handleGenerateContext stands in for all of them) returns it as a tool error (an IsError result
 // once through the SDK) instead of the not-initialized response.
-func TestRequireConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
+func TestLoadConfig_HomeDirUnresolvableSurfacesAsToolError(t *testing.T) {
 	t.Setenv("BUILD82_MOODLE_PATH", "")
 	t.Setenv("BUILD82_MOODLE_VERSION", "")
 	t.Setenv("BUILD82_MOODLE_FULLVERSION", "")
@@ -566,9 +570,10 @@ func TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr(t *testing.T) {
 	mustWriteFile(t, filepath.Join(moodlePath, "version.php"),
 		"<?php\n$version = 2024100700.00;\n$release = '4.5';\n$branch = '405';\n")
 
-	// BUILD82_MOODLE_PATH takes priority over the stored config, so requireConfig succeeds without
-	// a saved file, and the empty stored version guarantees the version update path runs.
-	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
+	// A config file with an empty version makes the version update path run; the save only
+	// happens for a file-sourced configuration.
+	t.Setenv("BUILD82_MOODLE_PATH", "")
+	mustWriteFile(t, filepath.Join(home, ".build82"), "MOODLE_PATH="+moodlePath+"\nMOODLE_VERSION=\nMOODLE_FULLVERSION=\n")
 
 	// config.Save writes under HOME; making HOME read-only forces the save to fail with a
 	// permission error.
@@ -589,6 +594,31 @@ func TestHandleUpdateIndexes_LogsConfigSaveFailureToStderr(t *testing.T) {
 
 	if !strings.Contains(stderr, "failed to persist updated Moodle version") {
 		t.Errorf("expected the config.Save failure logged to stderr, got:\n%s", stderr)
+	}
+}
+
+// TestHandleUpdateIndexes_EnvConfigLeavesConfigFileAlone verifies that with a configuration taken
+// from BUILD82_MOODLE_PATH (as `build82 install` sets), update_indexes does not rewrite ~/.build82,
+// which may hold another installation the user configured there.
+func TestHandleUpdateIndexes_EnvConfigLeavesConfigFileAlone(t *testing.T) {
+	freshCache(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfgFile := filepath.Join(home, ".build82")
+	original := "MOODLE_PATH=/some/other/moodle\nMOODLE_VERSION=4.1\nMOODLE_FULLVERSION=2022112800\n"
+	mustWriteFile(t, cfgFile, original)
+
+	moodlePath := t.TempDir()
+	mustWriteFile(t, filepath.Join(moodlePath, "version.php"),
+		"<?php\n$version = 2024100700.00;\n$release = '4.5';\n$branch = '405';\n")
+	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
+
+	if _, _, err := handleUpdateIndexes(context.Background(), nil, UpdateIndexesInput{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := mustReadFile(t, cfgFile); got != original {
+		t.Errorf("~/.build82 was rewritten:\n%s", got)
 	}
 }
 
@@ -672,7 +702,7 @@ func TestHandleReleasePlugin_RejectsIdentifierEscapingMoodleRoot(t *testing.T) {
 		"<?php\n$plugin->component = 'local_evil';\n$plugin->version = 2024010100;\n")
 
 	outDir := t.TempDir()
-	for _, component := range []string{"local/../../evil", "_..", outside} {
+	for component, want := range map[string]string{"local/../../evil": "Invalid plugin path", "_..": "not found", outside: "Invalid plugin path"} {
 		res, _, err := handleReleasePlugin(context.Background(), nil, ReleasePluginInput{Component: component, OutputDir: outDir})
 		if err != nil {
 			t.Fatalf("component %q: unexpected error: %v", component, err)
@@ -680,8 +710,8 @@ func TestHandleReleasePlugin_RejectsIdentifierEscapingMoodleRoot(t *testing.T) {
 		if res == nil || !res.IsError {
 			t.Fatalf("component %q: expected an IsError result, got: %+v", component, res)
 		}
-		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "Invalid plugin path") {
-			t.Errorf("component %q: expected the containment rejection, got: %s", component, text)
+		if text := res.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, want) {
+			t.Errorf("component %q: expected %q, got: %s", component, want, text)
 		}
 	}
 	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
@@ -773,5 +803,303 @@ func TestMergeBuildIgnore_MissingFileIsNotAnError(t *testing.T) {
 	merged := mergeBuildIgnore(pluginPath, excludedNames)
 	if len(merged) != len(excludedNames) {
 		t.Errorf("expected merged set to equal the base set when .buildignore is absent, got %d vs %d", len(merged), len(excludedNames))
+	}
+}
+
+// TestValidateForRelease_ModLanguageFileIsNamedAfterTheModule verifies that an activity module's
+// language file is expected at lang/en/<name>.php, as Moodle requires, not lang/en/mod_<name>.php.
+func TestValidateForRelease_ModLanguageFileIsNamedAfterTheModule(t *testing.T) {
+	pluginPath := t.TempDir()
+	writeValidReleaseFixture(t, pluginPath)
+	if err := os.Rename(filepath.Join(pluginPath, "lang", "en", "local_test.php"), filepath.Join(pluginPath, "lang", "en", "widget.php")); err != nil {
+		t.Fatal(err)
+	}
+	info := validReleaseInfo()
+	info.Component, info.Type, info.Name = "mod_widget", "mod", "widget"
+
+	for _, issue := range validateForRelease(pluginPath, "mod_widget", info) {
+		if strings.Contains(issue, "language file") {
+			t.Errorf("unexpected language-file issue for a module with lang/en/widget.php: %s", issue)
+		}
+	}
+	_ = os.Remove(filepath.Join(pluginPath, "lang", "en", "widget.php"))
+	found := false
+	for _, issue := range validateForRelease(pluginPath, "mod_widget", info) {
+		found = found || strings.Contains(issue, "missing language file lang/en/widget.php")
+	}
+	if !found {
+		t.Error("expected the missing lang/en/widget.php to be reported")
+	}
+}
+
+// minimalMoodleRoot creates a directory that passes validateMoodlePath under `parent` and returns
+// its path.
+func minimalMoodleRoot(t *testing.T, parent, name string) string {
+	t.Helper()
+	root := filepath.Join(parent, name)
+	mustMkdirAll(t, filepath.Join(root, "lib"))
+	mustWriteFile(t, filepath.Join(root, "version.php"), "<?php\n$version = 2024100700.00;\n$release = '4.5';\n")
+	mustWriteFile(t, filepath.Join(root, "config-dist.php"), "<?php\n")
+	return root
+}
+
+// TestHandleInit_RelativePathIsStoredAbsolute verifies that a relative moodle_path is resolved
+// against the working directory and stored, reported and used as an absolute path.
+func TestHandleInit_RelativePathIsStoredAbsolute(t *testing.T) {
+	freshCache(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BUILD82_MOODLE_PATH", "")
+	parent := t.TempDir()
+	root := minimalMoodleRoot(t, parent, "moodle")
+	t.Chdir(parent)
+
+	_, out, err := handleInit(context.Background(), nil, InitInput{MoodlePath: " moodle "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(out.MoodlePath) || filepath.Base(out.MoodlePath) != "moodle" {
+		t.Errorf("reported path = %q, want an absolute path to %s", out.MoodlePath, root)
+	}
+	cfg := mustReadFile(t, filepath.Join(home, ".build82"))
+	if !strings.Contains(cfg, "MOODLE_PATH="+out.MoodlePath+"\n") {
+		t.Errorf("config file holds a relative or different path:\n%s", cfg)
+	}
+
+	if _, _, err := handleInit(context.Background(), nil, InitInput{MoodlePath: "  ", Force: true}); err == nil ||
+		!strings.Contains(err.Error(), "moodle_path is required") {
+		t.Errorf("expected a required-path error, got %v", err)
+	}
+}
+
+// TestHandleInit_ForceWithEnvConfigWarnsItStillWins verifies that re-initializing while
+// BUILD82_MOODLE_PATH is set says the environment keeps taking precedence over the saved file.
+func TestHandleInit_ForceWithEnvConfigWarnsItStillWins(t *testing.T) {
+	freshCache(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	envRoot := minimalMoodleRoot(t, t.TempDir(), "env")
+	t.Setenv("BUILD82_MOODLE_PATH", envRoot)
+	other := minimalMoodleRoot(t, t.TempDir(), "other")
+
+	res, _, err := handleInit(context.Background(), nil, InitInput{MoodlePath: other, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(textOf(res), "BUILD82_MOODLE_PATH is set in this server's environment") {
+		t.Errorf("expected the environment-precedence note:\n%s", textOf(res))
+	}
+}
+
+// TestUpdateIndexes_CarriesRegeneratedComponents verifies that update_indexes with include_plugins
+// reports the components it regenerated to the resource notifications, without re-scanning, and
+// keeps them out of the JSON output.
+func TestUpdateIndexes_CarriesRegeneratedComponents(t *testing.T) {
+	freshCache(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	moodlePath := t.TempDir()
+	mustWriteFile(t, filepath.Join(moodlePath, "version.php"),
+		"<?php\n$version = 2024100700.00;\n$release = '4.5';\n$branch = '405';\n")
+	pluginDir := filepath.Join(moodlePath, "local", "demo")
+	mustMkdirAll(t, filepath.Join(pluginDir, generators.ContextDir))
+	mustWriteFile(t, filepath.Join(pluginDir, "version.php"), "<?php\n$plugin->component = 'local_demo';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(pluginDir, generators.ContextDir, ".indevelopment"), "")
+	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
+
+	_, out, err := handleUpdateIndexes(context.Background(), nil, UpdateIndexesInput{IncludePlugins: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(out.pluginComponents, []string{"local_demo"}) {
+		t.Errorf("got components %v, want [local_demo]", out.pluginComponents)
+	}
+	if b, _ := json.Marshal(out); strings.Contains(string(b), "pluginComponents") {
+		t.Errorf("the components must not be serialized: %s", b)
+	}
+}
+
+// TestResolveBatchPlugins_ListMode_DuplicatesProcessedOnce verifies that identifiers naming the
+// same plugin, repeated or given as a component and as a path, resolve to a single entry.
+func TestResolveBatchPlugins_ListMode_DuplicatesProcessedOnce(t *testing.T) {
+	moodlePath := t.TempDir()
+	pluginDir := filepath.Join(moodlePath, "local", "demo")
+	mustMkdirAll(t, pluginDir)
+	mustWriteFile(t, filepath.Join(pluginDir, "version.php"), "<?php\n$plugin->component = 'local_demo';\n$plugin->version = 2024010100;\n")
+
+	dirs, _, errResult := resolveBatchPlugins(BatchInput{Mode: BatchModeList, Plugins: []string{"local_demo", "local/demo", "local_demo"}}, moodlePath)
+	if errResult != nil {
+		t.Fatalf("unexpected error result: %+v", errResult)
+	}
+	if len(dirs) != 1 {
+		t.Errorf("got %v, want the plugin once", dirs)
+	}
+}
+
+// TestFuzzySearchInFile_LongQueryOnLargeIndexIsFast verifies that a long query against a large
+// index rejects words of a very different length without computing their edit distance, while a
+// word within the distance limit is still found.
+func TestFuzzySearchInFile_LongQueryOnLargeIndexIsFast(t *testing.T) {
+	var b strings.Builder
+	for b.Len() < 2<<20 {
+		b.WriteString("| `core_course\\external\\get_courses` | function | lib/externallib.php |\n")
+	}
+	query := strings.Repeat("abcdefghij", 20)
+	b.WriteString("needle " + query[:len(query)-1] + "x\n") // one substitution away from the query
+	path := filepath.Join(t.TempDir(), "INDEX.md")
+	mustWriteFile(t, path, b.String())
+	cachedLines(path) // reading the file is not what is measured
+
+	start := time.Now()
+	got := fuzzySearchInFile(path, query)
+	elapsed := time.Since(start)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "needle ") {
+		t.Errorf("got %d matching lines, want only the needle line", len(got))
+	}
+	if limit := 300 * time.Millisecond * raceSlowdown; elapsed > limit {
+		t.Errorf("fuzzy search took %s, over the %s bound", elapsed, limit)
+	}
+}
+
+// cacheLinePattern matches the per-call cache line of the update_indexes and plugin_batch reports.
+var cacheLinePattern = regexp.MustCompile(`Cache \(this call\): (\d+) hits, (\d+) misses, (\d+) skips`)
+
+// cacheLookups returns the total number of cache lookups (hits + misses + skips) the report `text`
+// shows for its call, failing the test when the line is missing.
+func cacheLookups(t *testing.T, text string) int {
+	t.Helper()
+	m := cacheLinePattern.FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("no per-call cache line in:\n%s", text)
+	}
+	total := 0
+	for _, n := range m[1:] {
+		v, _ := strconv.Atoi(n)
+		total += v
+	}
+	return total
+}
+
+// TestReports_CacheCountersArePerCall verifies that the cache line of the update_indexes and
+// plugin_batch reports counts only the lookups of that call: running the same call twice shows the
+// same number of lookups, not a running total.
+func TestReports_CacheCountersArePerCall(t *testing.T) {
+	freshCache(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	moodlePath := t.TempDir()
+	mustWriteFile(t, filepath.Join(moodlePath, "version.php"),
+		"<?php\n$version = 2024100700.00;\n$release = '4.5';\n$branch = '405';\n")
+	pluginDir := filepath.Join(moodlePath, "local", "demo")
+	mustMkdirAll(t, filepath.Join(pluginDir, generators.ContextDir))
+	mustWriteFile(t, filepath.Join(pluginDir, "version.php"), "<?php\n$plugin->component = 'local_demo';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(pluginDir, generators.ContextDir, ".indevelopment"), "")
+	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
+
+	update := func() int {
+		res, _, err := handleUpdateIndexes(context.Background(), nil, UpdateIndexesInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cacheLookups(t, textOf(res))
+	}
+	batch := func() int {
+		res, _, err := handleBatch(context.Background(), nil, BatchInput{Mode: BatchModeDev})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cacheLookups(t, textOf(res))
+	}
+	update()
+	if first, second := update(), update(); first == 0 || first != second {
+		t.Errorf("update_indexes cache lookups per call: %d then %d, want the same non-zero count", first, second)
+	}
+	batch()
+	if first, second := batch(), batch(); first == 0 || first != second {
+		t.Errorf("plugin_batch cache lookups per call: %d then %d, want the same non-zero count", first, second)
+	}
+}
+
+// TestCreateZip_EntriesKeepModTimeAndPermissions verifies that each archive entry carries its
+// file's modification time and, outside Windows, its permission bits.
+func TestCreateZip_EntriesKeepModTimeAndPermissions(t *testing.T) {
+	pluginPath := t.TempDir()
+	script := filepath.Join(pluginPath, "cli", "run.php")
+	mustMkdirAll(t, filepath.Dir(script))
+	mustWriteFile(t, script, "<?php\n")
+	if err := os.Chmod(script, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	modTime := time.Date(2024, 3, 9, 14, 30, 0, 0, time.UTC)
+	if err := os.Chtimes(script, modTime, modTime); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "out.zip")
+	if _, _, err := createZip(pluginPath, dest, "myplugin", excludedNames); err != nil {
+		t.Fatalf("createZip: %v", err)
+	}
+	r, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if f.Name != "myplugin/cli/run.php" {
+			continue
+		}
+		if !f.Modified.Equal(modTime) {
+			t.Errorf("entry modified %v, want %v", f.Modified, modTime)
+		}
+		if runtime.GOOS != "windows" && f.Mode().Perm() != 0o750 {
+			t.Errorf("entry mode %v, want 0750", f.Mode().Perm())
+		}
+		if f.Method != zip.Deflate {
+			t.Errorf("entry method %d, want Deflate", f.Method)
+		}
+		return
+	}
+	t.Fatal("myplugin/cli/run.php missing from the archive")
+}
+
+// TestHandleBatch_ParallelListProcessesEachPluginOnce verifies that a parallel list-mode batch whose
+// identifiers name the same plugin several times (as a component and as a path) processes every
+// plugin exactly once, in sorted path order, and generates all of its context files.
+func TestHandleBatch_ParallelListProcessesEachPluginOnce(t *testing.T) {
+	freshCache(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	moodlePath := t.TempDir()
+	mustWriteFile(t, filepath.Join(moodlePath, "version.php"),
+		"<?php\n$version = 2024100700.00;\n$release = '4.5';\n$branch = '405';\n")
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		dir := filepath.Join(moodlePath, "local", name)
+		mustMkdirAll(t, dir)
+		mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_"+name+"';\n$plugin->version = 2024010100;\n")
+	}
+	t.Setenv("BUILD82_MOODLE_PATH", moodlePath)
+
+	_, out, err := handleBatch(context.Background(), nil, BatchInput{
+		Mode:     BatchModeList,
+		Plugins:  []string{"local_gamma", "local/alpha", "local_alpha", "local_beta", "local/gamma"},
+		Parallel: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, p := range out.Plugins {
+		got = append(got, p.Component)
+		if p.Error != "" || p.Failed != 0 || p.Generated+p.Skipped != len(generators.PluginContextFiles) {
+			t.Errorf("%s: %+v", p.Component, p)
+		}
+	}
+	if want := []string{"local_alpha", "local_beta", "local_gamma"}; !slices.Equal(got, want) {
+		t.Errorf("processed %v, want %v", got, want)
 	}
 }

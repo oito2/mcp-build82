@@ -83,7 +83,7 @@ Claude Code asks each user to approve a project-scoped server the first time. Av
 claude mcp list
 ```
 
-`build82` must appear as connected (`claude mcp get build82` shows its details). Inside a session, run `/mcp` to see it with all 13 tools available. If it does not appear, see [Troubleshooting](#️-troubleshooting).
+`build82` must appear as connected (`claude mcp get build82` shows its details). Inside a session, run `/mcp` to see it with all 15 tools available. If it does not appear, see [Troubleshooting](#️-troubleshooting).
 
 ### 3. Remove
 

@@ -74,7 +74,7 @@ With the context files created, the MCP server exposes them to the AI client in 
 
 - **Tools** — the AI calls them explicitly to trigger actions (`init_moodle_context`, `search_api`, `get_plugin_info`, `watch_plugins`, etc.)
 - **Resources** — the AI reads them passively as context, without explicit user action (`moodle://api-index`, `moodle://plugin/{component}`, etc.)
-- **Prompts** — prebuilt templates that automatically inject context and guide the AI in complex tasks (`scaffold_plugin`, `review_plugin`, `debug_plugin`)
+- **Prompts** — prebuilt templates that automatically inject context and guide the AI in complex tasks (`scaffold_plugin`, `review_plugin`, `debug_plugin`, `upgrade_plugin`)
 
 ---
 

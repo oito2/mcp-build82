@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-build82/internal/extractors"
 )
 
 // TestCheckLangStringUsage_FlagsUndeclaredOwnString confirms a get_string() call naming a string
@@ -39,7 +41,7 @@ function local_test_render() {
 }
 `)
 
-	results := checkLangStringUsage([]string{pluginDir})
+	results := checkLangStringUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 {
 		t.Fatalf("expected exactly 1 result, got %d: %+v", len(results), results)
 	}
@@ -70,7 +72,7 @@ function local_test_render() {
 }
 `)
 
-	results := checkLangStringUsage([]string{pluginDir})
+	results := checkLangStringUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusOK {
 		t.Fatalf("expected a single OK result, got %+v", results)
 	}
@@ -92,7 +94,7 @@ function local_test_render() {
 }
 `)
 
-	results := checkLangStringUsage([]string{pluginDir})
+	results := checkLangStringUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusOK {
 		t.Fatalf("expected a single OK result (no own-component calls made), got %+v", results)
 	}
@@ -102,5 +104,33 @@ function local_test_render() {
 func TestCheckLangStringUsage_NoDevPlugins(t *testing.T) {
 	if results := checkLangStringUsage(nil); results != nil {
 		t.Errorf("expected nil with no dev plugins, got %+v", results)
+	}
+}
+
+// TestDoctorSourceScans_UseTheListedPhpFiles verifies that the capability and language-string
+// checks scan the *.php files listed once by loadDevPlugins instead of walking the plugin again:
+// a file created after the listing is not scanned.
+func TestDoctorSourceScans_UseTheListedPhpFiles(t *testing.T) {
+	pluginDir := filepath.Join(t.TempDir(), "local_test")
+	mustMkdirAll(t, filepath.Join(pluginDir, "lang", "en"))
+	mustWriteFile(t, filepath.Join(pluginDir, "version.php"), "<?php\n$plugin->component = 'local_test';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(pluginDir, "lang", "en", "local_test.php"), "<?php\n$string['pluginname'] = 'Test';\n")
+	plugins := loadDevPlugins("", []string{pluginDir})
+
+	mustWriteFile(t, filepath.Join(pluginDir, "late.php"), "<?php\n"+
+		"echo get_string('latekey', 'local_test');\n"+
+		"require_capability('local/test:latecap', $context);\n")
+	for name, results := range map[string][]checkResult{
+		"lang strings": checkLangStringUsage(plugins),
+		"capabilities": checkCapabilityUsage(plugins),
+	} {
+		for _, r := range results {
+			if strings.Contains(r.Detail, "late") {
+				t.Errorf("%s: a file missing from the listing was scanned: %+v", name, r)
+			}
+		}
+	}
+	if got := extractors.FindOwnGetStringCalls(pluginDir, "local_test"); len(got) != 1 {
+		t.Fatalf("test setup: expected the late file to hold one call, got %+v", got)
 	}
 }

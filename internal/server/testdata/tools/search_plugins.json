@@ -11,6 +11,11 @@
     "properties": {
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "limit": {
@@ -32,9 +37,11 @@
     "additionalProperties": false,
     "properties": {
       "fuzzy": {
+        "description": "True when no exact match existed and the matches come from fuzzy matching",
         "type": "boolean"
       },
       "matches": {
+        "description": "Matching rows of the plugin index, as Markdown table rows (Component | Type | Name | Version | Path)",
         "items": {
           "type": "string"
         },
@@ -44,6 +51,7 @@
         ]
       },
       "query": {
+        "description": "The query that was searched",
         "type": "string"
       }
     },

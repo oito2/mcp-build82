@@ -1,7 +1,6 @@
 # Backend benchmark
 
-Phase 10.3 (`.dev/docs/11-treesitter-implementation-phases.md`) — the regex-vs-tree-sitter latency
-cost the roadmap flagged as real, measured rather than assumed. Benchmark lives in
+The regex-vs-tree-sitter latency cost, measured rather than assumed. The benchmark lives in
 `internal/extractors/api_bench_test.go` (`BenchmarkExtractFunctionsFromPhpFile_Regex` /
 `_Treesitter`), run against the largest real file available in this environment:
 `/srv/workspace/www/html/mdle/dev-500/lib/moodlelib.php` (~10,136 lines). Skips gracefully if that
@@ -27,3 +26,19 @@ default (`10-treesitter-backend-plan.md` §3.3/§7) — a real, not hypothetical
 in exchange for the correctness improvements in `KNOWN_DIVERGENCES.md`. Users who want maximum
 correctness (e.g. auditing `deprecatedlib.php` for PHP 8 attribute-annotated functions, entry #9)
 can opt in per-run; everyone else keeps the regex backend's speed by default.
+
+## Large file: 1.1 MB `lib.php`
+
+`BenchmarkLargeLibPhp` (`largefile_test.go`) parses a synthetic `lib.php` of about 1.1 MB with
+21,001 top-level functions and runs both root-level scans on it: `ExtractFunctionsFromPhpFile` and
+`DetectLegacyCallbacks` (each parses the file once). Same machine,
+`GOMAXPROCS=4 go test -bench BenchmarkLargeLibPhp -benchtime=5x -benchmem`:
+
+| Version | Time for both scans | B/op | allocs/op |
+|---|---|---|---|
+| Child loops with `NamedChildCount`/`NamedChild(i)`, one root scan per legacy callback name | ~34.9 s (measured by `TestLargeLibPhp_ScansInLinearTime`) | — | — |
+| Single-pass `namedChildren`, top-level function names collected once | 705,927,171 ns (~0.71 s, ~0.35 s per parse) | 320,643,620 (~321 MB) | 45,677 |
+
+In gotreesitter `NamedChild(i)` and `NamedChildCount()` each walk all children, so a loop over
+them is quadratic in the number of children. `ParseFile` also refuses files over 2 MiB and parses
+with a 10-second timeout; a parse that stops early is an error, not a partial tree.

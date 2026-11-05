@@ -96,7 +96,7 @@ Troque `local_myplugin`, `local_relatorios` e nomes parecidos pelos seus própri
 - **Parâmetros esperados:** o plugin e, opcionalmente, um foco (segurança, desempenho, padrões de código, banco de dados, APIs do core ou tudo; um foco não reconhecido é rejeitado com um erro que lista os valores aceitos) e arquivos específicos.
 - **Exemplo:**
   > Faça uma revisão completa de código do local_myplugin com foco em segurança: verificações de capability ausentes, saída sem escape, parâmetros sem validação e SQL direto.
-- **Saída esperada:** o agente usa o prompt `review_plugin` (foco `security`) e carrega o contexto do plugin. Você recebe um relatório de achados organizado pela lista de critérios daquele foco, com uma correção sugerida para cada problema.
+- **Saída esperada:** o agente usa o prompt `review_plugin` (foco `security`) e carrega o contexto do plugin. Você recebe um relatório de achados organizado pela lista de critérios daquele foco, com uma correção sugerida para cada problema. Com foco `standards` ou numa revisão completa, quando o `phpcs` com o padrão moodle está instalado, o agente executa antes o `check_coding_style` e baseia os achados de padrão de código no relatório dele.
 
 ### Revisar apenas arquivos específicos
 
@@ -155,6 +155,13 @@ Troque `local_myplugin`, `local_relatorios` e nomes parecidos pelos seus própri
 - **Exemplo:**
   > Verifique se o local_myplugin tem callbacks legados no lib.php que foram substituídos pela Hook API no Moodle 4.3+ e mostre os passos de migração de cada um.
 - **Saída esperada:** o agente lê os callbacks e o contexto de hooks (recurso `/callbacks`), consulta o guia de plugins (`moodle://plugin-guide`) e `search_api` se preciso. Você recebe a lista de callbacks legados com o hook substituto e as mudanças de código.
+
+### Planejar um upgrade para um Moodle mais novo
+
+- **Parâmetros esperados:** o plugin e a versão do Moodle de destino (como 4.5 ou 5.0).
+- **Exemplo:**
+  > Planeje a migração do local_myplugin para o Moodle 4.5: o que precisa mudar e em que ordem?
+- **Saída esperada:** o agente usa o prompt `upgrade_plugin`. Ele recebe o `requires`/`supported` do plugin, as chamadas deprecated do core com arquivo e linha, os callbacks legados que têm substituto na Hook API e os achados dos passos de upgrade, e devolve um plano numerado (arquivo, mudança, motivo). Quando pedido, executa o plano editando o código e subindo a versão com o `bump_plugin_version`.
 
 ### Ler os índices de referência do Moodle
 
@@ -265,7 +272,21 @@ Troque `local_myplugin`, `local_relatorios` e nomes parecidos pelos seus própri
 - **Parâmetros esperados:** o plugin e as mudanças de esquema (novas colunas, índices, renomeações).
 - **Exemplo:**
   > O local_myplugin precisa de uma atualização de banco: adicionar a coluna "status" (tinyint, padrão 0) em local_myplugin_data, adicionar um índice em (userid, status) e renomear old_value para previous_value em local_myplugin_logs. Carregue o esquema atual e atualize db/upgrade.php, db/install.xml e version.php.
-- **Saída esperada:** o agente lê o esquema (`moodle://plugin/{component}/database`) e escreve o passo de upgrade, o `install.xml` atualizado e o `$plugin->version` incrementado.
+- **Saída esperada:** o agente lê o esquema (`moodle://plugin/{component}/database`), chama `bump_plugin_version` com `upgrade_step` para aumentar o `$plugin->version` e adicionar o passo com seu savepoint, depois preenche as mudanças de esquema do passo e atualiza o `install.xml`.
+
+### Subir a versão de um plugin
+
+- **Parâmetros esperados:** o plugin; opcionalmente a nova versão (dez dígitos), o release ou a maturity.
+- **Exemplo:**
+  > Suba a versão do local_myplugin, defina o release como 1.3.0 e a maturity como stable.
+- **Saída esperada:** o agente chama `bump_plugin_version`. Ele reescreve só as atribuições `$plugin->version`, `release` e `maturity` do `version.php` (a nova versão é, por padrão, a data de hoje como `YYYYMMDD00`, ou a atual + 1) e informa as versões antiga e nova. Ele recusa, sem escrever nada, quando uma atribuição falta, está duplicada ou não é um literal simples.
+
+### Subir a versão e adicionar um passo de upgrade
+
+- **Parâmetros esperados:** o plugin e, opcionalmente, uma descrição de uma linha da mudança.
+- **Exemplo:**
+  > Suba a versão do meu plugin e adicione um passo de upgrade para a nova tabela de relatórios.
+- **Saída esperada:** o agente chama `bump_plugin_version` com `upgrade_step` (e a descrição). Ele aumenta o `$plugin->version` e insere um bloco `if ($oldversion < V)` com corpo TODO e o savepoint correspondente ao tipo do plugin antes do `return true;` final do `db/upgrade.php` (criando o arquivo quando não existe). Em seguida, o agente pode escrever a criação da tabela no passo e adicioná-la ao `install.xml`; o `doctor` verifica o resultado.
 
 ### Empacotar um plugin para release
 
@@ -283,7 +304,7 @@ Troque `local_myplugin`, `local_relatorios` e nomes parecidos pelos seus própri
 - **Parâmetros esperados:** nenhum.
 - **Exemplo:**
   > Execute uma verificação completa de saúde do build82 e me diga o que precisa ser corrigido.
-- **Saída esperada:** o agente chama `doctor`. Você recebe as verificações de dependências do sistema (`php`, `ctags`, `git`), configuração, instalação do Moodle, atualidade dos índices globais, plugins em desenvolvimento, arquivos legados pendentes de migração, consistência entre plugins, uso de APIs obsoletas do core, verificações das próprias capabilities, uso das próprias strings de idioma e estatísticas de cache, mais um veredito geral.
+- **Saída esperada:** o agente chama `doctor`. Você recebe as verificações de dependências do sistema (`php`, `ctags`, `git`), configuração, instalação do Moodle, atualidade dos índices globais, plugins em desenvolvimento, arquivos legados pendentes de migração, consistência entre plugins, uso de APIs obsoletas do core, verificações das próprias capabilities, uso das próprias strings de idioma, consistência dos passos de upgrade, o provider de Privacy API e estatísticas de cache, mais um veredito geral.
 
 ### Encontrar uso de API obsoleta
 
@@ -298,6 +319,34 @@ Troque `local_myplugin`, `local_relatorios` e nomes parecidos pelos seus própri
 - **Exemplo:**
   > Verifique se meus plugins em desenvolvimento só checam capabilities que eles declaram e só usam strings de idioma que existem.
 - **Saída esperada:** `doctor` (seções de consistência de capabilities e de strings de idioma). Você recebe as entradas ausentes por plugin.
+
+### Verificar os passos de upgrade contra o install.xml
+
+- **Parâmetros esperados:** plugins em desenvolvimento marcados com `.indevelopment` que tenham `db/upgrade.php`.
+- **Exemplo:**
+  > Confira se os passos de upgrade do meu plugin batem com o install.xml e o version.php, e se cada passo tem o savepoint certo.
+- **Saída esperada:** `doctor` (seção de consistência de upgrade). Você recebe cada problema com a linha do `db/upgrade.php`: savepoints ausentes ou errados, passos fora de ordem ou mais novos que o `version.php`, e tabelas ou campos que os passos criam e que uma instalação nova (a partir do `install.xml`) não teria.
+
+### Verificar o provider de Privacy API
+
+- **Parâmetros esperados:** plugins em desenvolvimento marcados com `.indevelopment`.
+- **Exemplo:**
+  > Meu plugin declara corretamente os dados pessoais para a Privacy API?
+- **Saída esperada:** `doctor` (seção Privacy API). Ele avisa quando o `classes/privacy/provider.php` não existe, não implementa nenhuma interface de metadados ou é um `null_provider` embora uma tabela guarde dados de usuário (`userid`, `usermodified`, `relateduserid` ou chave estrangeira para `user`).
+
+### Verificar o padrão de código do Moodle
+
+- **Parâmetros esperados:** o plugin; opcionalmente se inclui avisos e quais arquivos. Requer o `phpcs` com o padrão `moodlehq/moodle-cs` instalado.
+- **Exemplo:**
+  > Verifique o local_myplugin contra o padrão de código do Moodle, incluindo avisos.
+- **Saída esperada:** `check_coding_style` (severity `warning`). Você recebe os totais de erros e avisos e, por arquivo, cada violação com linha, coluna, mensagem e o sniff do phpcs; o agente pode então corrigi-las (muitas são corrigíveis automaticamente com o `phpcbf`).
+
+### Verificar só os arquivos que alterei
+
+- **Parâmetros esperados:** o plugin e os arquivos (relativos ao plugin).
+- **Exemplo:**
+  > Rode a verificação de padrão de código do Moodle só em classes/external/get_report.php e lib.php do local_myplugin.
+- **Saída esperada:** `check_coding_style` com `files`. Só esses arquivos são verificados, apenas erros por padrão.
 
 ### Verificar consistência entre plugins
 

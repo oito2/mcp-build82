@@ -31,8 +31,7 @@ var keyedPatternCache sync.Map // string pattern -> *regexp.Regexp
 
 // CachedPattern compiles pattern on first use and returns the cached *regexp.Regexp on every
 // subsequent call with the same pattern string. Safe for concurrent use (backed by sync.Map), so
-// it's safe to share across goroutines serving concurrent requests (e.g. this server's --http
-// mode).
+// it can be shared by goroutines handling concurrent requests or running extractors in parallel.
 func CachedPattern(pattern string) *regexp.Regexp {
 	if v, ok := keyedPatternCache.Load(pattern); ok {
 		return v.(*regexp.Regexp)
@@ -210,6 +209,32 @@ func ExtractString(block, key string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(m[2], `\\`, `\`), `\"`, `"`)
 }
 
+// classConstExpr matches a `X::class` class-name constant, capturing the class name as written
+// (with or without a leading backslash).
+const classConstExpr = `(\\?[A-Za-z_][A-Za-z0-9_]*(?:\\[A-Za-z_][A-Za-z0-9_]*)*)\s*::\s*class\b`
+
+// ExtractStringOrClass extracts the value of `key` in `block` like ExtractString, and also accepts
+// the class-name forms Moodle documents for hook, event, task and service registrations:
+// `X::class` gives "X", `X::class . '::m'` gives "X::m", and `[X::class, 'm']` or `['X', 'm']`
+// (or the array(...) spelling) gives "X::m". The class name keeps its leading backslash when
+// written with one.
+func ExtractStringOrClass(block, key string) string {
+	if s := ExtractString(block, key); s != "" {
+		return s
+	}
+	k := `['"]` + regexp.QuoteMeta(key) + `['"]\s*=>\s*`
+	if m := cachedPattern(k + `(?:\[|array\s*\()\s*` + classConstExpr + `\s*,\s*['"](\w+)['"]\s*(?:\]|\))`).FindStringSubmatch(block); m != nil {
+		return m[1] + "::" + m[2]
+	}
+	if m := cachedPattern(k + `(?:\[|array\s*\()\s*['"]([^'"]+)['"]\s*,\s*['"](\w+)['"]\s*(?:\]|\))`).FindStringSubmatch(block); m != nil {
+		return UnescapeString(m[1]) + "::" + m[2]
+	}
+	if m := cachedPattern(k + classConstExpr + `(?:\s*\.\s*['"](::\w+)['"])?`).FindStringSubmatch(block); m != nil {
+		return m[1] + m[2]
+	}
+	return ""
+}
+
 // UnescapeString applies PHP single-quoted-string unescaping to raw string content already
 // stripped of its surrounding quotes: \\ -> \, then \' -> ' (order matters — a doubled backslash
 // must not be re-touched by the second replacement). Shared by every caller that extracts a raw
@@ -271,4 +296,40 @@ func SplitKeyedEntries(body string, keyPattern *regexp.Regexp) []KeyedBlock {
 		}
 	}
 	return entries
+}
+
+// Patterns of the PHP 8 attributes Moodle (4.4+) puts on hook classes: the label, the tags and the
+// legacy callbacks the hook replaces. The namespace may be written in full (\core\attribute\...),
+// or relative to an imported core namespace (attribute\...).
+var (
+	hookLabelAttrPattern    = regexp.MustCompile(`#\[\s*\\?(?:core\\)?attribute\\label\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")`)
+	hookTagsAttrPattern     = regexp.MustCompile(`#\[\s*\\?(?:core\\)?attribute\\tags\(([^)]*)\)`)
+	hookReplacesAttrPattern = regexp.MustCompile(`#\[\s*\\?(?:core\\)?attribute\\hook\\replaces_callbacks\(([^)]*)\)`)
+	quotedArgPattern        = regexp.MustCompile(`'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"`)
+)
+
+// HookAttributes reads the hook metadata a hook class declares through attributes in `content`:
+// the #[\core\attribute\label(...)] text, the #[\core\attribute\tags(...)] values, and the
+// #[\core\attribute\hook\replaces_callbacks(...)] callbacks joined with ", ". Each is empty when
+// the attribute is absent.
+func HookAttributes(content string) (label string, tags []string, replaces string) {
+	if m := hookLabelAttrPattern.FindStringSubmatch(content); m != nil {
+		label = UnescapeString(m[1] + m[2])
+	}
+	if m := hookTagsAttrPattern.FindStringSubmatch(content); m != nil {
+		tags = quotedArgs(m[1])
+	}
+	if m := hookReplacesAttrPattern.FindStringSubmatch(content); m != nil {
+		replaces = strings.Join(quotedArgs(m[1]), ", ")
+	}
+	return label, tags, replaces
+}
+
+// quotedArgs returns the quoted string literals of an argument list, unescaped, in order.
+func quotedArgs(args string) []string {
+	var out []string
+	for _, m := range quotedArgPattern.FindAllStringSubmatch(args, -1) {
+		out = append(out, UnescapeString(m[1]+m[2]))
+	}
+	return out
 }

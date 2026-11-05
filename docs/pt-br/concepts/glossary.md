@@ -144,15 +144,16 @@ Arquivo principal de contexto gerado pelo servidor dentro do `.build82/` de cada
 
 Template de prompt pré-construído exposto pelo servidor MCP que injeta automaticamente o contexto completo do Moodle e da instalação antes de executar uma tarefa. Diferente das Tools — que executam ações —, os Prompts orientam a IA sobre **como** realizar uma tarefa complexa, com exemplos e padrões específicos do Moodle.
 
-O `build82` expõe três prompts:
+O `build82` expõe quatro prompts:
 
 | Prompt            | Para que serve                                    |
 | ------------------ | ------------------------------------------------------ |
 | `scaffold_plugin` | Criar a estrutura completa de um novo plugin            |
 | `review_plugin`   | Revisar o código de um plugin com foco configurável     |
 | `debug_plugin`    | Depurar um erro com contexto completo do plugin         |
+| `upgrade_plugin`  | Planejar a migração de um plugin para um Moodle mais novo |
 
-Em clientes que expõem prompts MCP como slash commands (ex: Gemini Code Assist, modo Agent), eles estão disponíveis como `/scaffold_plugin`, `/review_plugin`, `/debug_plugin`.
+Em clientes que expõem prompts MCP como slash commands (ex: Gemini Code Assist, modo Agent), eles estão disponíveis como `/scaffold_plugin`, `/review_plugin`, `/debug_plugin`, `/upgrade_plugin`.
 
 → Veja: [Referência de Prompts](../reference/prompts.md)
 
@@ -170,17 +171,9 @@ Exemplos de URIs: `moodle://api-index`, `moodle://plugin/local_myplugin`, `moodl
 
 ## stdio
 
-Modo de transporte padrão do MCP em que o servidor roda como subprocesso do cliente de IA, comunicando-se via entrada e saída padrão (stdin/stdout). Não abre portas de rede. É o modo padrão do `build82` — rodá-lo sem flags já inicia em stdio.
+Modo de transporte padrão do MCP em que o servidor roda como subprocesso do cliente de IA, comunicando-se via entrada e saída padrão (stdin/stdout). Não abre portas de rede. É o único transporte do `build82`.
 
-→ Veja: [Arquitetura — Modos de transporte](./architecture.md#modos-de-transporte)
-
----
-
-## Streamable HTTP
-
-Modo de transporte alternativo do MCP (`build82 --http`) em que o servidor roda como serviço HTTP independente. Usado quando o Moodle está em uma máquina diferente da que executa o cliente de IA (ex: servidor remoto, ambiente Docker isolado). A autenticação via token Bearer (`--token` ou a variável de ambiente `BUILD82_TOKEN`) é opcional, mas fortemente recomendada.
-
-→ Veja: [Arquitetura — Modos de transporte](./architecture.md#modos-de-transporte) · [Docker](../guides/environments/docker.md)
+→ Veja: [Arquitetura — Transporte](./architecture.md#transporte)
 
 ---
 
@@ -188,7 +181,7 @@ Modo de transporte alternativo do MCP (`build82 --http`) em que o servidor roda 
 
 Função executável exposta pelo servidor MCP que o assistente de IA pode chamar explicitamente para realizar uma ação. Diferente dos Resources — que são lidos passivamente —, as Tools são invocadas sob demanda, geralmente em resposta a um pedido do usuário em linguagem natural.
 
-O `build82` expõe 13 tools:
+O `build82` expõe 15 tools:
 
 | Tool                      | O que faz                                                |
 | -------------------------- | -------------------------------------------------------------- |
@@ -204,6 +197,9 @@ O `build82` expõe 13 tools:
 | `doctor`                  | Diagnostica o ambiente e reporta saúde do servidor               |
 | `explain_plugin`          | Explica a arquitetura de um plugin por seção                    |
 | `release_plugin`          | Empacota um diretório de plugin em um ZIP distribuível           |
+| `create_plugin_skeleton`  | Materializa no disco a estrutura de diretórios de um novo plugin |
+| `bump_plugin_version`     | Aumenta a versão de um plugin e adiciona seu passo de upgrade    |
+| `check_coding_style`      | Verifica um plugin contra o padrão de código do Moodle (phpcs)   |
 
 → Veja: [Referência de Tools](../reference/tools.md)
 

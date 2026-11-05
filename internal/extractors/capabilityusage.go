@@ -33,16 +33,15 @@ type CapabilityCall struct {
 var capabilityCallPattern = regexp.MustCompile(`\b(?:has_capability|require_capability)\s*\(\s*['"]([^'"]+)['"]`)
 
 // CapabilityPrefix returns the prefix under which a plugin declares its own capabilities in
-// db/access.php, given its `pluginType`, `name` and frankenstyle `component`. For mod and block
-// plugins it is the slash form "type/name" (e.g. "mod/forum"); for every other type it is
-// `component` (e.g. "local_test").
-func CapabilityPrefix(pluginType, name, component string) string {
-	switch pluginType {
-	case "mod", "block":
-		return pluginType + "/" + name
-	default:
-		return component
+// db/access.php, given its frankenstyle `component`: the slash form "type/name" for every plugin
+// type (e.g. "mod/forum", "local/test", "assignsubmission/file"), the only form Moodle accepts for
+// a capability name. It returns "" when `component` has no type prefix.
+func CapabilityPrefix(component string) string {
+	pluginType, name, ok := strings.Cut(component, "_")
+	if !ok || pluginType == "" || name == "" {
+		return ""
 	}
+	return pluginType + "/" + name
 }
 
 // FindOwnCapabilityChecks walks `pluginPath` recursively for *.php files and returns every
@@ -50,12 +49,18 @@ func CapabilityPrefix(pluginType, name, component string) string {
 // `ownPrefix` followed by ":". Like FindDeprecatedApiUsage, it always uses a regex scan regardless
 // of BUILD82_EXTRACTOR_BACKEND.
 func FindOwnCapabilityChecks(pluginPath, ownPrefix string) []CapabilityCall {
+	return FindOwnCapabilityChecksIn(ListPhpFiles(pluginPath), ownPrefix)
+}
+
+// FindOwnCapabilityChecksIn is FindOwnCapabilityChecks over `files`, already listed with
+// ListPhpFiles.
+func FindOwnCapabilityChecksIn(files []PhpFile, ownPrefix string) []CapabilityCall {
 	prefix := ownPrefix + ":"
 
 	var calls []CapabilityCall
-	walkPhpFiles(pluginPath, func(absPath, relSlash string) {
-		calls = append(calls, scanFileForOwnCapabilityChecks(absPath, relSlash, prefix)...)
-	})
+	for _, f := range files {
+		calls = append(calls, scanFileForOwnCapabilityChecks(f.Path, f.Rel, prefix)...)
+	}
 	return calls
 }
 
@@ -72,13 +77,17 @@ func scanFileForOwnCapabilityChecks(path, relFile, prefix string) []CapabilityCa
 	// The pattern runs over the whole file rather than line by line so a literal on a different
 	// line than `has_capability(` still matches; the line number comes from the match's byte offset.
 	var calls []CapabilityCall
+	var lines lineIndex
 	for _, m := range capabilityCallPattern.FindAllStringSubmatchIndex(s, -1) {
 		capability := s[m[2]:m[3]]
 		if strings.HasPrefix(capability, prefix) {
+			if lines == nil {
+				lines = newLineIndex(s)
+			}
 			calls = append(calls, CapabilityCall{
 				Capability: capability,
 				File:       relFile,
-				Line:       strings.Count(s[:m[0]], "\n") + 1,
+				Line:       lines.line(m[0]),
 			})
 		}
 	}

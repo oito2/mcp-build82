@@ -337,7 +337,7 @@ Excluded from the archive:
 Instead of "analyze my plugin", prefer "load the context for `local_myplugin` and...". This ensures the AI uses the correct tool before responding.
 
 **Use prompts for complex tasks:**
-For scaffold, review, and debugging, the `scaffold_plugin`, `review_plugin`, and `debug_plugin` prompts inject additional context automatically. In clients that expose MCP prompts as slash commands (e.g. Gemini Code Assist's Agent mode), they're available that way too.
+For scaffold, review, debugging and migration, the `scaffold_plugin`, `review_plugin`, `debug_plugin` and `upgrade_plugin` prompts inject additional context automatically. In clients that expose MCP prompts as slash commands (e.g. Gemini Code Assist's Agent mode), they're available that way too.
 
 **Regenerate context after significant changes:**
 After adding new tables, classes, or callbacks, ask: _"Regenerate the context for local_myplugin."_ This keeps `PLUGIN_AI_CONTEXT.md` in sync with the current state of the code.
@@ -413,6 +413,6 @@ Last updated: 2025-01-15
 ## ➡️ Next Steps
 
 - [Tools Reference](../../reference/tools.md) — complete parameters for all tools
-- [Prompts Reference](../../reference/prompts.md) — details of scaffold_plugin, review_plugin, and debug_plugin
+- [Prompts Reference](../../reference/prompts.md) — details of scaffold_plugin, review_plugin, debug_plugin and upgrade_plugin
 - [Common Issues](../../troubleshooting/common-issues.md) — when something doesn't work as expected
 - [Back to Index](../../index.md)

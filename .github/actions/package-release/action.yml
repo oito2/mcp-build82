@@ -1,0 +1,36 @@
+name: Package a release
+description: >
+  Runs scripts/release for the given version, which writes the binaries, build82.mcpb,
+  checksums.txt and server.json into dist/; checks that the Linux binary reports that version; and
+  runs the self-update release contract test against dist/. Needs a checkout and Go on the runner.
+
+inputs:
+  version:
+    description: Release version passed to scripts/release (vMAJOR.MINOR.PATCH, or with a suffix when allow-prerelease is "true").
+    required: true
+  allow-prerelease:
+    description: '"true" to pass -allow-prerelease to scripts/release.'
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Build release artifacts
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        ALLOW_PRERELEASE: ${{ inputs.allow-prerelease }}
+      run: |
+        set -euo pipefail
+        flags=()
+        if [ "$ALLOW_PRERELEASE" = "true" ]; then
+          flags+=(-allow-prerelease)
+        fi
+        go run ./scripts/release "${flags[@]}" "$VERSION"
+        test "$(./dist/build82_linux_amd64 --version)" = "$VERSION"
+
+    # self-update can find every asset of dist/ and its checksum.
+    - name: Check the release contract
+      shell: bash
+      run: BUILD82_DIST_DIR="$PWD/dist" go test -run TestReleaseContract -v ./internal/selfupdate

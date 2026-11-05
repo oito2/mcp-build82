@@ -38,12 +38,12 @@ Run the same checks CI runs before opening a PR:
 gofmt -l .        # must print nothing
 go vet ./...
 GOOS=windows go vet ./... && GOOS=darwin go vet ./...
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
 GOOS=windows golangci-lint run ./... && GOOS=darwin golangci-lint run ./...   # with the same pinned binary
 go build ./...
 go test -race ./...
 BUILD82_EXTRACTOR_BACKEND=treesitter go test -race ./...
-go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 go mod tidy -diff
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 go run ./scripts/linkcheck
@@ -51,22 +51,26 @@ go run ./scripts/linkcheck
 
 All of them must be clean (the test suite runs once per extractor backend).
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs them on every push and pull request
-against `main` (on the newest Go 1.26.x patch) and will block merge otherwise:
+against `main` (on the newest Go 1.26.x patch) and will block merge otherwise. The `test` and
+`quality` jobs live in the reusable workflow
+[`.github/workflows/checks.yml`](.github/workflows/checks.yml), which the release workflow calls on
+the tagged commit too, so a release runs exactly the CI checks (on GitHub they show as
+`checks / test (…)` and `checks / quality`):
 
 | CI job | Runs on | Checks |
 | :--- | :--- | :--- |
-| `test` | `ubuntu-24.04`, `macos-latest`, `windows-latest` | vet, build, `go test -race` with both backends; on Linux also `gofmt`, golangci-lint and vet for `GOOS=windows`/`darwin` |
-| `quality` | `ubuntu-24.04` | `go mod tidy -diff`, actionlint, the documentation link checker, govulncheck, the coverage floor, and the test suite with `TMPDIR` behind a symbolic link (reproduces macOS's `/var` → `/private/var`) |
-| `release-contract` | `ubuntu-24.04` | `go run ./scripts/release -allow-prerelease v0.0.0-ci`, the self-update release contract test against that `dist/`, and `mcp-publisher validate` |
+| `test` | `ubuntu-24.04`, `macos-latest`, `windows-latest` | vet, build, `go test -race` with both backends; on Linux also `gofmt`, golangci-lint, vet for `GOOS=windows`/`darwin`, and the coverage floor (measured by the regex-backend run) |
+| `quality` | `ubuntu-24.04` | `go mod tidy -diff`, actionlint, the documentation link checker, govulncheck, and the test suite with `TMPDIR` behind a symbolic link (reproduces macOS's `/var` → `/private/var`) |
+| `release-contract` | `ubuntu-24.04` | The [`package-release`](.github/actions/package-release/action.yml) action (`go run ./scripts/release -allow-prerelease v0.0.0-ci`, the version check of the Linux binary, the self-update release contract test against that `dist/`) and the [`validate-release`](.github/actions/validate-release/action.yml) action (`server.json`'s `fileSha256` must match `build82.mcpb` in `checksums.txt`, then `mcp-publisher validate` and `mcpb validate` on copies outside `dist/`) |
 
 `golangci-lint` uses the repository's [`.golangci.yml`](.golangci.yml) (default linters, with the
 standard exclusions for unchecked `Close`/`fmt.Fprint*` errors) and must report `0 issues`. The
 `-race` flag needs cgo, i.e. a working C compiler on your machine; without one, use plain
 `go test ./...` locally and rely on CI for the race run.
 
-**Coverage floor:** the `quality` job measures the total statement coverage with
+**Coverage floor:** on Linux, the `test` job's regex-backend run measures the total statement coverage with
 `go test -race -coverprofile=cover.out -coverpkg=./... ./...` and fails when it is below
-`COVERAGE_FLOOR` in `ci.yml` (86.0% at v1.1.0, measured 86.7%). The floor may only go up: raise it
+`COVERAGE_FLOOR` in `checks.yml` (89.0% at v1.2.0, measured 89.2% without the real-Moodle tests). The floor may only go up: raise it
 when a release improves the coverage.
 
 **Tool schemas:** the input and output schemas and annotations of every MCP tool are kept as golden
@@ -80,6 +84,12 @@ need Unix-only behavior (FIFOs, `chmod` on directories, permission bits) skip th
 Windows; text files are checked out with LF line endings everywhere (see
 [`.gitattributes`](.gitattributes)).
 
+Some extractor, generator and server tests (the backend parity tests on real files, the tree-sitter
+end-to-end test and the benchmarks) read real Moodle installations named `mdle-401`, `mdle-405`,
+`mdle-500` and `mdle-uvv` under `/srv/workspace/localhost/html`; point `BUILD82_REAL_MOODLE_DIR` at
+the directory that holds yours. They skip themselves when an installation is absent, so CI runs
+without them — run them locally before changing an extractor or bumping the tree-sitter module.
+
 ### Pinned tool versions
 
 These versions are pinned in the workflows and are **not** updated by Dependabot (which bumps the
@@ -87,11 +97,12 @@ SHA-pinned actions and the Go modules weekly). Review them before each release:
 
 | Tool | Version | Where |
 | :--- | :--- | :--- |
-| golangci-lint | v2.14.0 | `GOLANGCI_LINT_VERSION` in `ci.yml` and `release.yml` |
-| govulncheck | v1.8.0 | `GOVULNCHECK_VERSION` in `ci.yml` and `release.yml` |
-| actionlint | v1.7.12 | `ACTIONLINT_VERSION` in `ci.yml` |
+| golangci-lint | v2.15.0 | `GOLANGCI_LINT_VERSION` in `checks.yml` |
+| govulncheck | v1.9.0 | `GOVULNCHECK_VERSION` in `checks.yml` |
+| actionlint | v1.7.12 | `ACTIONLINT_VERSION` in `checks.yml` |
 | mcp-publisher | v1.8.1 (+ tarball SHA-256) | [`.github/actions/install-mcp-publisher`](.github/actions/install-mcp-publisher/action.yml) |
-| cosign | v3.0.6 | `cosign-release` in `release.yml` |
+| `@anthropic-ai/mcpb` | 2.1.2 | `MCPB_VERSION` in [`.github/actions/validate-release`](.github/actions/validate-release/action.yml) |
+| cosign | v3.1.3 | `cosign-release` in `release.yml` |
 
 ## Project layout
 
@@ -106,8 +117,12 @@ SHA-pinned actions and the Go modules weekly). Review them before each release:
 - `internal/prompt/` — interactive CLI questions that stop at the first Ctrl-C.
 - `internal/config/`, `internal/cache/`, `internal/watcher/`, `internal/fsutil/` — foundational, no
   MCP dependency (`fsutil` also holds the regular-file-only readers used for plugin files).
-- `scripts/release/` — builds the release artifacts; `scripts/linkcheck/` — the documentation link
-  checker; `scripts/smoke/` — the real-client smoke test.
+- `scripts/release/` — builds the release artifacts (its tests also check the workflows' release
+  contract); `scripts/linkcheck/` — the documentation link checker (Markdown links and images, and
+  HTML `src`/`href` attributes); `scripts/smoke/` — the real-client smoke test.
+- `.github/workflows/` — `ci.yml`, `release.yml` and the shared `checks.yml`;
+  `.github/actions/` — the composite actions both workflows use (`package-release`,
+  `validate-release`, `install-mcp-publisher`).
 
 ## Making a change
 
@@ -173,12 +188,13 @@ go run ./scripts/release -allow-prerelease v0.0.0-ci   # CI and local dry runs
 
 This cross-compiles `build82` for every supported `GOOS`/`GOARCH` (linux/amd64, linux/arm64,
 darwin/amd64, darwin/arm64, windows/amd64, windows/arm64 — the list lives in
-`internal/selfupdate.ReleasePlatforms`) into `dist/`, with `-trimpath` and
+`internal/selfupdate.ReleasePlatforms`) into `dist/`, with `-trimpath`, `-buildvcs=false` and
 `-ldflags "-s -w -buildid= -X github.com/oito2/mcp-build82/internal/version.Current=vX.Y.Z"`, under
 a pinned environment (`CGO_ENABLED=0`, `GOAMD64=v1`, `GOARM64=v8.0`, empty `GOFLAGS` and
 `GOEXPERIMENT`). `-s -w` strip the symbol table and DWARF debug info (panic stack traces are kept),
-`-buildid=` and `-trimpath` make the build reproducible — the same Go patch produces byte-identical
-binaries locally and in CI — and `-X` makes the built binary report the right version
+`-buildid=`, `-trimpath` and `-buildvcs=false` (no git revision or modified-tree flag in the build
+info) make the build reproducible — the same Go patch produces byte-identical binaries locally and
+in CI, from a clean checkout, a modified one or a source tarball — and `-X` makes the built binary report the right version
 (`build82 --version`) so `self-update`'s semver comparison works against it. It then packages
 `dist/build82.mcpb`, an [MCPB](https://github.com/modelcontextprotocol/mcpb) desktop-extension
 bundle (manifest version 0.3) holding a universal macOS binary (the two darwin builds merged into
@@ -203,28 +219,44 @@ Release assets are named `build82_<os>_<arch>` (`.exe` on Windows), plus `build8
    [`CHANGELOG.md`](CHANGELOG.md) to the new version.
 2. Dry run locally: `go run ./scripts/release vX.Y.Z`, then `./dist/build82_linux_amd64 --version`,
    `BUILD82_DIST_DIR="$PWD/dist" go test -run TestReleaseContract ./internal/selfupdate`,
-   `mcp-publisher validate` (from `dist/`), and `npx @anthropic-ai/mcpb validate` on the extracted
-   bundle.
+   `mcp-publisher validate` (from `dist/`), and `npx @anthropic-ai/mcpb@2.1.2 validate` on the
+   `manifest.json` of the whole extracted bundle, since it also checks the icons (CI's
+   `release-contract` job runs the last two too).
 3. Run the real-client smoke test, [`scripts/smoke/claude.sh`](scripts/smoke/claude.sh): it builds
    build82, registers it for a single `claude -p --strict-mcp-config` session against a copy of
    `testdata/moodle` (or the Moodle root given as argument), asks Claude Code questions in natural
-   language that exercise the tools, and fails when an answer lacks its expected content. It catches
-   what the in-memory client cannot, such as what Claude Code actually shows the model.
+   language that exercise the tools and the `upgrade_plugin` prompt, and fails when a `claude` call
+   fails or an answer does not match its expected pattern. Questions whose answer could be a common
+   word or number (Moodle version, doctor verdict and section statuses, file count) ask for a fixed
+   `key=value` line, such as `upgrade=ok privacy=ok`, which is matched exactly. It needs `jq`. The
+   coding-style question runs only when `phpcs` with the moodle standard is on `PATH`, and the
+   version bump only on the fixture copy. It catches what the in-memory client cannot, such as what
+   Claude Code actually shows the model.
 4. Push to `main` **without the tag** and wait for CI to be green on the three operating systems; if
    it fails, fix it with a new commit (nothing was published).
 5. Push the `vX.Y.Z` tag. [`release.yml`](.github/workflows/release.yml) runs five jobs:
-   - `validate`: the tag must be exactly `vMAJOR.MINOR.PATCH`.
-   - `checks`: the CI checks on Linux, macOS and Windows, with no Go cache.
-   - `build` (read-only, no OIDC token): `go run ./scripts/release <tag>`, the version check of the
-     Linux binary, the release contract test on the real `dist/`, `mcp-publisher validate`, and an
-     upload of `dist/` as a workflow artifact (kept 7 days).
+   - `validate`: the tag must be exactly `vMAJOR.MINOR.PATCH`, and the tagged commit must be on
+     `main` (`git merge-base --is-ancestor`).
+   - `checks`: the reusable [`checks.yml`](.github/workflows/checks.yml) — the same checks as CI —
+     on Linux, macOS and Windows, with no Go cache.
+   - `build` (read-only, no OIDC token): the `package-release` action
+     (`go run ./scripts/release <tag>`, the version check of the Linux binary, the release contract
+     test on the real `dist/`), then the upload of `dist/` as a workflow artifact (kept 7 days), and
+     only then the `validate-release` action, so the third-party validators never run before the
+     artifact is uploaded and only see copies of the files.
    - `sign-publish` (the only job with `contents: write`, `id-token: write` and
-     `attestations: write`; it checks out no code): downloads the artifact, runs
-     `sha256sum --check --strict checksums.txt`, signs `checksums.txt` keylessly with cosign into
-     `checksums.txt.sigstore.json`, verifies that signature with the exact identity `self-update`
-     requires, records build provenance attestations for the binaries and the bundle, and creates
-     the GitHub release with `gh release create --generate-notes`.
-   - `publish-registry`: publishes the `server.json` attached to the release (see below).
+     `attestations: write`; it checks out no code and runs in the `release` environment): downloads
+     the artifact, runs `sha256sum --check --strict checksums.txt`, signs `checksums.txt` keylessly
+     with cosign into `checksums.txt.sigstore.json`, verifies that signature with the exact identity
+     `self-update` requires (`oito2/mcp-build82`'s `release.yml`, written out in the workflow),
+     records build provenance attestations for the binaries and the bundle, and creates the GitHub
+     release with `gh release create --generate-notes`. This job must stay in `release.yml`: the
+     signing certificate names the workflow file the job runs in.
+   - `publish-registry`: publishes the `server.json` of the same workflow artifact (see below).
+
+   Two repository settings complete the gate and are not in the workflows: protection rules for the
+   `release` environment (required reviewers, deployments from `v*` tags only), and a tag ruleset
+   restricting who may create `v*` tags.
 6. Check the release: `gh release view vX.Y.Z`, the MCP Registry search below, then download the
    assets and run `sha256sum -c --ignore-missing checksums.txt`,
    `gh attestation verify build82_linux_amd64 --repo oito2/mcp-build82` and
@@ -243,9 +275,13 @@ The `publish-registry` job of [`release.yml`](.github/workflows/release.yml) pub
 release automatically, with the official
 [`mcp-publisher`](https://modelcontextprotocol.io/registry/github-actions) CLI (version and tarball
 SHA-256 pinned in [`.github/actions/install-mcp-publisher`](.github/actions/install-mcp-publisher/action.yml)) authenticated through GitHub Actions OIDC
-(`mcp-publisher login github-oidc`, `id-token: write` permission, no secret needed). It runs only
-after the release exists, because the registry entry points at the release's `build82.mcpb` asset
-and at the tagged icons. If it fails, re-run just that job from the workflow run page.
+(`mcp-publisher login github-oidc`, `id-token: write` permission, no secret needed). It publishes the
+`server.json` of the `dist` workflow artifact the release was made from (whose digest
+`download-artifact` checks), not a copy downloaded from the release, after checking every file
+against `checksums.txt`, the `fileSha256` against the `build82.mcpb` line of `checksums.txt`, and
+the version against the tag. It runs only after the release exists, because the registry entry
+points at the release's `build82.mcpb` asset and at the tagged icons. If it fails, re-run just that
+job from the workflow run page while the artifact exists (7 days).
 
 To publish by hand instead (for example after a manual release), use the `oito2` GitHub account,
 which the `io.github.oito2/` namespace requires:

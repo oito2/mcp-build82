@@ -18,6 +18,7 @@ package resources
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -89,5 +90,35 @@ func TestPluginsWithContextRows_KeepsOnlyCurrentRoot(t *testing.T) {
 	defer pluginsWithContextCacheMu.Unlock()
 	if _, ok := pluginsWithContextCache[a]; ok || len(pluginsWithContextCache) != 1 {
 		t.Errorf("expected only the latest root cached, got %d entries", len(pluginsWithContextCache))
+	}
+}
+
+// TestPluginsWithContextRows_SkipsGitAndLinkedContextFiles verifies that the with-context listing
+// finds context files with the same walk as the tools: a copy under .git/ and a context file that
+// is a symbolic link are not listed.
+func TestPluginsWithContextRows_SkipsGitAndLinkedContextFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symbolic links needs extra privileges on Windows")
+	}
+	root := t.TempDir()
+	write := func(rel string) string {
+		dir := filepath.Join(root, rel)
+		mustMkdirAll(t, filepath.Join(dir, ".build82"))
+		mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_"+filepath.Base(rel)+"';\n$plugin->version = 2024010100;\n")
+		return dir
+	}
+	real := write(filepath.Join("local", "real"))
+	mustWriteFile(t, filepath.Join(real, ".build82", "PLUGIN_AI_CONTEXT.md"), "# ctx\n")
+	gitCopy := write(filepath.Join(".git", "local", "gitcopy"))
+	mustWriteFile(t, filepath.Join(gitCopy, ".build82", "PLUGIN_AI_CONTEXT.md"), "# ctx\n")
+	linked := write(filepath.Join("local", "linked"))
+	if err := os.Symlink(filepath.Join(real, ".build82", "PLUGIN_AI_CONTEXT.md"), filepath.Join(linked, ".build82", "PLUGIN_AI_CONTEXT.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	InvalidatePluginsWithContext()
+	rows := pluginsWithContextRows(root)
+	if len(rows) != 1 || rows[0].component != "local_real" {
+		t.Errorf("rows = %+v, want only local_real", rows)
 	}
 }

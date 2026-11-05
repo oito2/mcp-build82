@@ -11,6 +11,11 @@
     "properties": {
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       }
     },
@@ -22,20 +27,26 @@
     "properties": {
       "cache": {
         "additionalProperties": false,
+        "description": "Cache counters and on-disk cache file; omitted when the report stopped early",
         "properties": {
           "file": {
+            "description": "Absolute path of the on-disk cache file, when it exists",
             "type": "string"
           },
           "file_bytes": {
+            "description": "Size of the on-disk cache file in bytes",
             "type": "integer"
           },
           "hits": {
+            "description": "Cache hits since the server started",
             "type": "integer"
           },
           "misses": {
+            "description": "Cache misses since the server started",
             "type": "integer"
           },
           "skips": {
+            "description": "Generations skipped because their output was fresh",
             "type": "integer"
           }
         },
@@ -50,16 +61,20 @@
         ]
       },
       "capability_usage": {
+        "description": "Consistency between the capabilities each plugin defines and checks",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -75,16 +90,20 @@
         ]
       },
       "configuration": {
+        "description": "build82 configuration checks",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -100,16 +119,20 @@
         ]
       },
       "cross_plugin_consistency": {
+        "description": "Consistency checks across the development plugins",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -125,16 +148,20 @@
         ]
       },
       "deprecated_api_usage": {
+        "description": "Calls to deprecated core functions found in the development plugins",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -150,20 +177,25 @@
         ]
       },
       "development_plugins": {
+        "description": "Per .indevelopment plugin, the freshness of its context files",
         "items": {
           "additionalProperties": false,
           "properties": {
             "checks": {
+              "description": "Freshness checks of the plugin's generated context files",
               "items": {
                 "additionalProperties": false,
                 "properties": {
                   "detail": {
+                    "description": "Human-readable detail of the result",
                     "type": "string"
                   },
                   "label": {
+                    "description": "What was checked",
                     "type": "string"
                   },
                   "status": {
+                    "description": "Result of the check: ok, warn or fail",
                     "type": "string"
                   }
                 },
@@ -179,6 +211,7 @@
               ]
             },
             "component": {
+              "description": "Frankenstyle component of the development plugin",
               "type": "string"
             }
           },
@@ -194,16 +227,20 @@
         ]
       },
       "global_index_files": {
+        "description": "Freshness of the global index files",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -219,19 +256,24 @@
         ]
       },
       "hint": {
+        "description": "What to do next when the report stopped early",
         "type": "string"
       },
       "lang_string_usage": {
+        "description": "Consistency between the language strings each plugin defines and uses",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -247,16 +289,20 @@
         ]
       },
       "legacy_files": {
+        "description": "Generated files still outside .build82/ that a generation would migrate",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -272,16 +318,49 @@
         ]
       },
       "moodle_installation": {
+        "description": "Checks of the configured Moodle installation",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "privacy_api": {
+        "description": "Whether each plugin's Privacy API provider exists and matches the user data its tables store",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "description": "Human-readable detail of the result",
+              "type": "string"
+            },
+            "label": {
+              "description": "What was checked",
+              "type": "string"
+            },
+            "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -297,16 +376,49 @@
         ]
       },
       "system_dependencies": {
+        "description": "Optional external tools (php, ctags, git, phpcs)",
         "items": {
           "additionalProperties": false,
           "properties": {
             "detail": {
+              "description": "Human-readable detail of the result",
               "type": "string"
             },
             "label": {
+              "description": "What was checked",
               "type": "string"
             },
             "status": {
+              "description": "Result of the check: ok, warn or fail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "upgrade_consistency": {
+        "description": "Consistency between each plugin's db/upgrade.php steps, db/install.xml and version.php",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "description": "Human-readable detail of the result",
+              "type": "string"
+            },
+            "label": {
+              "description": "What was checked",
+              "type": "string"
+            },
+            "status": {
+              "description": "Result of the check: ok, warn or fail",
               "type": "string"
             }
           },
@@ -322,6 +434,7 @@
         ]
       },
       "verdict": {
+        "description": "Worst status found across the check sections: ok, warn or fail",
         "type": "string"
       }
     },
@@ -336,6 +449,8 @@
       "deprecated_api_usage",
       "capability_usage",
       "lang_string_usage",
+      "upgrade_consistency",
+      "privacy_api",
       "verdict"
     ],
     "type": "object"

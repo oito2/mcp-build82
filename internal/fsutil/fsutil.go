@@ -15,8 +15,10 @@
 
 // Package fsutil holds small file-I/O helpers shared by the rest of build82: reading a file while
 // treating its absence as an empty/optional state, opening and reading only regular files (never a
-// FIFO, device or symbolic link), creating parent dirs then writing atomically, renaming with a
-// retry for files briefly locked on Windows, and syncing a directory after a rename.
+// FIFO, device or symbolic link), walking a tree for the files with a given suffix (symbolic links
+// skipped), creating parent dirs then writing atomically, refusing symlinked
+// output directories, renaming with a retry for files briefly locked on Windows, and syncing a
+// directory after a rename.
 package fsutil
 
 import (
@@ -26,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // ReadOptional reads the file at `path`. It returns (content, true, nil) on success and
@@ -44,10 +47,25 @@ func ReadOptional(path string) (content []byte, ok bool, err error) {
 }
 
 // WriteAtomic writes `data` to `path` with permissions `perm`, creating the parent directory
-// (mode derived from `perm`: execute bits added wherever read bits are set) if needed. The data goes to a temp file in the same directory, which is then renamed
-// into place, so `path` never holds a truncated file if the process dies mid-write. It returns an
-// error if directory creation, writing, chmod or rename fails; the temp file is removed on failure.
+// (mode derived from `perm`: execute bits added wherever read bits are set) if needed. The data goes
+// to a temp file in the same directory, which is flushed to disk and then renamed into place (with
+// the Windows retry of Rename), and the directory is synced, so `path` never holds a truncated file
+// and the new content survives a crash. A symbolic link at `path` is replaced, not followed. It
+// returns an error if directory creation, writing, syncing, chmod or rename fails; the temp file is
+// removed on failure.
 func WriteAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeReplacing(path, data, perm, true)
+}
+
+// WriteReplace is WriteAtomic without flushing to disk: readers never see a partial file and a
+// symbolic link at `path` is replaced, not followed, but a crash may leave the previous content.
+// It is meant for files that are regenerated on demand, where an fsync per file would be costly.
+func WriteReplace(path string, data []byte, perm os.FileMode) error {
+	return writeReplacing(path, data, perm, false)
+}
+
+// writeReplacing implements WriteAtomic (`durable` true) and WriteReplace (`durable` false).
+func writeReplacing(path string, data []byte, perm os.FileMode, durable bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, perm.Perm()|(perm.Perm()&0o444)>>2); err != nil {
 		return err
@@ -63,13 +81,39 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		tmp.Close()
 		return err
 	}
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			tmp.Close()
+			return err
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := renameFile(tmpName, path); err != nil {
+		return err
+	}
+	if durable {
+		SyncDir(dir)
+	}
+	return nil
+}
+
+// ErrSymlinkedDir reports a directory build82 writes its own files into that is a symbolic link.
+var ErrSymlinkedDir = errors.New("symbolic links are not followed for writes")
+
+// RefuseSymlinkedDir returns an error wrapping ErrSymlinkedDir, naming only the last element of
+// `dir`, when `dir` exists and is a symbolic link; otherwise (including when `dir` does not exist)
+// it returns nil. Writers call it on their output directory so a link planted there cannot redirect
+// their files outside the tree.
+func RefuseSymlinkedDir(dir string) error {
+	if fi, err := os.Lstat(dir); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link: %w", filepath.Base(dir), ErrSymlinkedDir)
+	}
+	return nil
 }
 
 // Rename renames `oldpath` to `newpath` like os.Rename. On Windows a rename blocked by another
@@ -130,18 +174,51 @@ func OpenRegular(path string) (*os.File, error) {
 }
 
 // ReadRegular returns the content of the regular file at `path`, opened with OpenRegular. When
-// `maxSize` is positive, a file larger than that many bytes is refused. It returns the error of
-// OpenRegular, a size error, or the read error.
+// `maxSize` is positive, a file larger than that many bytes is refused: from its size before
+// reading, and also when it grew past the limit while being read, since at most maxSize+1 bytes
+// are read. It returns the error of OpenRegular, a size error, or the read error.
 func ReadRegular(path string, maxSize int64) ([]byte, error) {
 	f, err := OpenRegular(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	if maxSize > 0 {
-		if info, err := f.Stat(); err == nil && info.Size() > maxSize {
-			return nil, fmt.Errorf("file %s exceeds max readable size (%d > %d bytes)", path, info.Size(), maxSize)
-		}
+	if maxSize <= 0 {
+		return io.ReadAll(f)
 	}
-	return io.ReadAll(f)
+	if info, err := f.Stat(); err == nil && info.Size() > maxSize {
+		return nil, fmt.Errorf("file %s exceeds max readable size (%d > %d bytes)", path, info.Size(), maxSize)
+	}
+	return readLimited(f, path, maxSize)
+}
+
+// readLimited reads `r`, the content of the file at `path`, reading at most maxSize+1 bytes, and
+// returns a size error when there are more than maxSize.
+func readLimited(r io.Reader, path string, maxSize int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxSize {
+		return nil, fmt.Errorf("file %s exceeds max readable size (more than %d bytes)", path, maxSize)
+	}
+	return data, nil
+}
+
+// WalkFiles walks `root` recursively and calls `visit` for every file whose name ends with
+// `suffix` (such as ".php"), passing its full path and its path relative to `root` with forward
+// slashes. Directories, entries that cannot be read and symbolic links are skipped: a planted link
+// would otherwise make a scanner read its target, possibly outside the tree.
+func WalkFiles(root, suffix string, visit func(path, relSlash string)) {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(d.Name(), suffix) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		visit(path, filepath.ToSlash(rel))
+		return nil
+	})
 }

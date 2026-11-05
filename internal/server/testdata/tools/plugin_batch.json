@@ -15,6 +15,11 @@
       },
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "mark_as_dev": {
@@ -23,6 +28,12 @@
       },
       "mode": {
         "description": "'dev' (default) — only .indevelopment plugins. 'all' — every plugin. 'list' — plugins in the plugins parameter.",
+        "enum": [
+          "",
+          "dev",
+          "all",
+          "list"
+        ],
         "type": "string"
       },
       "parallel": {
@@ -47,28 +58,36 @@
     "additionalProperties": false,
     "properties": {
       "mode": {
+        "description": "Plugin selection used: dev, all or list",
         "type": "string"
       },
       "plugins": {
+        "description": "One entry per processed plugin, in processing order",
         "items": {
           "additionalProperties": false,
           "properties": {
             "component": {
+              "description": "Frankenstyle component of the plugin",
               "type": "string"
             },
             "error": {
+              "description": "Why processing of this plugin aborted, when it did",
               "type": "string"
             },
             "failed": {
+              "description": "Number of context files that could not be generated",
               "type": "integer"
             },
             "generated": {
+              "description": "Number of context files written",
               "type": "integer"
             },
             "path": {
+              "description": "Plugin directory relative to the Moodle root",
               "type": "string"
             },
             "skipped": {
+              "description": "Number of context files served from the cache",
               "type": "integer"
             }
           },

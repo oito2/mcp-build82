@@ -16,8 +16,11 @@
 package toolutil
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -56,5 +59,20 @@ func TestNotInitialized_ReturnsFreshInstanceEachCall(t *testing.T) {
 	a.Content = append(a.Content, &mcp.TextContent{Text: "mutated"})
 	if len(b.Content) != 1 {
 		t.Errorf("mutating one call's result must not affect another call's result, got len(b.Content)=%d", len(b.Content))
+	}
+}
+
+// TestReadFileTruncated_DoesNotSplitACharacter verifies that a cut falling inside a multi-byte
+// UTF-8 character drops that character, and that a cut on a character boundary keeps it.
+func TestReadFileTruncated_DoesNotSplitACharacter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.md")
+	if err := os.WriteFile(path, []byte("ab€cd"), 0o644); err != nil { // € is 3 bytes
+		t.Fatal(err)
+	}
+	for maxChars, want := range map[int]string{2: "ab", 3: "ab", 4: "ab", 5: "ab€", 7: "ab€cd"} {
+		got := ReadFileTruncated(path, maxChars)
+		if got != want || !utf8.ValidString(got) {
+			t.Errorf("maxChars=%d: got %q, want %q", maxChars, got, want)
+		}
 	}
 }

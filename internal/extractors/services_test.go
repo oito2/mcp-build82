@@ -125,7 +125,7 @@ func TestParseServicesPhp_TreesitterBackendParity(t *testing.T) {
 func TestParseServicesPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

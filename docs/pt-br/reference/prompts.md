@@ -10,7 +10,7 @@ Os **Prompts MCP** são templates especializados que combinam instruções preci
 
 ## Como os Prompts funcionam
 
-Cada prompt retorna uma sequência fixa de três mensagens:
+`scaffold_plugin`, `review_plugin` e `debug_plugin` retornam uma sequência fixa de três mensagens (o `upgrade_plugin` retorna só o pedido montado, como uma única mensagem `user`):
 
 | # | Role | Conteúdo |
 |---|------|---------|
@@ -27,8 +27,8 @@ Não há mensagem de sistema. O contexto é lido dos arquivos gerados no momento
 | Tipos dos argumentos | Todos os argumentos são strings |
 | Argumentos obrigatórios | Validados pelo servidor. Um argumento obrigatório ausente ou em branco retorna um erro JSON-RPC `invalid params`: `missing required argument(s): <nomes>` |
 | Limite de texto livre | `description`, `features`, `files`, `error` e `context` são truncados em 20.000 bytes, com `...(truncated)` ao final |
-| Não inicializado | Os prompts nunca exigem inicialização. Sem configuração, a versão do Moodle e o contexto da raiz do Moodle (ex.: `MOODLE_DEV_RULES.md`) são omitidos. Para `review_plugin` e `debug_plugin`, o argumento `plugin` passa a ser usado como caminho no sistema de arquivos, tal como informado (absoluto, ou relativo ao diretório de trabalho do servidor): se esse diretório tiver arquivos `.build82/PLUGIN_*.md`, eles são lidos e injetados, e os metadados do plugin são detectados, sem verificação de raiz do Moodle |
-| Resolução do plugin | `review_plugin` e `debug_plugin` resolvem `plugin` como component (`local_mytools`), caminho relativo ou caminho absoluto; se o resultado estiver fora da raiz do Moodle, ele não é lido |
+| Não inicializado | Os prompts nunca exigem inicialização. Sem configuração, a versão do Moodle e o contexto da raiz do Moodle (ex.: `MOODLE_DEV_RULES.md`) são omitidos. Para `review_plugin` e `debug_plugin`, o argumento `plugin` passa a ser usado como caminho no sistema de arquivos, tal como informado (absoluto, ou relativo ao diretório de trabalho do servidor): se esse diretório tiver arquivos `.build82/PLUGIN_*.md`, eles são lidos e injetados, e os metadados do plugin são detectados, sem verificação de raiz do Moodle. O `upgrade_plugin` então mostra só os metadados detectados e substitui a análise do plugin por um aviso "Not available" |
+| Resolução do plugin | `review_plugin`, `debug_plugin` e `upgrade_plugin` resolvem `plugin` como component (`local_mytools`), caminho relativo ou caminho absoluto; se o resultado estiver fora da raiz do Moodle, ele não é lido |
 | Efeitos colaterais | Nenhum (somente leitura) |
 | Panics | Retornados como erro: `internal error while rendering this prompt: <causa>` |
 
@@ -104,7 +104,7 @@ Execute o review_plugin no plugin local_mytools com foco em segurança
 e padrões de código Moodle.
 ```
 
-**A mensagem 3 contém:** uma tabela (component, versão do Moodle, tipo, versão, foco; valores vazios omitidos); os primeiros 3.000 bytes do `PLUGIN_AI_CONTEXT.md` do plugin (se gerado); os primeiros 1.500 bytes de `MOODLE_DEV_RULES.md` (se disponível); os critérios de revisão; instruções; e o formato de saída (`## Issue N — {Severity}` com Critical/High/Medium/Low, depois um `## Summary`).
+**A mensagem 3 contém:** uma tabela (component, versão do Moodle, tipo, versão, foco; valores vazios omitidos); os primeiros 3.000 bytes do `PLUGIN_AI_CONTEXT.md` do plugin (se gerado); os primeiros 1.500 bytes de `MOODLE_DEV_RULES.md` (se disponível); os critérios de revisão; instruções — com foco `all` ou `standards`, quando o `phpcs` com o padrão moodle está disponível (verificado no máximo uma vez por minuto), elas pedem antes ao agente que execute a tool `check_coding_style` e baseie os achados de padrão de código no relatório dela; e o formato de saída (`## Issue N — {Severity}` com Critical/High/Medium/Low, depois um `## Summary`).
 
 → Exemplos práticos: [Prompts de Revisão](../prompts.md#revisar-um-plugin)
 
@@ -156,12 +156,47 @@ Sem correspondência, usam-se três dicas genéricas (ativar debug DEVELOPER, ch
 
 ---
 
+### `upgrade_plugin`
+
+Monta um pedido de plano de migração para fazer um plugin existente funcionar numa versão mais nova do Moodle.
+
+**Argumentos:**
+
+| Argumento | Tipo | Obrigatório | Descrição |
+|----------|------|:--------:|-------------|
+| `plugin` | string | ✅ | Component (`local_mytools`), caminho relativo ou caminho absoluto |
+| `target_version` | string | ✅ | Versão do Moodle de destino: `major.minor` com número de patch opcional (`4.5`, `5.0`, `4.5.3`), sem espaços nas pontas; qualquer outro valor é rejeitado com um erro JSON-RPC invalid-params, `invalid target_version "<valor>": expected a Moodle release such as 4.5 or 5.0`. O número do branch (`4.5` → `405`, `5.0` → `500`) é usado para o `$plugin->supported` |
+
+**Como usar:**
+
+```
+/upgrade_plugin plugin="local_mytools" target_version="4.5"
+```
+
+```
+Use o upgrade_plugin para planejar a migração do local_mytools para o Moodle 5.0.
+```
+
+**Análise do plugin** — só quando o build82 está configurado e o `plugin` resolve para um diretório com `version.php` dentro da raiz do Moodle; caso contrário, uma única seção "Not available" a substitui:
+
+| Seção | Origem |
+|---------|--------|
+| Deprecated Core API Calls | Chamadas diretas no PHP do plugin a funções marcadas `@deprecated` no Moodle instalado (o índice `MOODLE_API_INDEX.md`, ou o código do core quando ele não existe) — os mesmos dados do Deprecated Core API Usage do `doctor`; tabela `File \| Line \| Function`, no máximo 100 linhas, depois `...and N more.` |
+| Legacy Callbacks With a Hook API Replacement | Callbacks do `lib.php` que têm substituto na Hook API, com o hook substituto e a orientação de migração |
+| Upgrade-Step Findings | As verificações Upgrade Consistency do `doctor` para este plugin (`db/upgrade.php` contra `db/install.xml` e `version.php`), no máximo 50, depois `...and N more.` |
+
+**A única mensagem contém:** uma tabela (component, tipo, versão do plugin, `$plugin->requires`, `$plugin->supported`, versão do Moodle instalado, versão de destino e branch; valores vazios omitidos); os primeiros 2.000 bytes do `PLUGIN_AI_CONTEXT.md` (se gerado); a análise do plugin; notas — a lista de deprecated reflete o Moodle **instalado**, não o de destino, e as notas de upgrade do destino são o `UPGRADING.md` da raiz do Moodle a partir do 4.5, e o `lib/upgrade.txt` e o `upgrade.txt` de cada componente antes disso; as instruções (ajustar `requires`/`supported`, substituir chamadas deprecated, levar callbacks legados para a Hook API, corrigir os achados, subir a versão com o `bump_plugin_version`, verificar com o `doctor` e o `check_coding_style`); e o formato de saída (um plano numerado com **File**, **Change** e **Reason**, depois riscos e o que testar).
+
+→ Exemplos práticos: [Planejar um upgrade para um Moodle mais novo](../prompts.md#planejar-um-upgrade-para-um-moodle-mais-novo)
+
+---
+
 ## Como chamar um prompt por cliente
 
 | Cliente | Como invocar |
 |---------|-------------|
 | **Claude Code** | Em linguagem natural: _"Use o scaffold_plugin para..."_ ou com a sintaxe de parâmetros diretamente no chat |
-| **Gemini Code Assist (Agent Mode)** | Slash command: `/scaffold_plugin`, `/review_plugin`, `/debug_plugin` — com autocomplete de parâmetros |
+| **Gemini Code Assist (Agent Mode)** | Slash command: `/scaffold_plugin`, `/review_plugin`, `/debug_plugin`, `/upgrade_plugin` — com autocomplete de parâmetros |
 | **OpenAI Codex** | Em linguagem natural no chat, citando o nome do prompt: _"Execute o scaffold_plugin com type='local'..."_ |
 | **OpenCode** | Em linguagem natural no chat, citando o nome do prompt: _"Use o review_plugin com foco em segurança..."_ |
 | **Antigravity CLI** | A sintaxe de slash command também funciona: `/scaffold_plugin type="local" name="..."` |
@@ -185,7 +220,7 @@ Se você quiser adicionar prompts customizados ao servidor (em `internal/prompts
 
 - [Referência de Tools](./tools.md) — ações executáveis pela IA
 - [Referência de Resources](./resources.md) — dados lidos passivamente
-- [Exemplos de uso](../guides/workflows/examples.md) — cenários reais com os três prompts em ação
+- [Exemplos de uso](../guides/workflows/examples.md) — cenários reais com os prompts em ação
 
 ---
 

@@ -1,0 +1,46 @@
+name: Validate release metadata
+description: >
+  Checks that dist/server.json describes the dist/build82.mcpb listed in dist/checksums.txt, then
+  validates a copy of server.json against the MCP Registry schema (mcp-publisher) and the manifest
+  of an extracted copy of the bundle against the MCPB schema, icons included (@anthropic-ai/mcpb). The third-party validators
+  only see the copies under $RUNNER_TEMP/validate-release, never dist/. Needs a checkout (for the
+  install-mcp-publisher action), Node.js with npx, jq and unzip on the runner.
+
+runs:
+  using: composite
+  steps:
+    - name: server.json must describe the bundle in checksums.txt
+      shell: bash
+      working-directory: dist
+      run: |
+        set -euo pipefail
+        want="$(awk '$2 == "build82.mcpb" { print $1 }' checksums.txt)"
+        got="$(jq -r '.packages[0].fileSha256' server.json)"
+        if [ -z "$want" ] || [ "$got" != "$want" ]; then
+          echo "::error::server.json fileSha256 '$got' does not match build82.mcpb in checksums.txt ('$want')"
+          exit 1
+        fi
+
+    - name: Copy the files to validate
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf "$RUNNER_TEMP/validate-release"
+        mkdir -p "$RUNNER_TEMP/validate-release/mcpb"
+        cp dist/server.json "$RUNNER_TEMP/validate-release/server.json"
+        # The whole bundle: mcpb validate also checks the icon files the manifest names.
+        unzip -q dist/build82.mcpb -d "$RUNNER_TEMP/validate-release/mcpb"
+
+    - name: Install mcp-publisher
+      uses: ./.github/actions/install-mcp-publisher
+
+    - name: Validate server.json against the MCP Registry schema
+      shell: bash
+      run: cd "$RUNNER_TEMP/validate-release" && "$RUNNER_TEMP/mcp-publisher" validate
+
+    - name: Validate the MCPB manifest
+      shell: bash
+      env:
+        # @anthropic-ai/mcpb release the manifest is validated with.
+        MCPB_VERSION: 2.1.2
+      run: cd "$RUNNER_TEMP/validate-release" && npx --yes "@anthropic-ai/mcpb@${MCPB_VERSION}" validate mcpb/manifest.json

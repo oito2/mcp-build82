@@ -19,20 +19,23 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// TestTargetByID verifies lookup of known and unknown target IDs.
-func TestTargetByID(t *testing.T) {
-	if _, ok, err := targetByID("claude"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	} else if !ok {
-		t.Error("expected 'claude' target to exist")
+// TestLookupTarget verifies lookup of known and unknown target IDs, and that the error for an
+// unknown one lists the supported IDs.
+func TestLookupTarget(t *testing.T) {
+	ts, err := targets()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok, err := targetByID("nonexistent"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	} else if ok {
-		t.Error("expected 'nonexistent' target to not exist")
+	if tg, err := lookupTarget(ts, "claude"); err != nil || tg.ID != "claude" {
+		t.Errorf("lookupTarget(claude) = %q, %v", tg.ID, err)
+	}
+	_, err = lookupTarget(ts, "nonexistent")
+	if err == nil || !strings.Contains(err.Error(), `unknown target "nonexistent"`) || !strings.Contains(err.Error(), "claude, ") {
+		t.Errorf("lookupTarget(nonexistent) error = %v", err)
 	}
 }
 

@@ -15,7 +15,11 @@
 
 package phpdoc
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 // TestClassifyVisibility covers each classification rule in priority order plus the cases where two rules compete.
 func TestClassifyVisibility(t *testing.T) {
@@ -103,5 +107,19 @@ func TestParseDocBlock_SingleLine(t *testing.T) {
 	d := ParseDocBlock("/** @deprecated since 4.0 */")
 	if d.Summary != "" || d.Deprecated != "since 4.0" {
 		t.Errorf("got Summary=%q Deprecated=%q", d.Summary, d.Deprecated)
+	}
+}
+
+// TestCommentSummary_TrimsAndCutsOnRuneBoundary verifies that CommentSummary trims whitespace,
+// keeps a short comment whole, and cuts a long one to at most 120 bytes without splitting a
+// multi-byte character.
+func TestCommentSummary_TrimsAndCutsOnRuneBoundary(t *testing.T) {
+	if got := CommentSummary("  add the index  "); got != "add the index" {
+		t.Errorf("short comment = %q", got)
+	}
+	in := strings.Repeat("a", 119) + "é" + "tail"
+	got := CommentSummary(in)
+	if !utf8.ValidString(got) || got != strings.Repeat("a", 119) {
+		t.Errorf("long comment = %q (len %d), want the 119-byte prefix", got, len(got))
 	}
 }

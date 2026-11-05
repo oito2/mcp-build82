@@ -17,13 +17,12 @@ mcp-build82/
 ├── docs/                 ← documentação completa (en/ e pt-br/)
 ├── scripts/release/      ← cross-compila cada binário de release + build82.mcpb (bundle MCPB) + checksums.txt + server.json (manifesto do MCP Registry) em dist/
 ├── testdata/moodle/      ← árvore Moodle fixture usada pelos testes de integração
-├── cmd/build82/      ← main.go — dispatch da CLI: stdio (padrão), --http, install, self-update, uninstall
+├── cmd/build82/      ← main.go — dispatch da CLI: servidor stdio (padrão), install, self-update, uninstall
 └── internal/
     ├── server/           ← montagem do servidor MCP (tools + resources + prompts)
-    ├── transport/        ← transporte Streamable HTTP + SSE
-    ├── tools/            ← 13 MCP tools
+    ├── tools/            ← 15 MCP tools
     ├── resources/        ← 13 globais + 1 agregado + 12 templates de resource por plugin
-    ├── prompts/          ← 3 templates de MCP prompt
+    ├── prompts/          ← 4 templates de MCP prompt
     ├── extractors/       ← lê e faz parse dos arquivos PHP/XML do Moodle (backend regex + tsbackend/ tree-sitter)
     ├── generators/       ← escreve arquivos .md de contexto sob .build82/ (globais + por plugin) e migra arquivos legados
     ├── cache/            ← cache mtime, persistido em .build82/.cache.json
@@ -32,6 +31,7 @@ mcp-build82/
     ├── installer/        ← `install`/`uninstall` — configura/remove o registro no cliente MCP
     ├── selfupdate/       ← `self-update` — consulta GitHub Releases, verifica assinatura (cosign) e checksum, troca atômica do binário
     ├── moodletype/       ← mapa tipo de plugin ↔ diretório, resolução de path e checagens de containment
+    ├── phpcs/            ← detecta o phpcs com o padrão moodle e o executa (relatório JSON) para o check_coding_style e o doctor
     ├── phparray/         ← helpers compartilhados de parse de array/string literal PHP
     ├── phpdoc/           ← parse compartilhado de PHPDoc (visibilidade, @deprecated, @since...)
     ├── phptypes/         ← tipos de dados compartilhados pelos dois backends de extractors (só definições de tipo, sem lógica)
@@ -45,9 +45,9 @@ mcp-build82/
 
 ## Fluxo de dados
 
-**Ponto de entrada.** `cmd/build82/main.go` faz o dispatch pelo primeiro argumento: sem argumentos (ou com uma flag desconhecida) inicia o servidor MCP via **stdio**; `--http` inicia via Streamable HTTP + SSE; `install`, `self-update` e `uninstall` executam seus próprios fluxos pontuais e encerram. Os dois modos de servidor chamam `server.NewServer()`, que registra as 13 tools, os resources (13 globais + 1 agregado + 12 templates por plugin) e os 3 prompts, e informa um ícone PNG 64×64 no `serverInfo` como data URI embutido. Todo handler é envolvido por um wrapper de recuperação de panic (`withRecover`, `withRecoverResource` e o equivalente de prompts), de modo que um panic causado por código-fonte de plugin malformado vira um resultado de erro em vez de derrubar o processo.
+**Ponto de entrada.** `cmd/build82/main.go` faz o dispatch pelo primeiro argumento: sem argumentos (ou com uma flag desconhecida) inicia o servidor MCP via **stdio**; `install`, `self-update` e `uninstall` executam seus próprios fluxos pontuais e encerram. O servidor chama `server.NewServer()`, que registra as 15 tools, os resources (13 globais + 1 agregado + 12 templates por plugin) e os 4 prompts, e informa um ícone PNG 64×64 no `serverInfo` como data URI embutido. Todo handler é envolvido por um wrapper de recuperação de panic (`withRecover`, `withRecoverResource` e o equivalente de prompts), de modo que um panic causado por código-fonte de plugin malformado vira um resultado de erro em vez de derrubar o processo.
 
-**Efeitos colaterais.** O `build82` só escreve: os arquivos `.md` gerados, o marcador `.indevelopment` e o `.cache.json` sob `.build82/` (raiz do Moodle e raízes de plugins), `~/.build82` (config), o arquivo `tags` (quando o `ctags` está disponível), o ZIP criado por `release_plugin`, o esqueleto criado por `create_plugin_skeleton` e — via `install`/`uninstall`/`self-update` — arquivos de configuração de clientes MCP e o próprio binário. Os extractors nunca escrevem em disco.
+**Efeitos colaterais.** O `build82` só escreve: os arquivos `.md` gerados, o marcador `.indevelopment` e o `.cache.json` sob `.build82/` (raiz do Moodle e raízes de plugins), `~/.build82` (config), o arquivo `tags` (quando o `ctags` está disponível), o ZIP criado por `release_plugin`, o esqueleto criado por `create_plugin_skeleton`, as edições de `version.php` e `db/upgrade.php` feitas por `bump_plugin_version` e — via `install`/`uninstall`/`self-update` — arquivos de configuração de clientes MCP e o próprio binário. Os extractors nunca escrevem em disco.
 
 ```
 1. Assistente de IA chama init_moodle_context
@@ -68,11 +68,13 @@ mcp-build82/
    └─ get_plugin_info → retorna o PLUGIN_AI_CONTEXT.md do plugin (ou metadados ao vivo se ele nunca foi gerado)
    └─ search_api → pesquisa no MOODLE_API_INDEX.md
    └─ watch_plugins → ativa um watcher fsnotify nos diretórios de plugins dev (plugin dev = tem um marcador .build82/.indevelopment)
+   └─ toda regeneração por tool ou pelo watcher → notifications/resources/updated às sessões que assinaram os resources regravados
 
 5. Cliente de IA usa Prompts
    └─ scaffold_plugin → injeta contexto Moodle + template few-shot
    └─ review_plugin → injeta contexto do plugin + checklist de revisão
    └─ debug_plugin → injeta contexto + dicas de debugging por palavra-chave
+   └─ upgrade_plugin → injeta chamadas deprecated, callbacks legados e achados de upgrade + passos de migração
 ```
 
 ---
@@ -94,25 +96,9 @@ O próprio parâmetro `moodle_path` do `init_moodle_context` é o que *escreve* 
 
 ---
 
-## Modos de transporte
+## Transporte
 
-| Modo      | Quando usar                                                  | Como iniciar                                                           |
-| --------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **stdio** | Moodle local — mesma máquina que seu editor/CLI (o padrão)       | `build82`                                                              |
-| **HTTP**  | Moodle remoto — servidor separado ou ambiente isolado             | `build82 --http --port 3000 --host 0.0.0.0 --token seu-token`          |
-
-No modo HTTP o servidor expõe `/mcp` (Streamable HTTP) e `/sse` (SSE), ambos protegidos por token Bearer quando um token é definido, além de um `/health` sem autenticação. Todas as rotas exceto `/health` passam pela validação do header Host.
-
-Flags disponíveis no modo HTTP:
-
-| Flag             | Padrão      | Descrição                                                            |
-| ----------------- | ------------- | -------------------------------------------------------------------------- |
-| `--port`         | `3000`      | Porta TCP                                                                  |
-| `--host`         | `127.0.0.1` | Endereço de bind (`0.0.0.0` para todas as interfaces)                      |
-| `--token`        | —           | Token Bearer para `/mcp` e `/sse` (alternativa: variável `BUILD82_TOKEN`). Não é obrigatório, mas um aviso é registrado quando ausente, e é fortemente recomendado em hosts não-loopback |
-| `--allowed-host` | —           | Hostname extra permitido pela validação do header Host (repetível)         |
-
-> Para uso com Docker, veja o guia [Docker](../guides/environments/docker.md).
+O build82 roda somente via **stdio**: o cliente de IA inicia o `build82` como subprocesso e troca mensagens MCP pela entrada e saída padrão dele. Nenhuma porta de rede é aberta. Isso combina com o uso como ferramenta local de desenvolvimento, ao lado do código do Moodle e do cliente de IA; com o Moodle em Docker, o build82 roda no host e lê os arquivos montados (veja [Docker](../guides/environments/docker.md)). O modo HTTP (`--http`) das versões anteriores foi removido na v1.2.0.
 
 ---
 
@@ -120,7 +106,7 @@ Flags disponíveis no modo HTTP:
 
 | Dependência | Por que é usada |
 | --- | --- |
-| `github.com/modelcontextprotocol/go-sdk` | SDK oficial de MCP para Go: tratamento do protocolo, transportes stdio e Streamable HTTP/SSE, registro de tools/resources/prompts |
+| `github.com/modelcontextprotocol/go-sdk` | SDK oficial de MCP para Go: tratamento do protocolo, o transporte stdio, registro de tools/resources/prompts |
 | `github.com/odvcencio/gotreesitter` | Runtime tree-sitter em Go puro (sem cgo) com a gramática PHP, usado apenas pelo backend opcional `tsbackend` dos extractors |
 | `github.com/fsnotify/fsnotify` | Notificações do sistema de arquivos para o `watch_plugins` (regeneração automática ao salvar) |
 

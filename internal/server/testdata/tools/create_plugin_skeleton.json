@@ -10,7 +10,7 @@
     "additionalProperties": false,
     "properties": {
       "display_name": {
-        "description": "Human-readable name for lang/en/{component}.php (default: derived from name)",
+        "description": "Human-readable name for the English language file, lang/en/{component}.php (lang/en/{name}.php for an activity module) (default: derived from name)",
         "type": "string"
       },
       "features": {
@@ -22,7 +22,7 @@
         "type": "string"
       },
       "name": {
-        "description": "Plugin name, lowercase letters/digits/underscores only, must start with a letter",
+        "description": "Plugin name as Moodle accepts it: lowercase letters, digits and single underscores, starting with a letter and ending with a letter or digit; an activity module (mod) name has no underscores",
         "type": "string"
       },
       "requires": {

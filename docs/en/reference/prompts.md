@@ -10,7 +10,7 @@
 
 ## How Prompts Work
 
-Each prompt returns a fixed sequence of three messages:
+`scaffold_plugin`, `review_plugin` and `debug_plugin` return a fixed sequence of three messages (`upgrade_plugin` returns only the assembled request, as a single `user` message):
 
 | # | Role | Content |
 |---|------|---------|
@@ -27,8 +27,8 @@ There is no system message. Context is read from the generated files at request 
 | Argument types | All arguments are strings |
 | Required arguments | Validated by the server. A missing or blank required argument returns a JSON-RPC `invalid params` error: `missing required argument(s): <names>` |
 | Free-text limit | `description`, `features`, `files`, `error` and `context` are truncated at 20,000 bytes, with `...(truncated)` appended |
-| Not initialized | Prompts never require initialization. Without a configuration, the Moodle version and the Moodle-root context (e.g. `MOODLE_DEV_RULES.md`) are omitted. For `review_plugin` and `debug_plugin`, the `plugin` argument is then used as a filesystem path as given (absolute, or relative to the server's working directory): if that directory has `.build82/PLUGIN_*.md` files they are read and injected, and its plugin metadata is detected, with no Moodle-root check |
-| Plugin resolution | `review_plugin` and `debug_plugin` resolve `plugin` as a component (`local_mytools`), a relative path or an absolute path; if the result is outside the Moodle root it is not read |
+| Not initialized | Prompts never require initialization. Without a configuration, the Moodle version and the Moodle-root context (e.g. `MOODLE_DEV_RULES.md`) are omitted. For `review_plugin` and `debug_plugin`, the `plugin` argument is then used as a filesystem path as given (absolute, or relative to the server's working directory): if that directory has `.build82/PLUGIN_*.md` files they are read and injected, and its plugin metadata is detected, with no Moodle-root check. `upgrade_plugin` then shows only the detected metadata and replaces the plugin analysis with a "Not available" note |
+| Plugin resolution | `review_plugin`, `debug_plugin` and `upgrade_plugin` resolve `plugin` as a component (`local_mytools`), a relative path or an absolute path; if the result is outside the Moodle root it is not read |
 | Side effects | None (read-only) |
 | Panics | Returned as an error: `internal error while rendering this prompt: <cause>` |
 
@@ -105,7 +105,7 @@ Run review_plugin on plugin local_mytools focusing on security
 and Moodle coding standards.
 ```
 
-**Message 3 contains:** a table (component, Moodle version, type, version, focus; empty values omitted); the first 3,000 bytes of the plugin's `PLUGIN_AI_CONTEXT.md` (if generated); the first 1,500 bytes of `MOODLE_DEV_RULES.md` (if available); the review criteria; instructions; and the output format (`## Issue N — {Severity}` with Critical/High/Medium/Low, then a `## Summary`).
+**Message 3 contains:** a table (component, Moodle version, type, version, focus; empty values omitted); the first 3,000 bytes of the plugin's `PLUGIN_AI_CONTEXT.md` (if generated); the first 1,500 bytes of `MOODLE_DEV_RULES.md` (if available); the review criteria; instructions — with focus `all` or `standards`, when `phpcs` with the moodle standard is available (checked at most once a minute), they first ask the agent to run the `check_coding_style` tool and base the coding-standard findings on its report; and the output format (`## Issue N — {Severity}` with Critical/High/Medium/Low, then a `## Summary`).
 
 → Practical examples: [Review Prompts](../prompts.md#review-a-plugin)
 
@@ -157,12 +157,47 @@ With no match, three generic hints are used (enable DEVELOPER debugging, check t
 
 ---
 
+### `upgrade_plugin`
+
+Builds a migration-plan request to make an existing plugin work on a newer Moodle release.
+
+**Arguments:**
+
+| Argument | Type | Required | Description |
+|----------|------|:--------:|-------------|
+| `plugin` | string | ✅ | Component (`local_mytools`), relative path or absolute path |
+| `target_version` | string | ✅ | Moodle release to migrate to: `major.minor` with an optional patch number (`4.5`, `5.0`, `4.5.3`), trimmed; anything else is rejected with a JSON-RPC invalid-params error, `invalid target_version "<value>": expected a Moodle release such as 4.5 or 5.0`. Its branch number (`4.5` → `405`, `5.0` → `500`) is used for `$plugin->supported` |
+
+**How to use:**
+
+```
+/upgrade_plugin plugin="local_mytools" target_version="4.5"
+```
+
+```
+Use upgrade_plugin to plan the migration of local_mytools to Moodle 5.0.
+```
+
+**Plugin analysis** — only when build82 is configured and `plugin` resolves to a directory with a `version.php` inside the Moodle root; otherwise a single "Not available" section replaces it:
+
+| Section | Source |
+|---------|--------|
+| Deprecated Core API Calls | Bare calls in the plugin's PHP to functions marked `@deprecated` in the installed Moodle (the `MOODLE_API_INDEX.md` index, or the core source when it is missing) — the same data as `doctor`'s Deprecated Core API Usage; table `File \| Line \| Function`, at most 100 rows, then `...and N more.` |
+| Legacy Callbacks With a Hook API Replacement | `lib.php` callbacks that have a Hook API replacement, with the replacing hook and the migration guidance |
+| Upgrade-Step Findings | The `doctor` Upgrade Consistency checks for this plugin (`db/upgrade.php` against `db/install.xml` and `version.php`), at most 50, then `...and N more.` |
+
+**The single message contains:** a table (component, type, plugin version, `$plugin->requires`, `$plugin->supported`, installed Moodle version, target release and branch; empty values omitted); the first 2,000 bytes of `PLUGIN_AI_CONTEXT.md` (if generated); the plugin analysis; notes — the deprecated list reflects the **installed** Moodle, not the target, and the target's upgrade notes are `UPGRADING.md` at the Moodle root from 4.5 onwards, `lib/upgrade.txt` and each component's `upgrade.txt` before; the instructions (set `requires`/`supported`, replace deprecated calls, move legacy callbacks to the Hook API, fix the findings, raise the version with `bump_plugin_version`, check with `doctor` and `check_coding_style`); and the output format (a numbered plan with **File**, **Change** and **Reason**, then risks and what to test).
+
+→ Practical examples: [Plan an upgrade to a newer Moodle](../prompts.md#plan-an-upgrade-to-a-newer-moodle)
+
+---
+
 ## How to Invoke a Prompt by Client
 
 | Client                              | How to invoke                                                                                      |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **Claude Code**                     | Natural language: _"Use scaffold_plugin to..."_ or parameter syntax directly in the chat           |
-| **Gemini Code Assist (Agent Mode)** | Slash command: `/scaffold_plugin`, `/review_plugin`, `/debug_plugin` — with parameter autocomplete |
+| **Gemini Code Assist (Agent Mode)** | Slash command: `/scaffold_plugin`, `/review_plugin`, `/debug_plugin`, `/upgrade_plugin` — with parameter autocomplete |
 | **OpenAI Codex**                    | Natural language in chat mentioning the prompt name: _"Run scaffold_plugin with type='local'..."_  |
 | **OpenCode**                        | Natural language in chat mentioning the prompt name: _"Use review_plugin focusing on security..."_ |
 | **Antigravity CLI**                 | Slash command syntax also works: `/scaffold_plugin type="local" name="..."`                        |
@@ -186,7 +221,7 @@ If you want to add custom prompts to the server (in `internal/prompts/`), follow
 
 - [Tools Reference](./tools.md) — executable actions for the AI
 - [Resources Reference](./resources.md) — passively read data
-- [Usage Examples](../guides/workflows/examples.md) — real scenarios using the three prompts in action
+- [Usage Examples](../guides/workflows/examples.md) — real scenarios using the prompts in action
 
 ---
 

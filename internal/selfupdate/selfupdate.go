@@ -540,7 +540,8 @@ func AtomicReplace(currentBinaryPath, newBinaryPath, wantVersion string) (backup
 // Rollback again swaps them back. It returns the version the restored binary reports, or an error
 // when the backup is missing or cannot be inspected, fails the smoke test (nothing is changed), or
 // a rename fails; when moving the staged backup into place fails, the current binary is renamed
-// back and the backup is restored to its original path.
+// back and the backup is restored to its original path. When restoring the backup itself fails,
+// the error says where the backup was left so it can be renamed back by hand.
 func Rollback(binaryPath string) (restoredVersion string, err error) {
 	backupPath := binaryPath + ".bak"
 
@@ -561,7 +562,10 @@ func Rollback(binaryPath string) (restoredVersion string, err error) {
 		return "", fmt.Errorf("stage backup %s: %w", backupPath, err)
 	}
 	if err := osRename(binaryPath, backupPath); err != nil {
-		_ = osRename(staged, backupPath)
+		if restoreErr := osRename(staged, backupPath); restoreErr != nil {
+			return "", fmt.Errorf("move the current binary %s aside: %w (the backup is now at %s — rename it back to %s: %v)",
+				binaryPath, err, staged, backupPath, restoreErr)
+		}
 		return "", fmt.Errorf("move the current binary %s aside: %w", binaryPath, err)
 	}
 	if err := osRename(staged, binaryPath); err != nil {
@@ -570,7 +574,10 @@ func Rollback(binaryPath string) (restoredVersion string, err error) {
 			return "", fmt.Errorf("move %s into place: %w (restore also failed, %s is now MISSING — recover it manually from %s: %v)",
 				staged, err, binaryPath, backupPath, restoreErr)
 		}
-		_ = osRename(staged, backupPath)
+		if restoreErr := osRename(staged, backupPath); restoreErr != nil {
+			return "", fmt.Errorf("move %s into place: %w (the backup is now at %s — rename it back to %s: %v)",
+				staged, err, staged, backupPath, restoreErr)
+		}
 		return "", fmt.Errorf("move %s into place: %w", staged, err)
 	}
 	fsutil.SyncDir(filepath.Dir(binaryPath))

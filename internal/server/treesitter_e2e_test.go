@@ -113,7 +113,7 @@ func assertSaneDemoContext(t *testing.T, root string) {
 // temporary Moodle root, so the installation is never written to. The test is skipped when that
 // installation or the sample plugins are not present.
 func TestE2E_TreesitterBackend_RealPlugins(t *testing.T) {
-	const realInstall = "/srv/workspace/www/html/mdle/dev-500"
+	realInstall := realMoodle("mdle-500")
 	if _, err := os.Stat(filepath.Join(realInstall, "version.php")); err != nil {
 		t.Skipf("real Moodle install not available at %s: %v", realInstall, err)
 	}

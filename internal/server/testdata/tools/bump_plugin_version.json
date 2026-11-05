@@ -1,0 +1,107 @@
+{
+  "annotations": {
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false,
+    "readOnlyHint": false,
+    "title": "Bump Plugin Version"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
+        "type": "string"
+      },
+      "maturity": {
+        "description": "New $plugin-\u003ematurity constant: MATURITY_ALPHA, MATURITY_BETA, MATURITY_RC or MATURITY_STABLE (default: unchanged)",
+        "type": "string"
+      },
+      "plugin": {
+        "description": "Component (e.g. 'local_myplugin'), path relative to the Moodle root (e.g. 'local/myplugin'), or absolute path",
+        "type": "string"
+      },
+      "release": {
+        "description": "New $plugin-\u003erelease string (default: unchanged)",
+        "type": "string"
+      },
+      "upgrade_description": {
+        "description": "One-line description written as a comment in the generated upgrade step",
+        "type": "string"
+      },
+      "upgrade_step": {
+        "description": "Also add an upgrade step for the new version to db/upgrade.php, creating the file when missing (default: false)",
+        "type": "boolean"
+      },
+      "version": {
+        "description": "New $plugin-\u003eversion, ten digits (YYYYMMDDXX) greater than the current one (default: today as YYYYMMDD00, or the current version + 1 when that is not greater)",
+        "type": "string"
+      }
+    },
+    "required": [
+      "plugin"
+    ],
+    "type": "object"
+  },
+  "name": "bump_plugin_version",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "component": {
+        "description": "Frankenstyle component of the plugin",
+        "type": "string"
+      },
+      "files_changed": {
+        "description": "Files written, relative to the plugin directory",
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "maturity": {
+        "description": "$plugin-\u003ematurity written by the call, when one was given",
+        "type": "string"
+      },
+      "new_version": {
+        "description": "$plugin-\u003eversion written by the call",
+        "type": "string"
+      },
+      "old_version": {
+        "description": "$plugin-\u003eversion before the call",
+        "type": "string"
+      },
+      "path": {
+        "description": "Plugin directory relative to the Moodle root",
+        "type": "string"
+      },
+      "release": {
+        "description": "$plugin-\u003erelease written by the call, when one was given",
+        "type": "string"
+      },
+      "upgrade_file_created": {
+        "description": "Whether db/upgrade.php did not exist and was created",
+        "type": "boolean"
+      },
+      "upgrade_step": {
+        "description": "PHP code of the upgrade step added to db/upgrade.php",
+        "type": "string"
+      }
+    },
+    "required": [
+      "component",
+      "path",
+      "old_version",
+      "new_version",
+      "files_changed"
+    ],
+    "type": "object"
+  }
+}

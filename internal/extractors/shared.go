@@ -16,31 +16,24 @@
 package extractors
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/oito2/mcp-build82/internal/fsutil"
 )
 
-// maxReadableFileSize is the largest file, in bytes, that readFileCapped will buffer into memory.
-// It bounds memory use when scanning potentially untrusted third-party PHP source.
-const maxReadableFileSize = 8 << 20 // 8 MiB
+// MaxReadableFileSize is the largest file, in bytes, that the extractors and generators buffer
+// into memory when reading plugin or Moodle source. It bounds memory use when scanning potentially
+// untrusted third-party PHP source.
+const MaxReadableFileSize = 8 << 20 // 8 MiB
 
 // readFileCapped returns the content of the regular file at `path`, never following a symbolic
 // link or waiting on a FIFO (see fsutil.ReadRegular). It returns an error if the file cannot be
-// stat'ed or read, is not a regular file, or is larger than maxReadableFileSize.
+// opened or read, is not a regular file, or is larger than MaxReadableFileSize.
 func readFileCapped(path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if info.Size() > maxReadableFileSize {
-		return nil, fmt.Errorf("file %s exceeds max readable size (%d > %d bytes)", path, info.Size(), maxReadableFileSize)
-	}
-	return fsutil.ReadRegular(path, maxReadableFileSize)
+	return fsutil.ReadRegular(path, MaxReadableFileSize)
 }
 
 // firstSubmatch returns the first capture group of the first match of `re` in `s`, or "" when
@@ -74,23 +67,27 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// walkPhpFiles walks `rootPath` recursively and calls `visit` for every *.php file found, passing
-// the file's absolute path and its path relative to `rootPath` (forward-slash normalized). Walk
-// errors, directories and symlinked files are silently skipped; symlinks are skipped because
-// os.ReadFile follows them, so a planted "foo.php" link would otherwise pull its target's content
-// into the scan. It is shared by every *.php-tree scanner in this package.
+// walkPhpFiles calls `visit` for every *.php file under `rootPath` (fsutil.WalkFiles: symbolic
+// links skipped), with its full path and its slash-separated path relative to `rootPath`. Both
+// backends' *.php-tree scanners walk with fsutil.WalkFiles.
 func walkPhpFiles(rootPath string, visit func(absPath, relSlash string)) {
-	_ = filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(d.Name(), ".php") {
-			return nil
-		}
-		rel, relErr := filepath.Rel(rootPath, path)
-		if relErr != nil {
-			rel = path
-		}
-		visit(path, filepath.ToSlash(rel))
-		return nil
+	fsutil.WalkFiles(rootPath, ".php", visit)
+}
+
+// PhpFile is one *.php file found by ListPhpFiles: its full path and its path relative to the
+// walked root, slash-separated.
+type PhpFile struct {
+	Path, Rel string
+}
+
+// ListPhpFiles returns the *.php files under `rootPath` as walkPhpFiles finds them (symbolic links
+// skipped), so several scanners can share a single walk.
+func ListPhpFiles(rootPath string) []PhpFile {
+	var files []PhpFile
+	walkPhpFiles(rootPath, func(absPath, relSlash string) {
+		files = append(files, PhpFile{Path: absPath, Rel: relSlash})
 	})
+	return files
 }
 
 // splitAndTrimCommaList splits the comma-separated list `s` of (possibly quoted) items, strips
@@ -106,4 +103,87 @@ func splitAndTrimCommaList(s string) []string {
 		}
 	}
 	return out
+}
+
+// precedingDocBlock returns the lines of the PHPDoc block ("/**" or "/*" to "*/") that immediately
+// precedes the declaration at index `declIdx` of `lines`, joined with "\n". Between the block and
+// the declaration it allows up to 3 blank lines and any PHP 8 attributes, single-line ("#[...]")
+// or spanning several lines (see attributeStart). A closing line such as "**/" counts as the end
+// of the block. ok is false when no such block precedes the declaration.
+func precedingDocBlock(lines []string, declIdx int) (block string, ok bool) {
+	blank, closeIdx := 0, -1
+scan:
+	for i := declIdx - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		switch {
+		case trimmed == "":
+			blank++
+			if blank > 3 {
+				return "", false
+			}
+		case strings.HasPrefix(trimmed, "#["):
+			// A single-line attribute, or the first line of one.
+		case strings.HasSuffix(trimmed, "]"):
+			start := attributeStart(lines, i)
+			if start < 0 {
+				return "", false
+			}
+			i = start
+		case strings.HasSuffix(trimmed, "*/"):
+			closeIdx = i
+			break scan
+		default:
+			return "", false
+		}
+	}
+	if closeIdx < 0 {
+		return "", false
+	}
+	for i := closeIdx; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "/**") || trimmed == "/*" {
+			return strings.Join(lines[i:closeIdx+1], "\n"), true
+		}
+		if i != closeIdx && !strings.HasPrefix(trimmed, "*") && trimmed != "" {
+			return "", false
+		}
+	}
+	return "", false
+}
+
+// attributeStart returns the index of the "#[" line that opens the multi-line PHP 8 attribute
+// ending at index `end` of `lines`, looking back at most 50 lines, or -1 when there is none or a
+// line in between ends a statement or opens/closes a block (so the "]" did not end an attribute).
+func attributeStart(lines []string, end int) int {
+	for j := end; j >= 0 && j >= end-50; j-- {
+		trimmed := strings.TrimSpace(lines[j])
+		if strings.HasPrefix(trimmed, "#[") {
+			return j
+		}
+		if strings.HasSuffix(trimmed, ";") || strings.ContainsAny(trimmed, "{}") {
+			return -1
+		}
+	}
+	return -1
+}
+
+// lineIndex holds the byte offsets of every line break of a text, in increasing order, so the line
+// of any offset is found by binary search instead of counting line breaks from the start.
+type lineIndex []int
+
+// newLineIndex returns the lineIndex of `s`.
+func newLineIndex(s string) lineIndex {
+	idx := lineIndex{}
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			idx = append(idx, i)
+		}
+	}
+	return idx
+}
+
+// line returns the 1-based line number of byte offset `pos`: one more than the number of line
+// breaks before it.
+func (idx lineIndex) line(pos int) int {
+	return sort.SearchInts(idx, pos) + 1
 }

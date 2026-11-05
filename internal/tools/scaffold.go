@@ -29,13 +29,25 @@ import (
 
 	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/moodletype"
-	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
-// skeletonNamePattern matches valid plugin names: lowercase, starting with a letter, with only
-// letters, digits and underscores. Because the name becomes a directory name, this also prevents
+// Patterns of the plugin names Moodle accepts (core_component::is_valid_plugin_name): an activity
+// module name is lowercase letters and digits starting with a letter, with no underscore; any other
+// plugin name starts with a letter, ends with a letter or digit, has at least two characters and
+// may contain single underscores. Because the name becomes a directory name, this also prevents
 // path traversal (e.g. "../../etc").
-var skeletonNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var (
+	modNamePattern    = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+	pluginNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*[a-z0-9]$`)
+)
+
+// validSkeletonName reports whether `name` is a plugin name Moodle accepts for `pluginType`.
+func validSkeletonName(pluginType, name string) bool {
+	if pluginType == "mod" {
+		return modNamePattern.MatchString(name)
+	}
+	return pluginNamePattern.MatchString(name) && !strings.Contains(name, "__")
+}
 
 // requiresPattern matches the accepted $plugin->requires values: digits with an optional single
 // decimal point, i.e. a plain PHP numeric literal. The value is written unquoted into version.php
@@ -45,8 +57,8 @@ var requiresPattern = regexp.MustCompile(`^\d+(\.\d+)?$`)
 // CreatePluginSkeletonInput is the input of the create_plugin_skeleton tool.
 type CreatePluginSkeletonInput struct {
 	Type        string `json:"type" jsonschema:"Plugin type (local, mod, block, auth, tool, enrol, theme, report, format, filter, qtype, ...)"`
-	Name        string `json:"name" jsonschema:"Plugin name, lowercase letters/digits/underscores only, must start with a letter"`
-	DisplayName string `json:"display_name,omitempty" jsonschema:"Human-readable name for lang/en/{component}.php (default: derived from name)"`
+	Name        string `json:"name" jsonschema:"Plugin name as Moodle accepts it: lowercase letters, digits and single underscores, starting with a letter and ending with a letter or digit; an activity module (mod) name has no underscores"`
+	DisplayName string `json:"display_name,omitempty" jsonschema:"Human-readable name for the English language file, lang/en/{component}.php (lang/en/{name}.php for an activity module) (default: derived from name)"`
 	Features    string `json:"features,omitempty" jsonschema:"Comma-separated stub files to scaffold: database, tasks, services, events, capabilities, settings"`
 	Requires    string `json:"requires,omitempty" jsonschema:"$plugin->requires value (default: the configured Moodle installation's build number)"`
 	Maturity    string `json:"maturity,omitempty" jsonschema:"$plugin->maturity constant: MATURITY_ALPHA (default), MATURITY_BETA, MATURITY_RC, or MATURITY_STABLE"`
@@ -56,9 +68,10 @@ type CreatePluginSkeletonInput struct {
 func RegisterCreatePluginSkeletonTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "create_plugin_skeleton",
+		InputSchema: inputSchemaFor[CreatePluginSkeletonInput](),
 		Annotations: toolAnnotations("Create Plugin Skeleton", false, false, false, false),
 		Description: "Materializes a new Moodle plugin's directory structure on disk: version.php with " +
-			"real values filled in, lang/en/{component}.php, the type's mandatory entry-point file(s), and " +
+			"real values filled in, the English language file, the type's mandatory entry-point file(s), and " +
 			"stub db/*.php files for any requested features. Deterministic scaffolding only — no generated " +
 			"business logic. Pair with the scaffold_plugin prompt for AI-drafted implementation content. " +
 			"Refuses to run if the target plugin directory already exists.",
@@ -78,20 +91,20 @@ type skeletonFile struct {
 // invalid name, maturity or requires value, an existing target, or a write failure; the error
 // return is always nil.
 func handleCreatePluginSkeleton(ctx context.Context, req *mcp.CallToolRequest, in CreatePluginSkeletonInput) (*mcp.CallToolResult, any, error) {
-	cfg, err := requireConfig()
-	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
-	}
-	if cfg == nil {
-		return toolutil.NotInitialized(), nil, nil
+	cfg, errResult := loadConfigResult()
+	if errResult != nil {
+		return errResult, nil, nil
 	}
 
 	typeDir, ok := moodletype.PluginTypeToDir[in.Type]
 	if !ok {
 		return textResult(true, fmt.Sprintf("❌ Unknown plugin type %q.", in.Type)), nil, nil
 	}
-	if !skeletonNamePattern.MatchString(in.Name) {
-		return textResult(true, "❌ name must start with a lowercase letter and contain only lowercase letters, digits, and underscores."), nil, nil
+	if !validSkeletonName(in.Type, in.Name) {
+		if in.Type == "mod" {
+			return textResult(true, "❌ an activity module name must start with a lowercase letter and contain only lowercase letters and digits (no underscores)."), nil, nil
+		}
+		return textResult(true, "❌ name must start with a lowercase letter, end with a letter or digit, and contain only lowercase letters, digits, and single underscores."), nil, nil
 	}
 
 	pluginPath := filepath.Clean(filepath.Join(cfg.MoodlePath, typeDir, in.Name))
@@ -230,11 +243,12 @@ func skeletonFiles(p skeletonParams) []skeletonFile {
 
 	files := []skeletonFile{
 		{"version.php", versionPhpSkeleton(p, version)},
-		{"lang/en/" + p.component + ".php", langFileSkeleton(p.displayName)},
+		{"lang/en/" + moodletype.LangFileName(p.component) + ".php", langFileSkeleton(p.displayName)},
 	}
 	files = append(files, mainFilesSkeleton(p)...)
 
-	if p.hasDB {
+	// An activity module's lib.php writes to its instance table, so it always gets db/install.xml.
+	if p.hasDB || p.pluginType == "mod" {
 		files = append(files, skeletonFile{"db/install.xml", installXMLSkeleton(p)})
 	}
 	if p.hasTasks {
@@ -248,7 +262,7 @@ func skeletonFiles(p skeletonParams) []skeletonFile {
 		files = append(files, skeletonFile{"classes/observer.php", observerPhpSkeleton(p.component)})
 	}
 	if p.hasCaps {
-		files = append(files, skeletonFile{"db/access.php", accessPhpSkeleton(p.component)})
+		files = append(files, skeletonFile{"db/access.php", accessPhpSkeleton(p.pluginType + "/" + p.name)})
 	}
 	if p.hasSettings {
 		files = append(files, skeletonFile{"settings.php", settingsPhpSkeleton(p.component)})
@@ -361,7 +375,8 @@ class auth_plugin_%s extends auth_plugin_base {
 }
 
 // modLibPhpSkeleton renders the lib.php stub of an activity module with its add, update and
-// delete instance callbacks.
+// delete instance callbacks, named after the module (<name>_add_instance, ...) as Moodle calls
+// them, and writing to the instance table of the same name.
 func modLibPhpSkeleton(p skeletonParams) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
@@ -384,7 +399,7 @@ function %s_delete_instance($id) {
     // TODO: implement.
     return $DB->delete_records('%s', array('id' => $id));
 }
-`, p.component, p.name, p.component, p.name, p.component, p.name)
+`, p.name, p.name, p.name, p.name, p.name, p.name)
 }
 
 // modFormPhpSkeleton renders the mod_form.php stub of an activity module.
@@ -434,10 +449,36 @@ func installXMLSkeleton(p skeletonParams) string {
     xsi:noNamespaceSchemaLocation="%slib/xmldb/xmldb.xsd"
 >
   <TABLES>
-    <!-- TODO: define tables here. -->
-  </TABLES>
+%s  </TABLES>
 </XMLDB>
-`, p.typeDir, p.name, time.Now().Format("20060102")+"00", p.component, strings.Repeat("../", configDepth(p.typeDir)+1))
+`, p.typeDir, p.name, time.Now().Format("20060102")+"00", p.component, strings.Repeat("../", configDepth(p.typeDir)+1), installXMLTables(p))
+}
+
+// installXMLTables renders the <TABLE> elements of the skeleton's db/install.xml: for an activity
+// module, its instance table named after the module with the fields every module needs (id,
+// course, name, intro, introformat, timecreated, timemodified); for other types a TODO comment.
+func installXMLTables(p skeletonParams) string {
+	if p.pluginType != "mod" {
+		return "    <!-- TODO: define tables here. -->\n"
+	}
+	return fmt.Sprintf(`    <TABLE NAME="%s" COMMENT="Each record is one %s activity">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="course" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="intro" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="introformat" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="course" UNIQUE="false" FIELDS="course"/>
+      </INDEXES>
+    </TABLE>
+`, p.name, p.name)
 }
 
 // tasksPhpSkeleton renders a db/tasks.php stub for `component`.
@@ -499,8 +540,9 @@ class observer {
 `, component)
 }
 
-// accessPhpSkeleton renders a db/access.php stub for `component`.
-func accessPhpSkeleton(component string) string {
+// accessPhpSkeleton renders a db/access.php stub whose example capability uses `capabilityPrefix`
+// ("type/name", the form Moodle requires).
+func accessPhpSkeleton(capabilityPrefix string) string {
 	return fmt.Sprintf(`<?php
 defined('MOODLE_INTERNAL') || die();
 
@@ -508,13 +550,13 @@ $capabilities = array(
     // TODO: define capabilities here, e.g.:
     // '%s:view' => array(
     //     'captype'      => 'read',
-    //     'contextlevel' => CONTEXT_MODULE,
+    //     'contextlevel' => CONTEXT_SYSTEM,
     //     'archetypes'   => array(
     //         'teacher' => CAP_ALLOW,
     //     ),
     // ),
 );
-`, component)
+`, capabilityPrefix)
 }
 
 // settingsPhpSkeleton renders a settings.php stub for `component`.

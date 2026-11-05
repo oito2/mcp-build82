@@ -19,11 +19,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/generators"
+	"github.com/oito2/mcp-build82/internal/phpcs"
 )
 
 // ReviewFocus selects which section(s) of the review criteria checklist are included in the
@@ -152,10 +155,44 @@ const reviewFewShotAssistant = "## Review: local_demo (focus: security)\n\n" +
 	"as written. Top 3 priorities: (1) add auth/capability checks, (2) parameterise the query, (3) escape " +
 	"output. No positive patterns to note in this snippet."
 
+// phpcsReady reports whether phpcs with the moodle coding standard is available, so the
+// check_coding_style tool works. It is a variable so tests can fix the answer.
+var phpcsReady = cachedPhpcsReady
+
+// phpcsReadyTTL is how long cachedPhpcsReady reuses an answer before running `phpcs -i` again.
+const phpcsReadyTTL = time.Minute
+
+// phpcsCheck is phpcs.Check, as a variable so tests can count the checks.
+var phpcsCheck = phpcs.Check
+
+// The last answer of cachedPhpcsReady and when it was taken, guarded by phpcsReadyMu.
+var (
+	phpcsReadyMu sync.Mutex
+	phpcsReadyAt time.Time
+	phpcsReadyOK bool
+)
+
+// cachedPhpcsReady runs phpcsCheck at most once per phpcsReadyTTL and returns whether phpcs is
+// ready, so rendering the prompt does not start a phpcs process every time. An answer taken while
+// `ctx` was cancelled or expired is returned but not reused.
+func cachedPhpcsReady(ctx context.Context) bool {
+	phpcsReadyMu.Lock()
+	defer phpcsReadyMu.Unlock()
+	if !phpcsReadyAt.IsZero() && time.Since(phpcsReadyAt) < phpcsReadyTTL {
+		return phpcsReadyOK
+	}
+	ok := phpcsCheck(ctx).State == phpcs.Ready
+	if ctx.Err() == nil {
+		phpcsReadyAt, phpcsReadyOK = time.Now(), ok
+	}
+	return ok
+}
+
 // handleReviewPrompt renders the review_plugin prompt from the required "plugin" argument and the
 // optional "focus" and "files" arguments. The request contains plugin metadata, the generated
 // plugin context and development rules when available, the review criteria for the chosen focus,
-// and the output format. It returns an invalid-params error when "plugin" is missing or "focus"
+// an instruction to run check_coding_style first when the focus covers standards and phpcs is
+// available (phpcsReady), and the output format. It returns an invalid-params error when "plugin" is missing or "focus"
 // is not an accepted value.
 func handleReviewPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	args := req.Params.Arguments
@@ -202,6 +239,11 @@ func handleReviewPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.Ge
 		fmt.Fprintf(&b, "Review the following files: %s\n\n", files)
 	} else {
 		fmt.Fprintf(&b, "Perform a complete review of `%s`.\n\n", rc.Component)
+	}
+
+	if (focus == FocusAll || focus == FocusStandards) && phpcsReady(ctx) {
+		fmt.Fprintf(&b, "Before judging coding standards, call the `check_coding_style` tool on `%s` "+
+			"(phpcs with the moodle standard is available) and base the standards findings on its report.\n\n", rc.Component)
 	}
 
 	b.WriteString("### Output Format\n\nFor each issue, use a numbered `## Issue N — {Severity}` heading " +

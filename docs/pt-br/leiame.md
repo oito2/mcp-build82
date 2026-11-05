@@ -41,9 +41,11 @@ as convenções existentes e manter os docs sincronizados enquanto você trabalh
   capabilities, classes, web services, o índice de plugins e mais.
 - **12 arquivos de contexto por plugin** — arquitetura, dependências, fluxo de execução,
   configurações e um resumo pronto para IA.
-- **13 tools MCP, 3 prompts MCP e resources MCP** — gerar contexto, buscar na API e nos plugins,
-  explicar um plugin, diagnosticar o ambiente (`doctor`), empacotar um plugin para release e criar
-  o esqueleto de um novo plugin.
+- **15 tools MCP, 4 prompts MCP e resources MCP** — gerar contexto, buscar na API e nos plugins,
+  explicar um plugin, planejar a migração para um Moodle mais novo, diagnosticar o ambiente
+  (`doctor`), verificar o padrão de código do Moodle (com o `phpcs`), empacotar um plugin para
+  release, criar o esqueleto de um novo plugin e subir a versão de um plugin com seu passo de
+  upgrade.
 - **File watcher** que regenera o contexto de um plugin em desenvolvimento sempre que o código
   dele muda.
 - **Dois backends de extração PHP** — regex rápido (padrão) ou tree-sitter em Go puro.
@@ -60,6 +62,8 @@ as convenções existentes e manter os docs sincronizados enquanto você trabalh
 - Um cliente MCP — veja [Configuração dos clientes](#configuração-dos-clientes).
 - Opcional: [`universal-ctags`](https://github.com/universal-ctags/ctags) no `PATH`, para gerar
   também um arquivo `.build82/tags` para navegação no editor.
+- Opcional: `phpcs` com o padrão de código do Moodle (`composer global require moodlehq/moodle-cs`),
+  para a tool `check_coding_style`.
 - Só para compilar a partir do código-fonte: Go 1.26+.
 
 **Baixe um binário de release** (sem precisar de toolchain Go). Toda release inclui um

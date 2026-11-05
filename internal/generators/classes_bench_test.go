@@ -24,7 +24,7 @@ import (
 
 // benchRealMoodleRoot is the path of a full Moodle install used by the benchmarks, which skip
 // when it is absent.
-const benchRealMoodleRoot = "/srv/workspace/www/html/mdle/dev-500"
+var benchRealMoodleRoot = realMoodle("mdle-500")
 
 // BenchmarkClassesIndex_FullTreeWalk measures parsing every *.php file of the installation and
 // discarding those outside classes/ directories.

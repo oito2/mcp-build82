@@ -161,12 +161,12 @@ func TestServer_ListsAllToolsResourcesPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	if len(toolsResult.Tools) != 13 {
+	if len(toolsResult.Tools) != 15 {
 		names := make([]string, len(toolsResult.Tools))
 		for i, tl := range toolsResult.Tools {
 			names[i] = tl.Name
 		}
-		t.Errorf("expected 13 tools, got %d: %v", len(toolsResult.Tools), names)
+		t.Errorf("expected 15 tools, got %d: %v", len(toolsResult.Tools), names)
 	}
 
 	resourcesResult, err := session.ListResources(ctx, nil)
@@ -190,8 +190,8 @@ func TestServer_ListsAllToolsResourcesPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPrompts: %v", err)
 	}
-	if len(promptsResult.Prompts) != 3 {
-		t.Errorf("expected 3 prompts, got %d", len(promptsResult.Prompts))
+	if len(promptsResult.Prompts) != 4 {
+		t.Errorf("expected 4 prompts, got %d", len(promptsResult.Prompts))
 	}
 }
 

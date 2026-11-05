@@ -32,12 +32,22 @@ type DeprecatedCall struct {
 }
 
 // FindDeprecatedApiUsage walks `pluginPath` recursively for *.php files and returns every bare
-// call to a function named in the `deprecated` set. Method calls (`->name(`) and static calls
-// (`::name(`) are skipped because they cannot be the core global function. Comments and string
+// call to a function named in the `deprecated` set. Matches that cannot be the core global
+// function are skipped (see isNotGlobalCall): method and static calls, function declarations,
+// class instantiations, variable calls and namespaced names. Comments and string
 // literals are not parsed separately, so a call written inside one can still be reported. It
 // returns nil when `deprecated` is empty and always uses a regex scan regardless of
 // BUILD82_EXTRACTOR_BACKEND.
 func FindDeprecatedApiUsage(pluginPath string, deprecated map[string]struct{}) []DeprecatedCall {
+	if len(deprecated) == 0 {
+		return nil
+	}
+	return FindDeprecatedApiUsageIn(ListPhpFiles(pluginPath), deprecated)
+}
+
+// FindDeprecatedApiUsageIn is FindDeprecatedApiUsage over `files`, already listed with
+// ListPhpFiles.
+func FindDeprecatedApiUsageIn(files []PhpFile, deprecated map[string]struct{}) []DeprecatedCall {
 	if len(deprecated) == 0 {
 		return nil
 	}
@@ -53,10 +63,40 @@ func FindDeprecatedApiUsage(pluginPath string, deprecated map[string]struct{}) [
 	pattern := phparray.CachedPattern(`\b(` + strings.Join(names, "|") + `)\s*\(`)
 
 	var calls []DeprecatedCall
-	walkPhpFiles(pluginPath, func(absPath, relSlash string) {
-		calls = append(calls, scanFileForDeprecatedCalls(absPath, relSlash, pattern)...)
-	})
+	for _, f := range files {
+		calls = append(calls, scanFileForDeprecatedCalls(f.Path, f.Rel, pattern)...)
+	}
 	return calls
+}
+
+// isNotGlobalCall reports whether the name starting at byte `start` of `s`, followed by `(`, is
+// something other than a call to a global function: a method or static call (`->name(`,
+// `?->name(`, `::name(`), a function declaration (`function name(`), a class instantiation
+// (`new name(`), a variable call (`$name(`), or a name in a namespace (`ns\name(`). A fully
+// qualified global name (`\name(`) is a global call.
+func isNotGlobalCall(s string, start int) bool {
+	if start > 0 {
+		switch s[start-1] {
+		case '$':
+			return true
+		case '\\':
+			// `ns\name(` names a namespaced function; `\name(` is the global one.
+			return start >= 2 && isIdentByte(s[start-2])
+		}
+	}
+	before := strings.TrimRight(s[:start], " \t\r\n")
+	if strings.HasSuffix(before, "->") || strings.HasSuffix(before, "::") {
+		return true
+	}
+	for _, keyword := range []string{"function", "new"} {
+		if len(before) >= len(keyword) && strings.EqualFold(before[len(before)-len(keyword):], keyword) {
+			rest := before[:len(before)-len(keyword)]
+			if rest == "" || !isIdentByte(rest[len(rest)-1]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // scanFileForDeprecatedCalls returns the calls matched by `pattern` in the file at `path`,
@@ -73,17 +113,18 @@ func scanFileForDeprecatedCalls(path, relFile string, pattern *regexp.Regexp) []
 	// opening parenthesis are on different lines still matches; the line number comes from the
 	// match's byte offset.
 	var calls []DeprecatedCall
+	var lines lineIndex
 	for _, loc := range pattern.FindAllStringSubmatchIndex(s, -1) {
-		start := loc[2]
-		if start >= 2 {
-			if prefix := s[start-2 : start]; prefix == "->" || prefix == "::" {
-				continue
-			}
+		if isNotGlobalCall(s, loc[2]) {
+			continue
+		}
+		if lines == nil {
+			lines = newLineIndex(s)
 		}
 		calls = append(calls, DeprecatedCall{
 			Function: s[loc[2]:loc[3]],
 			File:     relFile,
-			Line:     strings.Count(s[:loc[0]], "\n") + 1,
+			Line:     lines.line(loc[0]),
 		})
 	}
 	return calls

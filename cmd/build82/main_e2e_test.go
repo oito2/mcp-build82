@@ -73,16 +73,16 @@ func TestMain_UnknownSubcommandExitsWithError(t *testing.T) {
 	}
 }
 
-// TestMain_UsageErrorsExitWithCode2 verifies that unknown flags, missing flag values and
-// server-only flags without --http print a message on stderr and exit with status 2, for every
+// TestMain_UsageErrorsExitWithCode2 verifies that unknown flags (including those of the removed
+// HTTP mode) and missing flag values print a message on stderr and exit with status 2, for every
 // subcommand.
 func TestMain_UsageErrorsExitWithCode2(t *testing.T) {
 	bin := buildBuildBinary(t)
 
 	tests := [][]string{
 		{"--totally-unrecognized-flag"},
+		{"--http"},
 		{"--port", "8080"},
-		{"--http", "--port"},
 		{"--token", "x"},
 		{"install", "--bogus"},
 		{"self-update", "--channel"},
@@ -107,55 +107,21 @@ func TestMain_UsageErrorsExitWithCode2(t *testing.T) {
 	}
 }
 
-// TestMain_HTTPWithExplicitEmptyTokenFailsToStart verifies that an explicit empty `--token ""`
-// makes the binary exit with status 1 and never start the --http server, instead of falling back
-// to running without authentication.
-func TestMain_HTTPWithExplicitEmptyTokenFailsToStart(t *testing.T) {
+// TestMain_HTTPModeIsRemoved verifies that `build82 --http` no longer starts a server: it is a
+// usage error (exit status 2) explaining that build82 runs over stdio only.
+func TestMain_HTTPModeIsRemoved(t *testing.T) {
 	bin := buildBuildBinary(t)
-
-	// exec.Command passes "" as an empty argv entry, as a shell does for an empty variable.
-	cmd := exec.Command(bin, "--http", "--token", "", "--port", "0")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-
-	exitErr, ok := err.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("expected the process to exit with a non-zero status (not start the server), got err=%v", err)
-	}
-	if exitErr.ExitCode() != 1 {
-		t.Errorf("expected exit code 1, got %d", exitErr.ExitCode())
-	}
-	if !strings.Contains(stderr.String(), "empty value") {
-		t.Errorf("expected an error naming the empty --token value, got:\n%s", stderr.String())
-	}
-	if strings.Contains(stderr.String(), "HTTP server listening") {
-		t.Errorf("expected the server to never start listening, got:\n%s", stderr.String())
-	}
-}
-
-// TestMain_HTTPWithEnvTokenDoesNotFailToStart verifies that a non-empty BUILD82_TOKEN is accepted
-// as the token when --token is not passed, without the empty-token configuration error.
-func TestMain_HTTPWithEnvTokenDoesNotFailToStart(t *testing.T) {
-	bin := buildBuildBinary(t)
-
 	cmd := exec.Command(bin, "--http", "--port", "0")
-	cmd.Env = append(cmd.Environ(), "BUILD82_TOKEN=from-env-e2e")
 	cmd.Stdin = strings.NewReader("")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start: %v", err)
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("expected exit status 2, got %v", err)
 	}
-	// The server runs until signaled. Allow a brief moment for a startup failure to show, then
-	// kill it; only stderr is checked, not the process lifetime.
-	time.Sleep(200 * time.Millisecond)
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-
-	out := stderr.String()
-	if strings.Contains(out, "empty value") || strings.Contains(out, "is set but empty") {
-		t.Errorf("did not expect an empty-token config error when BUILD82_TOKEN is non-empty, got:\n%s", out)
+	if !strings.Contains(stderr.String(), "the HTTP mode was removed in v1.2.0; build82 runs over stdio only") {
+		t.Errorf("expected the removal note on stderr, got %q", stderr.String())
 	}
 }
 
@@ -260,7 +226,7 @@ func TestMain_SubcommandHelpPrintsWithoutRunning(t *testing.T) {
 }
 
 // TestMain_UsageErrorsPointToSubcommandHelp verifies that a usage error of a subcommand names that
-// subcommand's help, and that a server flag error names the global help.
+// subcommand's help, and that an unknown top-level flag names the global help.
 func TestMain_UsageErrorsPointToSubcommandHelp(t *testing.T) {
 	bin := buildBuildBinary(t)
 	cases := map[string][]string{
@@ -419,4 +385,111 @@ func TestMain_StdioAcceptsMessagesAboveTheSDKDefault(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("no answer to the 20 MiB request")
 	}
+}
+
+// copyDir copies the directory tree `src` into `dst`, failing the test on an error.
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copy %s: %v", src, err)
+	}
+}
+
+// TestMain_StdioResourceSubscriptions drives the real binary over stdio as a client of the
+// 2025-06-18 protocol (resources/subscribe): an unknown URI is refused with a JSON-RPC error, a
+// plugin resource is accepted, and generate_plugin_context then sends
+// notifications/resources/updated for it.
+func TestMain_StdioResourceSubscriptions(t *testing.T) {
+	bin := buildBuildBinary(t)
+	moodle := t.TempDir()
+	copyDir(t, filepath.Join("..", "..", "testdata", "moodle"), moodle)
+
+	cmd := exec.Command(bin)
+	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "BUILD82_MOODLE_PATH="+moodle)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	lines := make(chan string, 64)
+	go func() {
+		r := bufio.NewReader(stdout)
+		for {
+			line, err := r.ReadString('\n')
+			if line != "" {
+				lines <- line
+			}
+			if err != nil {
+				close(lines)
+				return
+			}
+		}
+	}()
+	send := func(msg string) {
+		if _, err := io.WriteString(stdin, msg+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// waitFor returns the first line containing `want`, failing after a timeout.
+	waitFor := func(want string) string {
+		t.Helper()
+		deadline := time.After(20 * time.Second)
+		for {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("server closed stdout while waiting for %q", want)
+				}
+				if strings.Contains(line, want) {
+					return line
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %q", want)
+			}
+		}
+	}
+
+	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`)
+	if init := waitFor(`"id":1`); !strings.Contains(init, `"subscribe":true`) {
+		t.Errorf("initialize must advertise resources.subscribe, got %s", init)
+	}
+	send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+
+	send(`{"jsonrpc":"2.0","id":2,"method":"resources/subscribe","params":{"uri":"https://example.com/x"}}`)
+	if resp := waitFor(`"id":2`); !strings.Contains(resp, `"error"`) || !strings.Contains(resp, "unknown resource") {
+		t.Errorf("an unknown URI must be refused, got %s", resp)
+	}
+	send(`{"jsonrpc":"2.0","id":3,"method":"resources/subscribe","params":{"uri":"moodle://plugin/local_demo/context"}}`)
+	if resp := waitFor(`"id":3`); strings.Contains(resp, `"error"`) {
+		t.Fatalf("subscribing to a plugin resource failed: %s", resp)
+	}
+
+	send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"generate_plugin_context","arguments":{"plugin_path":"local_demo"}}}`)
+	waitFor(`"method":"notifications/resources/updated","params":{"uri":"moodle://plugin/local_demo/context"}`)
 }

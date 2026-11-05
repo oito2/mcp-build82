@@ -18,8 +18,11 @@ package extractors
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-build82/internal/moodletype"
 )
 
 // pluginFixtureVersionPhp is a version.php declaring component, version, requires, maturity and
@@ -104,9 +107,9 @@ func TestDetectPlugin_AmbiguousParentDirPrefersExactMatch(t *testing.T) {
 	}
 }
 
-// TestDetectPlugin_CommentedOutComponentStillMatches verifies that the regex backend also reads a commented-out component line.
-func TestDetectPlugin_CommentedOutComponentStillMatches(t *testing.T) {
-	// Only the regex backend reads commented-out lines, so it is selected explicitly.
+// TestDetectPlugin_CommentedOutComponentIsIgnored verifies that the regex backend, like the
+// tree-sitter one, does not read a commented-out component line.
+func TestDetectPlugin_CommentedOutComponentIsIgnored(t *testing.T) {
 	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "")
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n// $plugin->component = 'old_name';\n")
@@ -115,14 +118,13 @@ func TestDetectPlugin_CommentedOutComponentStillMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if info.Component != "old_name" {
-		t.Errorf("expected the commented-out component to still match (inherited imprecision), got %q", info.Component)
+	if info.Component == "old_name" {
+		t.Error("the commented-out component was read")
 	}
 }
 
 // TestDetectPlugin_TreesitterBackendParity verifies that both backends return the same plugin
-// info for a well-formed plugin. A commented-out component line is not covered because the
-// backends differ on it.
+// info for a well-formed plugin.
 func TestDetectPlugin_TreesitterBackendParity(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "lang", "en"))
@@ -149,7 +151,7 @@ func TestDetectPlugin_TreesitterBackendParity(t *testing.T) {
 // TestDetectPlugin_TreesitterBackendParity_RealPlugins verifies that both backends agree on real
 // plugins from the available Moodle installations.
 func TestDetectPlugin_TreesitterBackendParity_RealPlugins(t *testing.T) {
-	root := "/srv/workspace/www/html/mdle/dev-500/mod"
+	root := filepath.Join(realMoodle("mdle-500"), "mod")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Skipf("real Moodle fixture tree not available: %v", err)
@@ -195,5 +197,122 @@ func TestIsPlugin(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n")
 	if !IsPlugin(dir) {
 		t.Error("expected true once version.php exists")
+	}
+}
+
+// TestInferTypeFromPath_LongestTypeDirectoryWins verifies that the type comes from the longest
+// type directory the plugin path ends with, so types sharing a trailing segment are told apart.
+func TestInferTypeFromPath_LongestTypeDirectoryWins(t *testing.T) {
+	for path, want := range map[string]string{
+		"/m/question/type/ordering":   "qtype",
+		"/m/calendar/type/gregorian":  "calendartype",
+		"/m/grade/report/grader":      "gradereport",
+		"/m/report/log":               "report",
+		"/m/mod/scorm/report/basic":   "scormreport",
+		"/m/mod/forum":                "mod",
+		"/m/admin/tool/usertours":     "tool",
+		"/m/local/demo":               "local",
+		"/m/somewhere/unknown/plugin": "unknown",
+	} {
+		if got := inferTypeFromPath(filepath.FromSlash(path)); got != want {
+			t.Errorf("inferTypeFromPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestDetectPlugin_TypeMatchesComponentOnRealInstall verifies, on a real Moodle installation, that
+// the type inferred from each plugin's path is the prefix of the component its version.php
+// declares. It is skipped when the installation is absent.
+func TestDetectPlugin_TypeMatchesComponentOnRealInstall(t *testing.T) {
+	root := realMoodle("mdle-500")
+	if _, err := os.Stat(filepath.Join(root, "version.php")); err != nil {
+		t.Skipf("real Moodle install not available: %v", err)
+	}
+	checked := 0
+	for typ, dir := range moodletype.PluginTypeToDir {
+		entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(dir)))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			pluginDir := filepath.Join(root, filepath.FromSlash(dir), e.Name())
+			if !e.IsDir() || !IsPlugin(pluginDir) {
+				continue
+			}
+			info, err := DetectPlugin(pluginDir)
+			if err != nil || info.Component == "" {
+				continue
+			}
+			checked++
+			if prefix, _, _ := strings.Cut(info.Component, "_"); info.Type != prefix {
+				t.Errorf("%s: type %q, but the component %q says %q (directory type %q)", pluginDir, info.Type, info.Component, prefix, typ)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no plugin checked")
+	}
+}
+
+// TestValidComponent verifies the frankenstyle component check.
+func TestValidComponent(t *testing.T) {
+	for c, want := range map[string]bool{
+		"local_myplugin": true, "mod_forum": true, "assignsubmission_file": true, "qtype_ddwtos": true,
+		"tool_mfa_factor": true, "local_x2": true,
+		"": false, "local": false, "_x": false, "Local_x": false, "local_": false, "1x_y": false,
+		"../../x": false, "local_../../x": false, "local/x": false, `local\x`: false, "local_x y": false,
+	} {
+		if got := ValidComponent(c); got != want {
+			t.Errorf("ValidComponent(%q) = %v, want %v", c, got, want)
+		}
+	}
+}
+
+// TestDetectPlugin_InvalidComponentFallsBack verifies that a version.php component that is not a
+// frankenstyle name (here one that would traverse out of the plugin) is replaced by type_name, so
+// it never reaches a file path such as lang/en/<component>.php.
+func TestDetectPlugin_InvalidComponentFallsBack(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "local", "evil")
+	mustMkdirAll(t, filepath.Join(dir, "lang", "en"))
+	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = '../../../secret';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(root, "secret.php"), "<?php\n$string['pluginname'] = 'LEAKED';\n")
+
+	info, err := DetectPlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Component != "local_evil" || info.DisplayName == "LEAKED" {
+		t.Errorf("expected the type_name fallback and no leaked display name, got %+v", info)
+	}
+}
+
+// TestReadVersionPhp_DecimalVersionsAndCommentedAssignments verifies, on both backends, that a
+// decimal $plugin->version keeps its decimal part, that commented-out assignments are ignored, and
+// that the last real assignment wins.
+func TestReadVersionPhp_DecimalVersionsAndCommentedAssignments(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "version.php"), []byte(`<?php
+$plugin->component = 'local_old';
+$plugin->component = 'local_demo';
+// $plugin->component = 'local_commented';
+$plugin->version = 2024010100.01;
+/* $plugin->version = 2099010100; */
+$plugin->requires = 2022112800; // $plugin->requires = 1;
+$plugin->maturity = MATURITY_STABLE;
+# $plugin->maturity = MATURITY_ALPHA;
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, backend := range []string{"", "treesitter"} {
+		t.Run("backend="+backend, func(t *testing.T) {
+			t.Setenv("BUILD82_EXTRACTOR_BACKEND", backend)
+			component, version, requires, maturity := readVersionPhp(dir)
+			got := []string{component, version, requires, maturity}
+			want := []string{"local_demo", "2024010100.01", "2022112800", "MATURITY_STABLE"}
+			if !slices.Equal(got, want) {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
 	}
 }

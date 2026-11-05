@@ -47,7 +47,7 @@ func ParseTasksPhp(filePath string) *TasksExtraction {
 
 	tasks := []ScheduledTask{}
 	for _, block := range phparray.SplitIntoBlocks(body) {
-		classname := phparray.ExtractString(block, "classname")
+		classname := phparray.ExtractStringOrClass(block, "classname")
 		if classname == "" {
 			continue
 		}

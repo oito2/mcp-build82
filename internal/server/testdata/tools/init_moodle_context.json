@@ -15,6 +15,11 @@
       },
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "moodle_path": {
@@ -32,19 +37,24 @@
     "additionalProperties": false,
     "properties": {
       "already_initialized": {
+        "description": "True when a configuration already existed and force was not set, so nothing was regenerated",
         "type": "boolean"
       },
       "config_path": {
+        "description": "Absolute path of the build82 configuration file",
         "type": "string"
       },
       "failed": {
+        "description": "Global index files that could not be generated",
         "items": {
           "additionalProperties": false,
           "properties": {
             "error": {
+              "description": "Why the file could not be generated",
               "type": "string"
             },
             "file": {
+              "description": "Path of the file that failed to generate (relative to the Moodle root for global files, to the plugin for plugin files)",
               "type": "string"
             }
           },
@@ -60,6 +70,7 @@
         ]
       },
       "generated": {
+        "description": "Global index files written by this call",
         "items": {
           "type": "string"
         },
@@ -69,15 +80,19 @@
         ]
       },
       "moodle_full_version": {
+        "description": "Detected Moodle build number (the $version of version.php)",
         "type": "string"
       },
       "moodle_path": {
+        "description": "Absolute path of the configured Moodle root",
         "type": "string"
       },
       "moodle_version": {
+        "description": "Detected Moodle release, such as 4.5",
         "type": "string"
       },
       "skipped": {
+        "description": "Global index files served from the cache because their sources did not change",
         "items": {
           "type": "string"
         },
@@ -87,6 +102,7 @@
         ]
       },
       "success": {
+        "description": "Whether build82 is initialized for the Moodle path",
         "type": "boolean"
       }
     },

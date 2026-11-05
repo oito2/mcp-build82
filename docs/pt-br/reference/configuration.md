@@ -14,7 +14,7 @@ Fonte da verdade: `internal/config/config.go`, `cmd/build82/main.go`, `internal/
 | Escrito por | A ferramenta `init_moodle_context` (somente quando ainda não inicializado, ou com `force: true`) e `update_indexes` (somente quando a versão detectada do Moodle difere da armazenada). Nunca escrito pelos subcomandos da CLI. |
 | Lido por | Toda ferramenta, recurso e prompt que precisa da raiz do Moodle; `build82 uninstall --purge`. |
 | Apagado por | `build82 uninstall --purge`. Veja [Desinstalação](../getting-started/uninstallation.md). |
-| Método de escrita | Substituição atômica, modo `0644`. Sem trava entre processos; com escritores concorrentes, o último prevalece. |
+| Método de escrita | Substituição atômica, gravada em disco, modo `0644` (no Windows, um rename bloqueado por outro processo é repetido por até 1 segundo). Sem trava entre processos; com escritores concorrentes, o último prevalece. |
 
 ### Formato
 
@@ -51,30 +51,15 @@ Regras de interpretação na leitura:
 | `BUILD82_MOODLE_VERSION` | Servidor | string | vazia | Versão do Moodle. Lida somente quando `BUILD82_MOODLE_PATH` está definida. Espaços removidos. |
 | `BUILD82_MOODLE_FULLVERSION` | Servidor | string | vazia | Número de build numérico (o `$version` do `version.php`, por exemplo `2024100700`). Lida somente quando `BUILD82_MOODLE_PATH` está definida. Espaços removidos. |
 | `BUILD82_EXTRACTOR_BACKEND` | Servidor | string | não definida | Exatamente `treesitter` seleciona o backend de extração PHP baseado em tree-sitter. Qualquer outro valor, ou ausência, seleciona o backend regex. Diferencia maiúsculas de minúsculas; avaliada a cada chamada de extração. Veja [Extratores](../architecture/extractors.md). |
-| `BUILD82_TOKEN` | `--http` | string | não definida | Token Bearer para `/mcp` e `/sse`. Veja a semântica abaixo. |
-| `CLINE_DATA_DIR` | `install`, `uninstall` | string (caminho absoluto) | não definida | O diretório de dados da própria CLI do Cline, que substitui `~/.cline/data`. Quando definida com um valor não vazio, o alvo `cline` detecta a CLI do Cline por esse diretório e grava/remove `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` em vez de `~/.cline/data/settings/cline_mcp_settings.json`. Tem precedência sobre `CLINE_DIR`. Veja [Cline](../guides/clients/cline.md). |
+| `CLINE_DATA_DIR` | `install`, `uninstall` | string (caminho absoluto) | não definida | O diretório de dados da própria CLI do Cline, que substitui `~/.cline/data`. Quando tem um caminho absoluto (um valor relativo é ignorado), o alvo `cline` detecta a CLI do Cline por esse diretório e grava/remove `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` em vez de `~/.cline/data/settings/cline_mcp_settings.json`. Tem precedência sobre `CLINE_DIR`. Veja [Cline](../guides/clients/cline.md). |
 | `CLINE_DIR` | `install`, `uninstall` | string (caminho absoluto) | não definida | O diretório de configuração da própria CLI do Cline, que substitui `~/.cline`. Quando tem um caminho absoluto (um valor relativo é ignorado) e `CLINE_DATA_DIR` não está definida, o alvo `cline` detecta a CLI do Cline por esse diretório e grava/remove `$CLINE_DIR/data/settings/cline_mcp_settings.json`. Veja [Cline](../guides/clients/cline.md). |
 | `LOCALAPPDATA` | `install`, `uninstall` (Windows) | string (caminho absoluto) | `%USERPROFILE%\AppData\Local` | Base dos diretórios `Packages\Claude_<id>\LocalCache\Roaming\Claude` do pacote MSIX do Claude Desktop, também usados pelo alvo `claude-desktop`. Veja [Claude Desktop](../guides/clients/claude-desktop.md). |
-
-### Semântica de `BUILD82_TOKEN`
-
-| Estado | Efeito |
-| :--- | :--- |
-| Não definida e sem flag `--token` | Autenticação desativada (aviso no stderr). |
-| Definida com valor não vazio, sem flag `--token` | O valor é o token. |
-| Definida porém vazia (`export BUILD82_TOKEN=`), sem flag `--token` | Erro na inicialização, código de saída 1: `BUILD82_TOKEN is set but empty; unset it entirely to run --http without authentication`. |
-| Qualquer valor, com `--token <não vazio>` | A flag prevalece; a variável é ignorada. |
-| Qualquer valor, com `--token ""` | Erro na inicialização, código de saída 1 (a flag é verificada primeiro). |
-
-O valor não tem os espaços removidos. Lida somente com `--http`; ignorada no stdio. Fluxo completo: [Referência da CLI](./cli.md#resolução-do-token).
 
 ## Precedência
 
 | Configuração | Ordem (maior prioridade primeiro) |
 | :--- | :--- |
 | Raiz do Moodle, versão, versão completa | 1. `BUILD82_MOODLE_PATH` (com suas `BUILD82_MOODLE_VERSION` e `BUILD82_MOODLE_FULLVERSION`) 2. `~/.build82`. |
-| Token Bearer HTTP | 1. `--token` 2. `BUILD82_TOKEN` 3. nenhum (desativado). |
-| Porta, host, hosts permitidos | Somente flags (`--port`, `--host`, `--allowed-host`); sem variável de ambiente nem arquivo. |
 | Backend de extração | Somente `BUILD82_EXTRACTOR_BACKEND`. |
 
 Comportamentos a observar:

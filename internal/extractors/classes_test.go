@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestExtractClasses_Basic verifies names, FQNs, kinds, extends, implements and root-relative file paths of classes
@@ -229,11 +230,10 @@ func assertPhpClassParity(t *testing.T, fqn string, regex, ts PhpClass) {
 }
 
 // TestExtractClasses_TreesitterBackendParity_RealFiles compares both backends on Moodle core's
-// lib/classes tree. Classes are matched by FQN because the backends can legitimately find
-// different sets (e.g. a "final class" is missed by the regex backend). The test is skipped when
-// the tree is not available.
+// lib/classes tree: both must find the same set of classes (matched by FQN) and agree on each one.
+// The test is skipped when the tree is not available.
 func TestExtractClasses_TreesitterBackendParity_RealFiles(t *testing.T) {
-	root := "/srv/workspace/www/html/mdle/dev-500/lib/classes"
+	root := filepath.Join(realMoodle("mdle-500"), "lib", "classes")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("real Moodle fixture tree not available: %v", err)
 	}
@@ -255,14 +255,14 @@ func TestExtractClasses_TreesitterBackendParity_RealFiles(t *testing.T) {
 	for fqn, rc := range regexByFQN {
 		tc, ok := tsByFQN[fqn]
 		if !ok {
-			t.Logf("class %q found by regex but not treesitter", fqn)
+			t.Errorf("class %q found by regex but not treesitter", fqn)
 			continue
 		}
 		assertPhpClassParity(t, fqn, rc, tc)
 	}
 	for fqn := range tsByFQN {
 		if _, ok := regexByFQN[fqn]; !ok {
-			t.Logf("class %q found by treesitter but not regex (e.g. a \"final class\" the regex backend's line-anchored pattern never detects at all)", fqn)
+			t.Errorf("class %q found by treesitter but not regex", fqn)
 		}
 	}
 }
@@ -273,7 +273,7 @@ func TestExtractClasses_TreesitterBackendParity_RealFiles(t *testing.T) {
 func TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}
@@ -443,5 +443,43 @@ func TestStripCommentsAndHeredocs_Attributes(t *testing.T) {
 	}
 	if strings.Contains(got, "class B") || strings.Contains(got, "class C") {
 		t.Errorf("comments not blanked: %q", got)
+	}
+}
+
+// TestStripCommentsAndHeredocs_HeredocCloser verifies that a heredoc ends only at a line holding
+// its identifier, optionally indented and not followed by an identifier character, so a line
+// starting with a longer identifier stays inside the body.
+func TestStripCommentsAndHeredocs_HeredocCloser(t *testing.T) {
+	src := "<?php\n$a = <<<EOT\nclass inside_body {}\nEOTX class still_body {}\n  EOT;\nclass after_heredoc {}\n"
+	got := stripCommentsAndHeredocs(src)
+	if strings.Contains(got, "inside_body") || strings.Contains(got, "still_body") {
+		t.Errorf("heredoc body not blanked:\n%s", got)
+	}
+	if !strings.Contains(got, "  EOT;\nclass after_heredoc {}") {
+		t.Errorf("text after the closing identifier must be kept:\n%s", got)
+	}
+	if len(got) != len(src) {
+		t.Errorf("length changed: %d, want %d", len(got), len(src))
+	}
+}
+
+// TestStripCommentsAndHeredocs_LargeHeredocIsLinear verifies that a heredoc with many lines is
+// blanked in time linear in its size; searching for the closer from every line start is quadratic.
+func TestStripCommentsAndHeredocs_LargeHeredocIsLinear(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<?php\n$a = <<<EOT\n")
+	for i := 0; i < 50000; i++ {
+		b.WriteString("some heredoc text line\n")
+	}
+	b.WriteString("EOT;\nclass after_heredoc {}\n")
+
+	start := time.Now()
+	got := stripCommentsAndHeredocs(b.String())
+	elapsed := time.Since(start)
+	if !strings.Contains(got, "class after_heredoc") {
+		t.Fatal("the class after the heredoc was blanked")
+	}
+	if limit := time.Second * raceSlowdown; elapsed > limit {
+		t.Errorf("blanking took %s, over the %s bound", elapsed, limit)
 	}
 }

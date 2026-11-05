@@ -24,11 +24,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/oito2/mcp-build82/internal/binpath"
 	"github.com/oito2/mcp-build82/internal/extractors"
@@ -43,9 +45,20 @@ var (
 	goos       = runtime.GOOS
 	lookPath   = exec.LookPath
 	runCommand = func(name string, args ...string) ([]byte, error) {
-		return exec.Command(name, args...).CombinedOutput()
+		ctx, cancel := context.WithTimeout(context.Background(), cliTimeout)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+		if ctx.Err() == context.DeadlineExceeded {
+			return out, fmt.Errorf("%s %s did not finish within %s", name, strings.Join(args, " "), cliTimeout)
+		}
+		return out, err
 	}
 )
+
+// cliTimeout bounds each call to a tool's own CLI (`claude`, `codex`), which may start the server
+// for a health check or wait on a login, so a hung CLI cannot block install or uninstall forever.
+// It is a variable so tests can shorten it.
+var cliTimeout = 60 * time.Second
 
 // configShape identifies the layout of a tool's MCP configuration, which determines the JSON key and
 // entry fields written for build82 (or that the tool is configured through its own CLI).
@@ -72,6 +85,15 @@ func (s configShape) topKey() string {
 		return "context_servers"
 	}
 	return ""
+}
+
+// envKey returns the key of the environment-variable object in a build82 entry of shape `s`:
+// "environment" for OpenCode, "env" for every other file-based shape.
+func (s configShape) envKey() string {
+	if s == shapeOpenCode {
+		return "environment"
+	}
+	return "env"
 }
 
 // cliSpec describes a tool that manages its own MCP registrations through a CLI, so build82
@@ -323,9 +345,11 @@ func clineCLISettings(dataDir string) string {
 // clineCLIDirs returns the directory whose presence marks a Cline CLI install and the data
 // directory holding its settings: ~/.cline and ~/.cline/data by default. CLINE_DIR, when it is an
 // absolute path, replaces ~/.cline (and so moves the data directory under it); CLINE_DATA_DIR,
-// when set, replaces the data directory as a whole and is then used as the marker too.
+// when it is an absolute path, replaces the data directory as a whole and is then used as the
+// marker too. A relative value of either is ignored, since it would point at a file relative to
+// wherever the command runs.
 func clineCLIDirs(home string) (marker, data string) {
-	if v := os.Getenv("CLINE_DATA_DIR"); v != "" {
+	if v := os.Getenv("CLINE_DATA_DIR"); filepath.IsAbs(v) {
 		return v, v
 	}
 	marker = filepath.Join(home, ".cline")
@@ -664,20 +688,63 @@ func serversObject(m map[string]any, topKey, path string) (map[string]any, error
 }
 
 // entryMatches reports whether `current`, an existing build82 entry, holds every key of `want`
-// with an equal JSON value. Keys the user added to the entry are allowed.
-func entryMatches(current any, want map[string]any) bool {
+// with an equal JSON value; for the environment object under `envKey`, every variable of `want`
+// must be present with an equal value. Keys and variables the user added are allowed.
+func entryMatches(current any, want map[string]any, envKey string) bool {
 	cur, ok := current.(map[string]any)
 	if !ok {
 		return false
 	}
 	for k, v := range want {
-		a, errA := json.Marshal(cur[k])
-		b, errB := json.Marshal(v)
-		if errA != nil || errB != nil || !bytes.Equal(a, b) {
+		if k == envKey {
+			curEnv, _ := cur[k].(map[string]any)
+			wantEnv, _ := v.(map[string]any)
+			for name, value := range wantEnv {
+				if !jsonEqual(curEnv[name], value) {
+					return false
+				}
+			}
+			continue
+		}
+		if !jsonEqual(cur[k], v) {
 			return false
 		}
 	}
 	return true
+}
+
+// jsonEqual reports whether `a` and `b` encode to the same JSON.
+func jsonEqual(a, b any) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(x, y)
+}
+
+// mergeEntry returns the build82 entry to write: `want` applied on top of `current` (an existing
+// entry, or nil), so the keys the user added to the entry (disabled, autoApprove, timeout, ...)
+// are kept, and the environment object under `envKey` merged variable by variable, so the user's
+// own variables are kept as well. A `current` that is not an object is replaced by `want`.
+func mergeEntry(current any, want map[string]any, envKey string) map[string]any {
+	cur, ok := current.(map[string]any)
+	if !ok {
+		return want
+	}
+	merged := maps.Clone(cur)
+	for k, v := range want {
+		if k == envKey {
+			env := map[string]any{}
+			if curEnv, ok := cur[k].(map[string]any); ok {
+				maps.Copy(env, curEnv)
+			}
+			if wantEnv, ok := v.(map[string]any); ok {
+				maps.Copy(env, wantEnv)
+			}
+			merged[k] = env
+			continue
+		}
+		merged[k] = v
+	}
+	return merged
 }
 
 // serverEntry builds the build82 entry for the given shape, launching `binaryPath` with
@@ -698,8 +765,9 @@ func serverEntry(shape configShape, binaryPath, moodlePath string) map[string]an
 }
 
 // writeConfig merges a build82 entry into the config file at `path`, in the shape of target `t`,
-// preserving every other key, their order and their values as written. A file that already holds
-// the wanted entry is left unchanged. Otherwise a file with comments or trailing commas is left
+// preserving every other key, their order and their values as written. An existing build82 entry
+// is updated in place (mergeEntry), keeping the keys and environment variables the user added to
+// it. A file that already holds the wanted entry is left unchanged. Otherwise a file with comments or trailing commas is left
 // untouched and the returned *manualEditError carries the snippet to add by hand. It also fails
 // when the file cannot be read, parsed or written, or the shape's key holds a non-object value.
 func writeConfig(t target, path, binaryPath, moodlePath string) error {
@@ -716,7 +784,8 @@ func writeConfig(t target, path, binaryPath, moodlePath string) error {
 		return err
 	}
 	entry := serverEntry(t.Shape, binaryPath, moodlePath)
-	if current, ok := servers["build82"]; ok && entryMatches(current, entry) {
+	current, hasCurrent := servers["build82"]
+	if hasCurrent && entryMatches(current, entry, t.Shape.envKey()) {
 		return nil
 	}
 	if !strict {
@@ -724,7 +793,7 @@ func writeConfig(t target, path, binaryPath, moodlePath string) error {
 		return &manualEditError{fmt.Sprintf("%s contains comments or trailing commas; it was left unchanged so they are not lost. "+
 			"Add this inside its %q object manually:\n%s", path, topKey, snippet)}
 	}
-	value, err := marshalNoEscape(entry)
+	value, err := marshalNoEscape(mergeEntry(current, entry, t.Shape.envKey()))
 	if err != nil {
 		return err
 	}
@@ -756,8 +825,8 @@ func cliError(bin string, args []string, out []byte, err error) error {
 // following `mcp add` never collides with an existing one. removed reports whether anything was
 // removed; warnings describe registrations that were deliberately left in place.
 //
-// For a tool with a single configuration (Codex), a failed `mcp get` means "not registered" only
-// when its output says so (notRegisteredOutput); any other failure is returned as an error.
+// A failed `mcp get` means "not registered" only when its output says so (notRegisteredOutput);
+// any other failure is returned as an error.
 //
 // For Claude Code, `claude mcp get` shows only the registration that takes precedence (local over
 // project over user), so it is queried again after each removal. Local and user registrations are
@@ -781,7 +850,12 @@ func removeCLIRegistration(c *cliSpec) (removed bool, warnings []string, err err
 	for {
 		out, err := runCommand(c.Bin, c.GetArgs...)
 		if err != nil {
-			return removed, warnings, nil
+			// Only Claude's own "No MCP server named" answer means nothing (more) is registered; a
+			// crash or an unreadable ~/.claude.json must not be taken for an absent registration.
+			if notRegisteredOutput(out) {
+				return removed, warnings, nil
+			}
+			return removed, warnings, cliError(c.Bin, c.GetArgs, out, err)
 		}
 		scope := c.Scope(out)
 		switch {
@@ -830,15 +904,51 @@ func projectScopeWarning(bin string) string {
 		"To remove it, run from that directory: %s mcp remove --scope project build82", dir, bin)
 }
 
+// checkBatchArgs refuses `args` for the tool CLI `bin` when, on Windows, `bin` resolves to a
+// batch file (.cmd or .bat, as npm installs `claude` and `codex`) and an argument holds a
+// character cmd.exe would interpret (& | < > ^ % ! " or a line break): Go's argument quoting does
+// not protect batch files, so such a Moodle or binary path could run another command or be cut
+// short. It returns nil on other systems, for other executables, or when `bin` is not on PATH.
+func checkBatchArgs(bin string, args []string) error {
+	if goos != "windows" {
+		return nil
+	}
+	path, err := lookPath(bin)
+	if err != nil {
+		return nil
+	}
+	if ext := strings.ToLower(filepath.Ext(path)); ext != ".cmd" && ext != ".bat" {
+		return nil
+	}
+	for _, a := range args {
+		if strings.ContainsAny(a, "&|<>^%!\"\r\n") {
+			return fmt.Errorf("%s is a batch file and the argument %q contains characters cmd.exe would interpret; "+
+				"register build82 by hand (see the client guide) or move it to a path without them", filepath.Base(path), a)
+		}
+	}
+	return nil
+}
+
 // installTarget registers build82 in a target. replaced reports whether an existing build82
 // registration was replaced; warnings describe registrations left in place.
 func installTarget(t target, binaryPath, moodlePath string) (replaced bool, warnings []string, err error) {
 	if t.Shape == shapeCLI {
+		addArgs := t.CLI.AddArgs(binaryPath, moodlePath)
+		if err := checkBatchArgs(t.CLI.Bin, addArgs); err != nil {
+			return false, nil, err
+		}
 		replaced, warnings, err = removeCLIRegistration(t.CLI)
 		if err != nil {
 			return replaced, warnings, err
 		}
-		return replaced, warnings, runCLI(t.CLI.Bin, t.CLI.AddArgs(binaryPath, moodlePath))
+		if err := runCLI(t.CLI.Bin, addArgs); err != nil {
+			if replaced {
+				err = fmt.Errorf("%w; the previous build82 registration was already removed — run `build82 install %s` again, "+
+					"or register build82 by hand", err, t.ID)
+			}
+			return replaced, warnings, err
+		}
+		return replaced, warnings, nil
 	}
 	var paths []string
 	if t.InstallPaths != nil {
@@ -933,32 +1043,24 @@ func confirm(ctx context.Context, in *bufio.Reader, question string) (bool, erro
 
 // --- top-level flow -------------------------------------------------------------------------------
 
-// targetByID looks up an install target by its ID. found is false when no target has that ID; the
-// error is non-nil only when the target table cannot be built.
-func targetByID(id string) (target, bool, error) {
-	ts, err := targets()
-	if err != nil {
-		return target{}, false, err
-	}
-	for _, t := range ts {
-		if t.ID == id {
-			return t, true, nil
-		}
-	}
-	return target{}, false, nil
-}
-
-// supportedIDs returns the IDs of all install targets, in table order.
-func supportedIDs() ([]string, error) {
-	ts, err := targets()
-	if err != nil {
-		return nil, err
-	}
+// targetIDs returns the IDs of the targets `ts`, in table order.
+func targetIDs(ts []target) []string {
 	ids := make([]string, len(ts))
 	for i, t := range ts {
 		ids[i] = t.ID
 	}
-	return ids, nil
+	return ids
+}
+
+// lookupTarget returns the target of `ts` whose ID is `id`, or an "unknown target" error listing
+// the supported IDs when there is none.
+func lookupTarget(ts []target, id string) (target, error) {
+	for _, t := range ts {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return target{}, fmt.Errorf("unknown target %q — supported targets: %s", id, strings.Join(targetIDs(ts), ", "))
 }
 
 // Run is the top-level `build82 install [target]` flow. With a non-empty `targetID` it installs
@@ -974,18 +1076,15 @@ func Run(ctx context.Context, targetID string) error {
 	}
 
 	in := bufio.NewReader(os.Stdin)
+	ts, err := targets()
+	if err != nil {
+		return err
+	}
 
 	if targetID != "" {
-		t, ok, err := targetByID(targetID)
+		t, err := lookupTarget(ts, targetID)
 		if err != nil {
 			return err
-		}
-		if !ok {
-			ids, err := supportedIDs()
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("unknown target %q — supported targets: %s", targetID, strings.Join(ids, ", "))
 		}
 		if t.Unsupported != "" {
 			fmt.Printf("Skipped: %s (%s).\n", t.Label, t.Unsupported)
@@ -1004,10 +1103,6 @@ func Run(ctx context.Context, targetID string) error {
 		return err
 	}
 
-	ts, err := targets()
-	if err != nil {
-		return err
-	}
 	var detected []target
 	for _, t := range ts {
 		if detectTarget(t) {
@@ -1015,11 +1110,7 @@ func Run(ctx context.Context, targetID string) error {
 		}
 	}
 	if len(detected) == 0 {
-		ids, err := supportedIDs()
-		if err != nil {
-			return err
-		}
-		fmt.Printf("No supported AI tools detected. Supported targets: %s\n", strings.Join(ids, ", "))
+		fmt.Printf("No supported AI tools detected. Supported targets: %s\n", strings.Join(targetIDs(ts), ", "))
 		return nil
 	}
 

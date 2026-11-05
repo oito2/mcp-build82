@@ -1,14 +1,13 @@
 {
+  "add_htmlattributes": "\\core\\hook\\output\\before_html_attributes",
+  "after_config": "\\core\\hook\\after_config",
+  "after_file_created": "\\core_files\\hook\\after_file_created",
+  "before_file_created": "\\core_files\\hook\\before_file_created",
+  "before_footer": "\\core\\hook\\output\\before_footer_html_generation",
   "before_http_headers": "\\core\\hook\\output\\before_http_headers",
-  "before_footer": "\\core\\hook\\output\\before_footer",
-  "before_standard_html_head": "\\core\\hook\\output\\before_standard_html_head",
-  "after_config": "\\core\\hook\\output\\after_config",
-  "after_require_login": "\\core\\hook\\output\\after_require_login",
-  "extend_navigation": "\\core\\hook\\navigation\\primary_extend",
-  "pre_signup_requests": "\\core\\hook\\auth\\signup_page_info",
-  "extend_signup_form": "\\core\\hook\\auth\\signup_page_info",
-  "validate_extend_signup_form": "\\core\\hook\\auth\\signup_page_info",
-  "course_module_viewed": "\\core\\hook\\coursemodule\\after_cm_page_view",
-  "extend_course_navigation": "\\core\\hook\\navigation\\primary_extend",
-  "cron": "\\core\\hook\\cron\\after_cron_task"
+  "before_standard_html_head": "\\core\\hook\\output\\before_standard_head_html_generation",
+  "before_standard_top_of_body_html": "\\core\\hook\\output\\before_standard_top_of_body_html_generation",
+  "bulk_user_actions": "\\core_user\\hook\\extend_bulk_user_actions",
+  "standard_after_main_region_html": "\\core\\hook\\output\\after_standard_main_region_html_generation",
+  "standard_footer_html": "\\core\\hook\\output\\before_standard_footer_html_generation"
 }

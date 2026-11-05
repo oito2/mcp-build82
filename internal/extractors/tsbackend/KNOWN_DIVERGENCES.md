@@ -1,29 +1,21 @@
 # Known divergences from the regex backend
 
-Every deliberate behavioral difference between the tree-sitter backend (`BUILD82_EXTRACTOR_BACKEND=treesitter`)
-and the default regex/bracket-depth backend, per `.dev/docs/10-treesitter-backend-plan.md` §3.4: where
-tree-sitter is more correct on a known regex blind spot, the difference is documented here rather than
-replicated as a bug-for-bug match.
+Every deliberate behavioral difference between the tree-sitter backend
+(`BUILD82_EXTRACTOR_BACKEND=treesitter`) and the default regex/bracket-depth backend: where
+tree-sitter is more correct on a known regex blind spot, the difference is documented here rather
+than replicated as a bug-for-bug match.
 
-## 1. Commented-out array entries — general pattern, not just `version.php` (Phase 1, confirmed recurring in Phase 5)
+## 1. Commented-out array entries (Phase 1, confirmed recurring in Phase 5)
 
-**Regex backend**: matches a commented-out line, e.g. `// $plugin->component = 'old_name';`, because
-its line-based `strings.Contains` dispatch has no comment-stripping pass — a known, deliberately
-preserved imprecision (see `internal/extractors/plugin.go`'s `readVersionPhp` doc comment and
-`plugin_test.go`'s `TestDetectPlugin_CommentedOutComponentStillMatches`).
+**No longer a divergence for `version.php` and `db/upgrade.php`:** the regex backend's
+`readVersionPhp` and `ParseUpgradePhp` blank comments and heredoc bodies before matching
+(`stripCommentsAndHeredocs`), so a commented-out `$plugin->component` line or upgrade step is
+ignored by both backends. For `version.php` both backends also keep the decimal part of a version
+(`2024010100.01`) and take the last assignment of a field, as PHP does. Verified in
+`plugin_test.go`'s `TestReadVersionPhp_DecimalVersionsAndCommentedAssignments` and
+`upgrade_test.go`'s `TestParseUpgradePhp_IgnoresCommentsAndHeredocs`.
 
-**Tree-sitter backend**: correctly parses the line as a `comment` node, not an `assignment_expression`
-— it finds no `$plugin->component` assignment at all, so `DetectPlugin` falls back to
-`{type}_{dirname}` exactly like it does for a plugin with no `version.php` component field at all.
-
-**Which is more correct**: tree-sitter. A commented-out line has no runtime effect in real PHP; the
-regex backend's behavior here is an accepted historical quirk, not a feature worth preserving in the
-new backend.
-
-Verified in `internal/extractors/tsbackend/version_test.go`'s
-`TestReadVersionPhp_KnownDivergence_CommentedOutComponent`.
-
-**This is a general pattern, not specific to `version.php`.** Every regex-backend extractor built on
+**Still a divergence for the array extractors.** Every regex-backend extractor built on
 `phparray.ExtractArrayBody`/`SplitIntoBlocks`/`SplitKeyedEntries` operates on raw file text with no
 comment-stripping pass, so any of them will match an entry inside a `/* ... */` or `//` comment block
 just as readily as a real one. Confirmed recurring in Phase 5 against real core source: several real
@@ -56,8 +48,9 @@ never mistaking it for the closing quote — returns the full, correct `Update a
 ever captures the *first* quoted fragment and silently drops everything after the `.` — it has no
 concept of the concatenation operator.
 
-**Tree-sitter backend**: `StringValue` recursively resolves `.`-operator `binary_expression` nodes
-(see its own doc comment and `shared_test.go`'s `TestStringValue_Concatenation`/
+**Tree-sitter backend**: `StringValue` resolves `.`-operator `binary_expression` chains with an
+explicit stack, iteratively, so a very long chain cannot exhaust the call stack (see its own doc
+comment and `shared_test.go`'s `TestStringValue_Concatenation`/
 `TestStringValue_ConcatenationThreeFragments`), correctly returning the full concatenated string.
 
 **Which is more correct**: tree-sitter. Found against real Moodle core source in `dev-uvv`'s and
@@ -136,6 +129,8 @@ practical miss rate here is high.
 
 ## 7. `final class` declarations are invisible to the regex backend entirely (Phase 7)
 
+**Status: resolved in v1.2.0.** The regex class scanner accepts any `abstract`, `final` and `readonly` modifiers before `class`, so both backends now find these classes; the text below describes the former behaviour.
+
 **Regex backend**: `kindPattern` is `(?m)^(abstract\s+class|class|interface|trait|enum)\s+(...)`  —
 anchored at the *start of the line* (`(?m)^`). A line reading `final class hooks implements ... {`
 starts with `final`, not one of the four alternatives, so the whole line never matches — the class
@@ -151,11 +146,11 @@ isn't just miscategorized, it's **never detected at all**.
 `final` is an increasingly common modern-PHP convention for utility/value classes not meant to be
 subclassed — this isn't a rare pattern.
 
-Entries #5, #6, and #7 mean `internal/extractors/classes_test.go`'s real-file parity tests compare
-by FQN (for classes) and log-not-fail on any count mismatch (for both classes and renamed-class
-entries) rather than asserting exact positional/count equality — see
-`TestExtractClasses_TreesitterBackendParity_RealFiles` and
-`TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles`.
+With #7 resolved, `internal/extractors/classes_test.go`'s
+`TestExtractClasses_TreesitterBackendParity_RealFiles` requires both backends to find the same
+classes (matched by FQN) and logs only the `implements` differences of #5;
+`TestParseRenamedClassesPhp_TreesitterBackendParity_RealFiles` still logs the renamed-class entries
+of #6 that only tree-sitter finds.
 
 ## 8. Reference-returning functions (`function &name()`) invisible to the regex backend (Phase 9)
 
@@ -172,6 +167,8 @@ so the function isn't just misclassified, it's **never found at all**.
 is a genuine, actively-used core function, not a contrived edge case.
 
 ## 9. PHP 8 attributes (`#[...]`) between a PHPDoc block and a function break the regex backend's doc lookup (Phase 9)
+
+**Status: resolved in v1.2.0.** The regex backend's docblock lookup skips single- and multi-line attributes between the block and the declaration; the text below describes the former behaviour.
 
 **Regex backend**: `findDocBlock` walks backward from the function line looking for the docblock's
 closing `*/`, tolerating only blank lines in between. Modern Moodle core (5.0+) annotates deprecated
@@ -227,6 +224,8 @@ real-world PHPDoc authoring slip that the regex backend's fragility here is a re
 gap.
 
 ## 11. A non-standard closing marker (`**/` instead of `*/`) breaks the regex backend's closing-delimiter detection (Phase 9)
+
+**Status: resolved in v1.2.0.** Any line ending in `*/` (including `**/`) closes the block for the regex backend too; the text below describes the former behaviour.
 
 **Regex backend**: the docblock-closing check is an exact match, `trimmed == "*/"`. Real core source
 (`lib/filterlib.php`'s `filter_save_tags`) closes its docblock with `**/` (a doubled asterisk) —

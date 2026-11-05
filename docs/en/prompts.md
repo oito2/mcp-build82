@@ -96,7 +96,7 @@ Replace `local_myplugin`, `local_reports`, and similar names with your own plugi
 - **Expected parameters:** the plugin, and optionally a focus (security, performance, coding standards, database, core APIs, or everything; an unrecognized focus is rejected with an error listing the accepted values) and specific files.
 - **Example:**
   > Do a full code review of local_myplugin focused on security: missing capability checks, unescaped output, unvalidated parameters, and direct SQL.
-- **Expected output:** the agent uses the `review_plugin` prompt (focus `security`) and loads the plugin context. You get a findings report organized by the criteria checklist for that focus, with a suggested fix for each issue.
+- **Expected output:** the agent uses the `review_plugin` prompt (focus `security`) and loads the plugin context. You get a findings report organized by the criteria checklist for that focus, with a suggested fix for each issue. With focus `standards` or a full review, when `phpcs` with the moodle standard is installed, the agent first runs `check_coding_style` and bases the coding-standard findings on its report.
 
 ### Review only specific files
 
@@ -155,6 +155,13 @@ Replace `local_myplugin`, `local_reports`, and similar names with your own plugi
 - **Example:**
   > Check local_myplugin for legacy lib.php callbacks that were replaced by the Hook API in Moodle 4.3+, and show the migration steps for each one.
 - **Expected output:** the agent reads the callbacks and hook context (`/callbacks` resource), consults the plugin guide (`moodle://plugin-guide`) and `search_api` if needed. You get a list of legacy callbacks with the replacement hook and the code changes.
+
+### Plan an upgrade to a newer Moodle
+
+- **Expected parameters:** the plugin and the Moodle release to migrate to (such as 4.5 or 5.0).
+- **Example:**
+  > Plan the migration of local_myplugin to Moodle 4.5: what has to change and in which order?
+- **Expected output:** the agent uses the `upgrade_plugin` prompt. It gets the plugin's `requires`/`supported`, the deprecated core calls with file and line, the legacy callbacks that have a Hook API replacement and the upgrade-step findings, and returns a numbered plan (file, change, reason). Asked to carry it out, it edits the code and raises the version with `bump_plugin_version`.
 
 ### Read the Moodle reference indexes
 
@@ -265,7 +272,21 @@ Replace `local_myplugin`, `local_reports`, and similar names with your own plugi
 - **Expected parameters:** the plugin, the schema changes (new columns, indexes, renames).
 - **Example:**
   > local_myplugin needs a DB upgrade: add a "status" column (tinyint, default 0) to local_myplugin_data, add an index on (userid, status), and rename old_value to previous_value in local_myplugin_logs. Load the current schema and update db/upgrade.php, db/install.xml, and version.php.
-- **Expected output:** the agent reads the schema (`moodle://plugin/{component}/database`) and writes the upgrade step, the updated `install.xml`, and the bumped `$plugin->version`.
+- **Expected output:** the agent reads the schema (`moodle://plugin/{component}/database`), calls `bump_plugin_version` with `upgrade_step` to raise `$plugin->version` and add the step with its savepoint, then fills in the step's schema changes and updates `install.xml`.
+
+### Bump a plugin's version
+
+- **Expected parameters:** the plugin; optionally the new version (ten digits), release string or maturity.
+- **Example:**
+  > Bump the version of local_myplugin, set the release to 1.3.0 and the maturity to stable.
+- **Expected output:** the agent calls `bump_plugin_version`. It rewrites only the `$plugin->version`, `release` and `maturity` assignments in `version.php` (the new version defaults to today as `YYYYMMDD00`, or the current one + 1) and reports the old and new versions. It refuses, without writing anything, when an assignment is missing, duplicated or not a plain literal.
+
+### Bump the version and add an upgrade step
+
+- **Expected parameters:** the plugin and, optionally, a one-line description of the change.
+- **Example:**
+  > Bump my plugin version and add an upgrade step for the new reports table.
+- **Expected output:** the agent calls `bump_plugin_version` with `upgrade_step` (and the description). It raises `$plugin->version` and inserts an `if ($oldversion < V)` block with a TODO body and the savepoint matching the plugin type before the final `return true;` of `db/upgrade.php` (creating the file when missing). The agent can then write the table creation into the step and add the table to `install.xml`; `doctor` checks the result.
 
 ### Package a plugin for release
 
@@ -283,7 +304,7 @@ Replace `local_myplugin`, `local_reports`, and similar names with your own plugi
 - **Expected parameters:** none.
 - **Example:**
   > Run a full health check of build82 and tell me what needs fixing.
-- **Expected output:** the agent calls `doctor`. You get the checks for system dependencies (`php`, `ctags`, `git`), configuration, Moodle installation, global index freshness, development plugins, legacy files pending migration, cross-plugin consistency, deprecated core API usage, own-capability checks, own-language-string usage, and cache stats, plus an overall verdict.
+- **Expected output:** the agent calls `doctor`. You get the checks for system dependencies (`php`, `ctags`, `git`), configuration, Moodle installation, global index freshness, development plugins, legacy files pending migration, cross-plugin consistency, deprecated core API usage, own-capability checks, own-language-string usage, upgrade-step consistency, the Privacy API provider, and cache stats, plus an overall verdict.
 
 ### Find deprecated API usage
 
@@ -298,6 +319,34 @@ Replace `local_myplugin`, `local_reports`, and similar names with your own plugi
 - **Example:**
   > Check that my dev plugins only check capabilities they declare and only use language strings that exist.
 - **Expected output:** `doctor` (capability and lang-string consistency sections). You get the missing entries per plugin.
+
+### Check upgrade steps against install.xml
+
+- **Expected parameters:** development plugins marked `.indevelopment` with a `db/upgrade.php`.
+- **Example:**
+  > Check that my plugin's upgrade steps match install.xml and version.php, and that every step has the right savepoint.
+- **Expected output:** `doctor` (upgrade consistency section). You get each problem with its `db/upgrade.php` line: missing or wrong savepoints, steps out of order or newer than `version.php`, and tables or fields the steps create that a fresh install (from `install.xml`) would lack.
+
+### Check the Privacy API provider
+
+- **Expected parameters:** development plugins marked `.indevelopment`.
+- **Example:**
+  > Does my plugin declare its personal data correctly for the Privacy API?
+- **Expected output:** `doctor` (Privacy API section). It warns when `classes/privacy/provider.php` is missing, implements no metadata interface, or is a `null_provider` although a table stores user data (`userid`, `usermodified`, `relateduserid`, or a foreign key to `user`).
+
+### Check the Moodle coding style
+
+- **Expected parameters:** the plugin; optionally whether to include warnings and which files. Requires `phpcs` with the `moodlehq/moodle-cs` standard installed.
+- **Example:**
+  > Check local_myplugin against the Moodle coding standard, including warnings.
+- **Expected output:** `check_coding_style` (severity `warning`). You get the error and warning totals and, per file, each violation with its line, column, message and phpcs sniff; the agent can then fix them (many are fixable automatically with `phpcbf`).
+
+### Check only the files I changed
+
+- **Expected parameters:** the plugin and the files (relative to the plugin).
+- **Example:**
+  > Run the Moodle coding style check only on classes/external/get_report.php and lib.php in local_myplugin.
+- **Expected output:** `check_coding_style` with `files`. Only those files are checked, errors only by default.
 
 ### Check consistency between plugins
 

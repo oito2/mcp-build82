@@ -18,6 +18,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/generators"
 )
 
@@ -60,7 +62,7 @@ function local_test_do_thing($id) {
 }
 `)
 
-	results := checkDeprecatedApiUsage(moodlePath, []string{pluginDir})
+	results := checkDeprecatedApiUsage(moodlePath, loadDevPlugins(moodlePath, []string{pluginDir}))
 	if len(results) != 1 {
 		t.Fatalf("expected exactly 1 result, got %d: %+v", len(results), results)
 	}
@@ -91,7 +93,7 @@ function local_clean_do_thing($id) {
 }
 `)
 
-	results := checkDeprecatedApiUsage(moodlePath, []string{pluginDir})
+	results := checkDeprecatedApiUsage(moodlePath, loadDevPlugins(moodlePath, []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusOK {
 		t.Fatalf("expected a single OK result, got %+v", results)
 	}
@@ -125,7 +127,7 @@ function local_test_do_thing($id) {
 }
 `)
 
-	results := checkDeprecatedApiUsage(moodlePath, []string{pluginDir})
+	results := checkDeprecatedApiUsage(moodlePath, loadDevPlugins(moodlePath, []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusWarn {
 		t.Fatalf("expected a single warning about the cached-index-only deprecated function, got %+v", results)
 	}
@@ -218,8 +220,8 @@ func TestDoctor_FormatJSONReturnsStructuredReport(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &report); err != nil {
 		t.Fatalf("decoding into DoctorOutput: %v", err)
 	}
-	if len(report.SystemDependencies) != 3 {
-		t.Errorf("expected 3 system dependency checks, got %+v", report.SystemDependencies)
+	if len(report.SystemDependencies) != 4 {
+		t.Errorf("expected 4 system dependency checks, got %+v", report.SystemDependencies)
 	}
 	var moodleVersion string
 	for _, c := range report.Configuration {
@@ -280,5 +282,86 @@ func TestDoctor_DefaultFormatStaysMarkdown(t *testing.T) {
 	}
 	if json.Valid([]byte(text)) {
 		t.Errorf("expected Markdown, not JSON, by default")
+	}
+}
+
+// TestDoctor_DetectsEachDevPluginOnce verifies that doctor detects each development plugin a
+// single time and shares the result with every check.
+func TestDoctor_DetectsEachDevPluginOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	root := t.TempDir()
+	t.Setenv("BUILD82_MOODLE_PATH", root)
+	t.Setenv("BUILD82_MOODLE_VERSION", "4.5")
+	for _, name := range []string{"one", "two"} {
+		pluginDir := filepath.Join(root, "local", name)
+		mustMkdirAll(t, filepath.Join(pluginDir, generators.ContextDir))
+		mustWriteFile(t, filepath.Join(pluginDir, "version.php"), "<?php\n$plugin->component = 'local_"+name+"';\n$plugin->version = 2024010100;\n")
+		mustWriteFile(t, filepath.Join(pluginDir, generators.ContextDir, ".indevelopment"), "")
+	}
+
+	detections := map[string]int{}
+	real := detectPlugin
+	detectPlugin = func(dir string) (extractors.PluginInfo, error) {
+		detections[dir]++
+		return real(dir)
+	}
+	t.Cleanup(func() { detectPlugin = real })
+
+	callDoctorOverMCP(t, map[string]any{})
+	if len(detections) != 2 {
+		t.Fatalf("expected both dev plugins detected, got %v", detections)
+	}
+	for dir, n := range detections {
+		if n != 1 {
+			t.Errorf("%s was detected %d times, want 1", dir, n)
+		}
+	}
+}
+
+// TestDoctor_UndetectedDevPluginIsNamedByRelativePath verifies that a development plugin whose
+// detection fails is named in the report by its directory relative to the Moodle root, never by an
+// absolute host path.
+func TestDoctor_UndetectedDevPluginIsNamedByRelativePath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	root := t.TempDir()
+	t.Setenv("BUILD82_MOODLE_PATH", root)
+	t.Setenv("BUILD82_MOODLE_VERSION", "4.5")
+	pluginDir := filepath.Join(root, "local", "broken")
+	mustMkdirAll(t, filepath.Join(pluginDir, generators.ContextDir))
+	mustWriteFile(t, filepath.Join(pluginDir, "version.php"), "<?php\n$plugin->component = 'local_broken';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(pluginDir, generators.ContextDir, ".indevelopment"), "")
+
+	real := detectPlugin
+	detectPlugin = func(string) (extractors.PluginInfo, error) {
+		return extractors.PluginInfo{}, errors.New("unreadable")
+	}
+	t.Cleanup(func() { detectPlugin = real })
+
+	text, _ := callDoctorOverMCP(t, map[string]any{"format": "json"})
+	var out DoctorOutput
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("doctor JSON: %v\n%s", err, text)
+	}
+	if len(out.DevelopmentPlugins) != 1 || out.DevelopmentPlugins[0].Component != "local/broken" {
+		t.Fatalf("development plugins = %+v, want one named local/broken", out.DevelopmentPlugins)
+	}
+}
+
+// TestLegacyFilesCheck_NamesTheToolThatMigratesEachKind verifies that the legacy-files check names
+// update_indexes for global files and generate_plugin_context for plugin files, which are the
+// tools whose run moves each kind into .build82/.
+func TestLegacyFilesCheck_NamesTheToolThatMigratesEachKind(t *testing.T) {
+	if c := legacyFilesCheck(0, 0); c.Status != statusOK {
+		t.Errorf("no legacy files: status %s, want ok", c.Status)
+	}
+	global := legacyFilesCheck(2, 0).Detail
+	if !strings.Contains(global, "2 global file(s)") || !strings.Contains(global, "update_indexes") || strings.Contains(global, "generate_plugin_context") {
+		t.Errorf("global-only detail = %q", global)
+	}
+	plugin := legacyFilesCheck(0, 3).Detail
+	if !strings.Contains(plugin, "3 plugin file(s)") || !strings.Contains(plugin, "generate_plugin_context") || strings.Contains(plugin, "update_indexes") {
+		t.Errorf("plugin-only detail = %q", plugin)
 	}
 }

@@ -20,7 +20,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/oito2/mcp-build82/internal/cache"
 )
 
 // TestGlobalAndPluginOutputPath verifies both output-path helpers place files under the ContextDir subdirectory.
@@ -69,8 +73,8 @@ func TestSafely_RecoversPanic(t *testing.T) {
 	}
 }
 
-// TestWrite_CreatesParentDirAndMarksCache verifies Write creates missing parent directories and writes the content.
-func TestWrite_CreatesParentDirAndMarksCache(t *testing.T) {
+// TestWrite_CreatesParentDir verifies Write creates missing parent directories and writes the content.
+func TestWrite_CreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, ".build82", "AI_CONTEXT.md")
 
@@ -139,5 +143,45 @@ func TestEscapeMdCell(t *testing.T) {
 func TestTimestamp_Format(t *testing.T) {
 	if !regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$`).MatchString(Timestamp()) {
 		t.Errorf("unexpected timestamp format: %q", Timestamp())
+	}
+}
+
+// TestRunCached_SourceEditedDuringGenerationStaysStale verifies that a source saved while the
+// generator runs, after the sources were read, makes the next check regenerate the output.
+func TestRunCached_SourceEditedDuringGenerationStaysStale(t *testing.T) {
+	old := cache.Global
+	cache.Global = cache.NewMtimeCache()
+	t.Cleanup(func() { cache.Global = old })
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "lib.php")
+	if err := os.WriteFile(src, []byte("<?php\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(src, past, past); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, ContextDir, "OUT.md")
+
+	var (
+		results []GeneratorResult
+		mu      sync.Mutex
+	)
+	readAt := time.Now()
+	RunCached(&results, &mu, out, []string{src}, readAt, func() GeneratorResult {
+		// The user saves the source after it was read, while the output is being written.
+		edited := time.Now()
+		if !edited.After(readAt) {
+			edited = readAt.Add(time.Millisecond)
+		}
+		if err := os.Chtimes(src, edited, edited); err != nil {
+			t.Fatal(err)
+		}
+		return Write(out, "generated")
+	})()
+
+	if !cache.Global.IsStale(out, []string{src}) {
+		t.Error("a source edited during the generation must leave the output stale")
 	}
 }

@@ -11,6 +11,11 @@
     "properties": {
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "plugin_path": {
@@ -28,16 +33,20 @@
     "additionalProperties": false,
     "properties": {
       "component": {
+        "description": "Frankenstyle component of the plugin, such as local_myplugin",
         "type": "string"
       },
       "failed": {
+        "description": "Context files that could not be generated",
         "items": {
           "additionalProperties": false,
           "properties": {
             "error": {
+              "description": "Why the file could not be generated",
               "type": "string"
             },
             "file": {
+              "description": "Path of the file that failed to generate (relative to the Moodle root for global files, to the plugin for plugin files)",
               "type": "string"
             }
           },
@@ -53,6 +62,7 @@
         ]
       },
       "generated": {
+        "description": "Context files written by this call, relative to the plugin directory",
         "items": {
           "type": "string"
         },
@@ -62,9 +72,11 @@
         ]
       },
       "path": {
+        "description": "Plugin directory relative to the Moodle root",
         "type": "string"
       },
       "skipped": {
+        "description": "Context files served from the cache because their sources did not change",
         "items": {
           "type": "string"
         },
@@ -74,9 +86,11 @@
         ]
       },
       "type": {
+        "description": "Moodle plugin type, such as local or mod",
         "type": "string"
       },
       "version": {
+        "description": "Plugin version from its version.php",
         "type": "string"
       }
     },

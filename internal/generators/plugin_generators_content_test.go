@@ -41,7 +41,7 @@ func TestGeneratePluginDbTables_ReflectsSchema(t *testing.T) {
   </TABLES>
 </XMLDB>`)
 
-	result := GeneratePluginDbTables(testPluginInfo(dir), nil)
+	result := GeneratePluginDbTables(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -60,7 +60,7 @@ func TestGeneratePluginDbTables_NoTablesShowsPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
 
-	result := GeneratePluginDbTables(testPluginInfo(dir), nil)
+	result := GeneratePluginDbTables(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -80,7 +80,7 @@ $observers = [
     ['eventname' => '\\core\\event\\course_viewed', 'callback' => 'local_test\\observer::x', 'priority' => 50, 'internal' => true],
 ];`)
 
-	result := GeneratePluginEvents(testPluginInfo(dir), nil)
+	result := GeneratePluginEvents(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -121,20 +121,20 @@ func TestGeneratePluginCallbackIndex_ReflectsLegacyAndHooks(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "db"))
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
-	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\nfunction local_test_cron() {}\n")
+	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\nfunction local_test_before_footer() {}\n")
 	mustWriteFile(t, filepath.Join(dir, "db", "hooks.php"), `<?php
-$callbacks = [['hookname' => '\\core\\hook\\output\\before_footer', 'callback' => 'local_test\\hook_callbacks::before_footer', 'priority' => 200]];`)
+$callbacks = [['hookname' => '\\core\\hook\\output\\before_footer_html_generation', 'callback' => 'local_test\\hook_callbacks::before_footer', 'priority' => 200]];`)
 
-	result := GeneratePluginCallbackIndex(testPluginInfo(dir), nil)
+	result := GeneratePluginCallbackIndex(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
 	content, _ := os.ReadFile(PluginOutputPath(dir, "PLUGIN_CALLBACK_INDEX.md"))
 	s := string(content)
-	if !strings.Contains(s, "local_test_cron") {
+	if !strings.Contains(s, "local_test_before_footer") {
 		t.Errorf("expected the legacy callback listed, got:\n%s", s)
 	}
-	if !strings.Contains(s, "Registered Callbacks") || !strings.Contains(s, `core\hook\output\before_footer`) {
+	if !strings.Contains(s, "Registered Callbacks") || !strings.Contains(s, `core\hook\output\before_footer_html_generation`) {
 		t.Errorf("expected the registered Hook API callback, got:\n%s", s)
 	}
 	if !strings.Contains(s, "200") {
@@ -160,7 +160,7 @@ $functions = [
 	mustWriteFile(t, filepath.Join(dir, "ajax.php"), "<?php\n")
 	mustWriteFile(t, filepath.Join(dir, "amd", "src", "widget.js"), "// widget\n")
 
-	result := GeneratePluginEndpointIndex(testPluginInfo(dir), nil)
+	result := GeneratePluginEndpointIndex(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -185,7 +185,7 @@ func TestGeneratePluginEndpointIndex_DoesNotFalsePositiveOnFileMerelyEndingInAja
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
 	mustWriteFile(t, filepath.Join(dir, "notajax.php"), "<?php\n")
 
-	result := GeneratePluginEndpointIndex(testPluginInfo(dir), nil)
+	result := GeneratePluginEndpointIndex(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -208,7 +208,7 @@ func TestGeneratePluginRuntimeFlow_ReflectsCountsAndPresence(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "db", "tasks.php"), `<?php
 $tasks = [['classname' => '\\local_test\\task\\cleanup', 'blocking' => 0]];`)
 
-	result := GeneratePluginRuntimeFlow(testPluginInfo(dir), nil)
+	result := GeneratePluginRuntimeFlow(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -236,7 +236,7 @@ $observers = [['eventname' => '\\core\\event\\course_viewed', 'callback' => 'loc
 	mustWriteFile(t, filepath.Join(dir, "db", "services.php"), `<?php
 $functions = ['local_test_get_data' => ['classname' => '\\local_test\\external\\get_data', 'methodname' => 'execute']];`)
 
-	result := GeneratePluginRuntimeFlow(testPluginInfo(dir), nil)
+	result := GeneratePluginRuntimeFlow(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success even with malformed db/install.xml and db/access.php, got %+v", result)
 	}
@@ -264,7 +264,7 @@ func TestGeneratePluginContext_EscapesMaliciousDisplayName(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "lang", "en", "local_evil.php"),
 		"<?php\n$string['pluginname'] = '"+maliciousDisplayName+"';\n")
 
-	result := GeneratePluginContext(testPluginInfo(dir), nil)
+	result := GeneratePluginContext(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -316,7 +316,7 @@ namespace local_test\task;
 class cleanup extends \core\task\scheduled_task {}
 `)
 
-	result := GeneratePluginArchitecture(testPluginInfo(dir), nil)
+	result := GeneratePluginArchitecture(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}

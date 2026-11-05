@@ -39,12 +39,12 @@ Rode os mesmos checks que o CI roda antes de abrir um PR:
 gofmt -l .        # não deve imprimir nada
 go vet ./...
 GOOS=windows go vet ./... && GOOS=darwin go vet ./...
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
 GOOS=windows golangci-lint run ./... && GOOS=darwin golangci-lint run ./...   # com o mesmo binário fixado
 go build ./...
 go test -race ./...
 BUILD82_EXTRACTOR_BACKEND=treesitter go test -race ./...
-go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 go mod tidy -diff
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 go run ./scripts/linkcheck
@@ -52,22 +52,26 @@ go run ./scripts/linkcheck
 
 Todos precisam passar (a suíte de testes roda uma vez por backend de extração). O
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) os roda a cada push e pull request
-contra `main` (no patch mais recente do Go 1.26.x) e bloqueia o merge caso contrário:
+contra `main` (no patch mais recente do Go 1.26.x) e bloqueia o merge caso contrário. Os jobs
+`test` e `quality` ficam no workflow reutilizável
+[`.github/workflows/checks.yml`](../../.github/workflows/checks.yml), que o workflow de release
+também chama no commit da tag, então uma release roda exatamente as verificações do CI (no GitHub
+aparecem como `checks / test (…)` e `checks / quality`):
 
 | Job do CI | Roda em | Verificações |
 | :--- | :--- | :--- |
-| `test` | `ubuntu-24.04`, `macos-latest`, `windows-latest` | vet, build, `go test -race` com os dois backends; no Linux também `gofmt`, golangci-lint e vet para `GOOS=windows`/`darwin` |
-| `quality` | `ubuntu-24.04` | `go mod tidy -diff`, actionlint, o verificador de links da documentação, govulncheck, o piso de cobertura e a suíte de testes com `TMPDIR` atrás de um link simbólico (reproduz o `/var` → `/private/var` do macOS) |
-| `release-contract` | `ubuntu-24.04` | `go run ./scripts/release -allow-prerelease v0.0.0-ci`, o teste de contrato da release do self-update contra esse `dist/` e `mcp-publisher validate` |
+| `test` | `ubuntu-24.04`, `macos-latest`, `windows-latest` | vet, build, `go test -race` com os dois backends; no Linux também `gofmt`, golangci-lint, vet para `GOOS=windows`/`darwin` e o piso de cobertura (medido na execução com o backend regex) |
+| `quality` | `ubuntu-24.04` | `go mod tidy -diff`, actionlint, o verificador de links da documentação, govulncheck e a suíte de testes com `TMPDIR` atrás de um link simbólico (reproduz o `/var` → `/private/var` do macOS) |
+| `release-contract` | `ubuntu-24.04` | A action [`package-release`](../../.github/actions/package-release/action.yml) (`go run ./scripts/release -allow-prerelease v0.0.0-ci`, a conferência da versão do binário Linux, o teste de contrato da release do self-update contra esse `dist/`) e a action [`validate-release`](../../.github/actions/validate-release/action.yml) (o `fileSha256` do `server.json` precisa bater com o `build82.mcpb` do `checksums.txt`; depois `mcp-publisher validate` e `mcpb validate` em cópias fora de `dist/`) |
 
 O `golangci-lint` usa o [`.golangci.yml`](../../.golangci.yml) do repositório (linters padrão, com
 as exclusões padrão para erros não checados de `Close`/`fmt.Fprint*`) e precisa reportar
 `0 issues`. A flag `-race` exige cgo, ou seja, um compilador C funcional na sua máquina; sem um, use
 `go test ./...` localmente e confie no CI para a execução com race.
 
-**Piso de cobertura:** o job `quality` mede a cobertura total de instruções com
+**Piso de cobertura:** no Linux, a execução com o backend regex do job `test` mede a cobertura total de instruções com
 `go test -race -coverprofile=cover.out -coverpkg=./... ./...` e falha quando ela fica abaixo do
-`COVERAGE_FLOOR` do `ci.yml` (86,0% na v1.1.0, medido 86,7%). O piso só pode subir: aumente-o
+`COVERAGE_FLOOR` do `checks.yml` (89,0% na v1.2.0, medido 89,2% sem os testes com Moodle real). O piso só pode subir: aumente-o
 quando uma release melhorar a cobertura.
 
 **Schemas das tools:** os schemas de entrada e de saída e as anotações de cada tool MCP ficam como
@@ -82,6 +86,13 @@ dependem de comportamento só do Unix (FIFOs, `chmod` em diretórios, bits de pe
 Windows; os arquivos de texto são obtidos com fim de linha LF em todo sistema (veja o
 [`.gitattributes`](../../.gitattributes)).
 
+Alguns testes de extractors, generators e do servidor (os testes de paridade entre backends em
+arquivos reais, o teste ponta a ponta do tree-sitter e os benchmarks) leem instalações reais do
+Moodle chamadas `mdle-401`, `mdle-405`, `mdle-500` e `mdle-uvv` em `/srv/workspace/localhost/html`;
+aponte `BUILD82_REAL_MOODLE_DIR` para o diretório que contém as suas. Eles se pulam quando uma
+instalação não existe, então o CI roda sem eles — rode-os localmente antes de mudar um extractor ou
+atualizar o módulo do tree-sitter.
+
 ### Versões fixadas de ferramentas
 
 Estas versões ficam fixadas nos workflows e **não** são atualizadas pelo Dependabot (que atualiza
@@ -89,11 +100,12 @@ semanalmente as actions fixadas por SHA e os módulos Go). Revise-as antes de ca
 
 | Ferramenta | Versão | Onde |
 | :--- | :--- | :--- |
-| golangci-lint | v2.14.0 | `GOLANGCI_LINT_VERSION` no `ci.yml` e no `release.yml` |
-| govulncheck | v1.8.0 | `GOVULNCHECK_VERSION` no `ci.yml` e no `release.yml` |
-| actionlint | v1.7.12 | `ACTIONLINT_VERSION` no `ci.yml` |
+| golangci-lint | v2.15.0 | `GOLANGCI_LINT_VERSION` no `checks.yml` |
+| govulncheck | v1.9.0 | `GOVULNCHECK_VERSION` no `checks.yml` |
+| actionlint | v1.7.12 | `ACTIONLINT_VERSION` no `checks.yml` |
 | mcp-publisher | v1.8.1 (+ SHA-256 do tarball) | [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml) |
-| cosign | v3.0.6 | `cosign-release` no `release.yml` |
+| `@anthropic-ai/mcpb` | 2.1.2 | `MCPB_VERSION` em [`.github/actions/validate-release`](../../.github/actions/validate-release/action.yml) |
+| cosign | v3.1.3 | `cosign-release` no `release.yml` |
 
 ## Organização do projeto
 
@@ -110,8 +122,12 @@ semanalmente as actions fixadas por SHA e os módulos Go). Revise-as antes de ca
 - `internal/config/`, `internal/cache/`, `internal/watcher/`, `internal/fsutil/` — fundacionais,
   sem dependência de MCP (o `fsutil` também tem os leitores que só abrem arquivos regulares,
   usados para arquivos de plugin).
-- `scripts/release/` — gera os artefatos da release; `scripts/linkcheck/` — o verificador de links
-  da documentação; `scripts/smoke/` — o smoke test com cliente real.
+- `scripts/release/` — gera os artefatos da release (os testes dele também conferem o contrato de
+  release dos workflows); `scripts/linkcheck/` — o verificador de links da documentação (links e
+  imagens Markdown e atributos HTML `src`/`href`); `scripts/smoke/` — o smoke test com cliente real.
+- `.github/workflows/` — `ci.yml`, `release.yml` e o `checks.yml` compartilhado;
+  `.github/actions/` — as actions compostas que os dois workflows usam (`package-release`,
+  `validate-release`, `install-mcp-publisher`).
 
 ## Fazendo uma mudança
 
@@ -180,12 +196,14 @@ go run ./scripts/release -allow-prerelease v0.0.0-ci   # CI e simulações locai
 
 Isso compila o `build82` para cada `GOOS`/`GOARCH` suportado (linux/amd64, linux/arm64,
 darwin/amd64, darwin/arm64, windows/amd64, windows/arm64 — a lista fica em
-`internal/selfupdate.ReleasePlatforms`) dentro de `dist/`, com `-trimpath` e
+`internal/selfupdate.ReleasePlatforms`) dentro de `dist/`, com `-trimpath`, `-buildvcs=false` e
 `-ldflags "-s -w -buildid= -X github.com/oito2/mcp-build82/internal/version.Current=vX.Y.Z"`, num
 ambiente fixado (`CGO_ENABLED=0`, `GOAMD64=v1`, `GOARM64=v8.0`, `GOFLAGS` e `GOEXPERIMENT` vazios).
 O `-s -w` remove a tabela de símbolos e as informações de depuração DWARF (os stack traces de panic
-são mantidos), o `-buildid=` e o `-trimpath` tornam o build reproduzível — o mesmo patch do Go gera
-binários idênticos byte a byte localmente e no CI — e o `-X` faz o binário reportar a versão correta
+são mantidos), o `-buildid=`, o `-trimpath` e o `-buildvcs=false` (nenhuma revisão do git nem
+marca de árvore modificada nas informações de build) tornam o build reproduzível — o mesmo patch do
+Go gera binários idênticos byte a byte localmente e no CI, a partir de um checkout limpo, de um
+modificado ou de um tarball do código — e o `-X` faz o binário reportar a versão correta
 (`build82 --version`) para que a comparação semver do `self-update` funcione contra ele. Em seguida
 empacota o `dist/build82.mcpb`, um bundle de extensão desktop
 [MCPB](https://github.com/modelcontextprotocol/mcpb) (manifest versão 0.3) com um binário universal
@@ -210,29 +228,45 @@ Os assets da release se chamam `build82_<os>_<arch>` (`.exe` no Windows), mais o
    de `[Unreleased]` do [`CHANGELOG.md`](../../CHANGELOG.md) para a nova versão.
 2. Simule localmente: `go run ./scripts/release vX.Y.Z`, depois `./dist/build82_linux_amd64 --version`,
    `BUILD82_DIST_DIR="$PWD/dist" go test -run TestReleaseContract ./internal/selfupdate`,
-   `mcp-publisher validate` (dentro de `dist/`) e `npx @anthropic-ai/mcpb validate` no bundle
-   extraído.
+   `mcp-publisher validate` (dentro de `dist/`) e `npx @anthropic-ai/mcpb@2.1.2 validate` no
+   `manifest.json` do bundle extraído por inteiro, já que ele também confere os ícones (o job
+   `release-contract` do CI também roda esses dois).
 3. Rode o smoke test com cliente real, [`scripts/smoke/claude.sh`](../../scripts/smoke/claude.sh):
    ele compila o build82, o registra numa única sessão `claude -p --strict-mcp-config` contra uma
    cópia de `testdata/moodle` (ou a raiz do Moodle passada como argumento), faz ao Claude Code
-   perguntas em linguagem natural que exercitam as tools e falha quando uma resposta não traz o
-   conteúdo esperado. Ele pega o que o cliente em memória não pega, como o que o Claude Code de fato
+   perguntas em linguagem natural que exercitam as tools e o prompt `upgrade_plugin`, e falha quando
+   uma chamada ao `claude` falha ou uma resposta não casa com o padrão esperado. Perguntas cuja
+   resposta poderia ser uma palavra ou um número comum (versão do Moodle, veredito e status das
+   seções do doctor, contagem de arquivos) pedem uma linha fixa `chave=valor`, como
+   `upgrade=ok privacy=ok`, que é conferida exatamente. Ele precisa do `jq`. A pergunta de padrão de
+   código só roda quando o `phpcs` com o padrão moodle está no `PATH`, e a mudança de versão só na
+   cópia do fixture. Ele pega o que o cliente em memória não pega, como o que o Claude Code de fato
    mostra ao modelo.
 4. Envie para a `main` **sem a tag** e espere o CI ficar verde nos três sistemas operacionais; se
    falhar, corrija com um commit novo (nada foi publicado).
 5. Envie a tag `vX.Y.Z`. O [`release.yml`](../../.github/workflows/release.yml) roda cinco jobs:
-   - `validate`: a tag precisa ser exatamente `vMAJOR.MINOR.PATCH`.
-   - `checks`: as verificações do CI no Linux, no macOS e no Windows, sem cache do Go.
-   - `build` (só leitura, sem token OIDC): `go run ./scripts/release <tag>`, a conferência da
-     versão do binário Linux, o teste de contrato da release no `dist/` real,
-     `mcp-publisher validate` e o upload do `dist/` como artefato do workflow (mantido por 7 dias).
+   - `validate`: a tag precisa ser exatamente `vMAJOR.MINOR.PATCH`, e o commit da tag precisa estar
+     na `main` (`git merge-base --is-ancestor`).
+   - `checks`: o [`checks.yml`](../../.github/workflows/checks.yml) reutilizável — as mesmas
+     verificações do CI — no Linux, no macOS e no Windows, sem cache do Go.
+   - `build` (só leitura, sem token OIDC): a action `package-release`
+     (`go run ./scripts/release <tag>`, a conferência da versão do binário Linux, o teste de
+     contrato da release no `dist/` real), depois o upload do `dist/` como artefato do workflow
+     (mantido por 7 dias) e só então a action `validate-release`, de modo que os validadores de
+     terceiros nunca rodam antes do upload do artefato e só veem cópias dos arquivos.
    - `sign-publish` (o único job com `contents: write`, `id-token: write` e `attestations: write`;
-     não faz checkout de código): baixa o artefato, roda `sha256sum --check --strict checksums.txt`,
-     assina o `checksums.txt` sem chave com o cosign em `checksums.txt.sigstore.json`, verifica essa
-     assinatura com a identidade exata que o `self-update` exige, registra atestações de
-     proveniência para os binários e o bundle e cria a release no GitHub com
-     `gh release create --generate-notes`.
-   - `publish-registry`: publica o `server.json` anexado à release (veja abaixo).
+     não faz checkout de código e roda no environment `release`): baixa o artefato, roda
+     `sha256sum --check --strict checksums.txt`, assina o `checksums.txt` sem chave com o cosign em
+     `checksums.txt.sigstore.json`, verifica essa assinatura com a identidade exata que o
+     `self-update` exige (o `release.yml` de `oito2/mcp-build82`, escrito por extenso no workflow),
+     registra atestações de proveniência para os binários e o bundle e cria a release no GitHub com
+     `gh release create --generate-notes`. Esse job precisa ficar no `release.yml`: o certificado
+     de assinatura nomeia o arquivo de workflow em que o job roda.
+   - `publish-registry`: publica o `server.json` do mesmo artefato do workflow (veja abaixo).
+
+   Duas configurações do repositório completam a barreira e não estão nos workflows: regras de
+   proteção do environment `release` (revisores obrigatórios, deploys apenas de tags `v*`) e um
+   ruleset de tags restringindo quem pode criar tags `v*`.
 6. Confira a release: `gh release view vX.Y.Z`, a busca no MCP Registry abaixo e, com os assets
    baixados, `sha256sum -c --ignore-missing checksums.txt`,
    `gh attestation verify build82_linux_amd64 --repo oito2/mcp-build82` e
@@ -252,9 +286,13 @@ O job `publish-registry` do [`release.yml`](../../.github/workflows/release.yml)
 release com tag automaticamente, com o CLI oficial
 [`mcp-publisher`](https://modelcontextprotocol.io/registry/github-actions) (versão e SHA-256 do
 tarball fixados em [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml)) autenticado via OIDC do GitHub Actions
-(`mcp-publisher login github-oidc`, permissão `id-token: write`, sem segredo). Ele só roda depois
-que a release existe, porque a entrada do registry aponta para o asset `build82.mcpb` da release e
-para os ícones da tag. Se falhar, reexecute só esse job na página da execução do workflow.
+(`mcp-publisher login github-oidc`, permissão `id-token: write`, sem segredo). Ele publica o
+`server.json` do artefato `dist` do workflow a partir do qual a release foi feita (cujo digest o
+`download-artifact` confere), não uma cópia baixada da release, depois de conferir cada arquivo
+contra o `checksums.txt`, o `fileSha256` contra a linha do `build82.mcpb` no `checksums.txt` e a
+versão contra a tag. Ele só roda depois que a release existe, porque a entrada do registry aponta
+para o asset `build82.mcpb` da release e para os ícones da tag. Se falhar, reexecute só esse job na
+página da execução do workflow enquanto o artefato existir (7 dias).
 
 Para publicar manualmente (por exemplo, depois de uma release manual), use a conta `oito2` do
 GitHub, exigida pelo namespace `io.github.oito2/`:

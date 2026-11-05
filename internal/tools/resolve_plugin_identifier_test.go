@@ -83,19 +83,25 @@ func TestResolveAndValidatePlugin_ComponentOfMissingPluginIsNotFound(t *testing.
 	}
 }
 
-// TestResolveAndValidatePlugin_ComponentTraversalIsRejected confirms the component form cannot be
-// used to escape the Moodle root: an empty type with ".." as the name resolves to the root's
-// parent, which the containment check must reject.
+// TestResolveAndValidatePlugin_ComponentTraversalIsRejected confirms no identifier can escape the
+// Moodle root: paths with ".." are refused by the containment check, and component forms whose
+// type or name is not a plain identifier ("_..", "mod_..") are never joined into a path, so they
+// only match a literal directory of that name inside the root and are reported as not found.
 func TestResolveAndValidatePlugin_ComponentTraversalIsRejected(t *testing.T) {
 	moodlePath, _ := setupResolveFixture(t)
 
-	for _, id := range []string{"_..", "local/../../x", "../local/demo"} {
+	for id, want := range map[string]string{
+		"local/../../x": "Invalid plugin path",
+		"../local/demo": "Invalid plugin path",
+		"_..":           "not found",
+		"mod_..":        "not found",
+	} {
 		_, errResult := resolveAndValidatePlugin(id, moodlePath)
 		if errResult == nil {
 			t.Fatalf("identifier %q: expected rejection", id)
 		}
-		if text := resolveResultText(t, errResult); !strings.Contains(text, "Invalid plugin path") {
-			t.Errorf("identifier %q: expected the containment rejection, got: %s", id, text)
+		if text := resolveResultText(t, errResult); !strings.Contains(text, want) {
+			t.Errorf("identifier %q: expected %q, got: %s", id, want, text)
 		}
 	}
 }

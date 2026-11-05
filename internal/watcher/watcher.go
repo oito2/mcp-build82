@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	// debounce is the quiet period after a file event before regeneration starts; further events
-	// for the same plugin restart it.
-	debounce = 500 * time.Millisecond
+	// defaultDebounce is the quiet period after a file event before regeneration starts; further
+	// events for the same plugin restart it.
+	defaultDebounce = 500 * time.Millisecond
 	// maxWatchedPlugins caps how many dev-marked plugins are watched at once.
 	maxWatchedPlugins = 20
 )
@@ -53,6 +53,7 @@ type WatchCallback func(WatchEvent)
 // for concurrent use.
 type MoodleWatcher struct {
 	moodlePath, moodleVersion string
+	debounce                  time.Duration // quiet period before a regeneration; set at construction
 
 	mu           sync.Mutex
 	fsWatcher    *fsnotify.Watcher
@@ -69,7 +70,7 @@ type MoodleWatcher struct {
 // version string `moodleVersion` is passed to the AI index generation. It does not watch anything
 // until Start is called.
 func NewMoodleWatcher(moodlePath, moodleVersion string) *MoodleWatcher {
-	return &MoodleWatcher{moodlePath: moodlePath, moodleVersion: moodleVersion}
+	return &MoodleWatcher{moodlePath: moodlePath, moodleVersion: moodleVersion, debounce: defaultDebounce}
 }
 
 // logf writes a line to stderr prefixed with the watcher tag, using fmt.Fprintf formatting.
@@ -100,31 +101,15 @@ var findMarkersDelayHook func()
 // Start creates.
 var newFSWatcher = fsnotify.NewWatcher
 
-// findMarkers walks `moodlePath` and returns the paths of all .indevelopment marker files located
-// directly inside a genutil.ContextDir directory. Directories named vendor or node_modules below
-// the root are skipped, and entries that cannot be read are ignored.
-func findMarkers(moodlePath string) []string {
+// findDevPluginDirs returns, sorted, the root directories of the plugins under `moodlePath` marked
+// .indevelopment, as generators.FindDevPlugins finds them (the same walk every other tool uses).
+func findDevPluginDirs(moodlePath string) []string {
 	if findMarkersDelayHook != nil {
 		findMarkersDelayHook()
 	}
-	var matches []string
-	_ = filepath.WalkDir(moodlePath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if path != moodlePath && (name == "vendor" || name == "node_modules") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Name() == ".indevelopment" && filepath.Base(filepath.Dir(path)) == genutil.ContextDir {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	return matches
+	dirs := generators.FindDevPlugins(moodlePath)
+	sort.Strings(dirs)
+	return dirs
 }
 
 // Start finds the plugins marked .indevelopment under the Moodle path and begins watching their
@@ -152,17 +137,16 @@ func (w *MoodleWatcher) Start() int {
 	}
 	w.mu.Unlock()
 
-	markers := findMarkers(w.moodlePath)
-	if len(markers) == 0 {
+	pluginDirs := findDevPluginDirs(w.moodlePath)
+	if len(pluginDirs) == 0 {
 		w.logf("no dev plugins found (no .indevelopment markers) — nothing to watch")
 		return 0
 	}
-	sort.Strings(markers)
 
-	if len(markers) > maxWatchedPlugins {
-		w.logf("warning: %d dev plugins found, only watching the first %d (cap) — remove .indevelopment from inactive plugins to watch different ones", len(markers), maxWatchedPlugins)
+	if len(pluginDirs) > maxWatchedPlugins {
+		w.logf("warning: %d dev plugins found, only watching the first %d (cap) — remove .indevelopment from inactive plugins to watch different ones", len(pluginDirs), maxWatchedPlugins)
 	}
-	limited := markers
+	limited := pluginDirs
 	if len(limited) > maxWatchedPlugins {
 		limited = limited[:maxWatchedPlugins]
 	}
@@ -176,8 +160,7 @@ func (w *MoodleWatcher) Start() int {
 	watchedPaths := map[string]string{}
 	watchedDirs := map[string]bool{}
 	count := 0
-	for _, marker := range limited {
-		pluginDir := filepath.Dir(filepath.Dir(marker)) // grandparent: out of .build82/, to the plugin root
+	for _, pluginDir := range limited {
 		for _, f := range cache.PluginSourceFileNames {
 			path := filepath.Join(pluginDir, f)
 			if _, statErr := os.Stat(path); statErr != nil {
@@ -246,10 +229,12 @@ func (w *MoodleWatcher) consumeEvents(fsWatcher *fsnotify.Watcher) {
 }
 
 // onFileChange handles one filesystem event. Events for files that are not being watched, and
-// events other than write, create or rename, are ignored. Otherwise it restarts the plugin's debounce timer, so regeneratePlugin runs only after
-// the plugin's files have been quiet for the debounce period.
+// events other than write, create, rename or remove, are ignored. Otherwise it restarts the
+// plugin's debounce timer, so regeneratePlugin runs only after the plugin's files have been quiet
+// for the debounce period. A removed file is handled like an edit, so context derived from it is
+// regenerated.
 func (w *MoodleWatcher) onFileChange(event fsnotify.Event) {
-	if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) && !event.Has(fsnotify.Rename) {
+	if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) && !event.Has(fsnotify.Rename) && !event.Has(fsnotify.Remove) {
 		return
 	}
 	w.mu.Lock()
@@ -262,7 +247,7 @@ func (w *MoodleWatcher) onFileChange(event fsnotify.Event) {
 		timer.Stop()
 	}
 	changedFile := event.Name
-	w.timers[pluginDir] = time.AfterFunc(debounce, func() {
+	w.timers[pluginDir] = time.AfterFunc(w.debounce, func() {
 		w.regeneratePlugin(pluginDir, changedFile)
 	})
 	w.mu.Unlock()

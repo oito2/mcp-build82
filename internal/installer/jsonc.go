@@ -15,6 +15,32 @@
 
 package installer
 
+// stringScanner tracks whether a byte-by-byte scan of JSON text is inside a string literal.
+type stringScanner struct {
+	inString, escaped bool
+}
+
+// consume advances the scanner over `c` and reports whether `c` belongs to a string literal,
+// opening and closing quotes included.
+func (s *stringScanner) consume(c byte) bool {
+	if s.inString {
+		switch {
+		case s.escaped:
+			s.escaped = false
+		case c == '\\':
+			s.escaped = true
+		case c == '"':
+			s.inString = false
+		}
+		return true
+	}
+	if c == '"' {
+		s.inString = true
+		return true
+	}
+	return false
+}
+
 // stripJSONC converts JSON-with-comments (as accepted by Zed, OpenCode and VS Code based tools)
 // into strict JSON: `//` line comments and `/* */` block comments are replaced by whitespace, and
 // commas that directly precede a closing `}` or `]` are dropped. String literals are left intact,
@@ -24,25 +50,14 @@ package installer
 // user's comments, so callers refuse to write back any file that needed this conversion.
 func stripJSONC(src []byte) []byte {
 	out := make([]byte, 0, len(src))
-	inString, escaped := false, false
+	var str stringScanner
 	for i := 0; i < len(src); i++ {
 		c := src[i]
-		if inString {
+		if str.consume(c) {
 			out = append(out, c)
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
 			continue
 		}
 		switch {
-		case c == '"':
-			inString = true
-			out = append(out, c)
 		case c == '/' && i+1 < len(src) && src[i+1] == '/':
 			for i < len(src) && src[i] != '\n' {
 				i++
@@ -68,25 +83,10 @@ func stripJSONC(src []byte) []byte {
 // character is `}` or `]`. Its input must already be free of comments.
 func dropTrailingCommas(src []byte) []byte {
 	out := make([]byte, 0, len(src))
-	inString, escaped := false, false
+	var str stringScanner
 	for i := 0; i < len(src); i++ {
 		c := src[i]
-		if inString {
-			out = append(out, c)
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		if c == '"' {
-			inString = true
-		}
-		if c == ',' {
+		if !str.consume(c) && c == ',' {
 			j := i + 1
 			for j < len(src) && (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') {
 				j++

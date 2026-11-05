@@ -15,6 +15,11 @@
       },
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "include_plugins": {
@@ -29,13 +34,16 @@
     "additionalProperties": false,
     "properties": {
       "failed": {
+        "description": "Global index files that could not be generated",
         "items": {
           "additionalProperties": false,
           "properties": {
             "error": {
+              "description": "Why the file could not be generated",
               "type": "string"
             },
             "file": {
+              "description": "Path of the file that failed to generate (relative to the Moodle root for global files, to the plugin for plugin files)",
               "type": "string"
             }
           },
@@ -51,9 +59,11 @@
         ]
       },
       "moodle_version": {
+        "description": "Moodle release detected during this update",
         "type": "string"
       },
       "plugins": {
+        "description": "One summary line per .indevelopment plugin, when include_plugins was set",
         "items": {
           "type": "string"
         },
@@ -63,6 +73,7 @@
         ]
       },
       "regenerated": {
+        "description": "Global index files rewritten by this call",
         "items": {
           "type": "string"
         },
@@ -72,6 +83,7 @@
         ]
       },
       "skipped": {
+        "description": "Global index files served from the cache",
         "items": {
           "type": "string"
         },

@@ -111,7 +111,7 @@ Reinicie o Claude Desktop depois.
 - **Servidor não aparece:** valide a sintaxe do JSON e confirme que `command` é um caminho absoluto para um arquivo executável.
 - **Logs:** macOS `~/Library/Logs/Claude`, Windows `%APPDATA%\Claude\logs`, Linux `~/.config/Claude/logs`. O `mcp.log` cobre problemas de conexão; o `mcp-server-build82.log` guarda o stderr do build82.
 - **Caminho do Moodle errado:** `BUILD82_MOODLE_PATH` deve apontar para o diretório que contém o `version.php`; a tool `doctor` reporta erros de validação.
-- **Transporte:** o Claude Desktop inicia o build82 via stdio (padrão). O modo `--http` não é usado aqui.
+- **Transporte:** o Claude Desktop inicia o build82 via stdio, o único transporte do build82.
 
 Referência oficial: [Connect to local MCP servers](https://modelcontextprotocol.io/docs/develop/connect-local-servers).
 

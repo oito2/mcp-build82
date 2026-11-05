@@ -29,7 +29,7 @@ Gerados por `init_moodle_context` e `update_indexes` (13 arquivos Markdown mais 
 | `MOODLE_TASKS_INDEX.md` | Tasks agendadas declaradas em todo `db/tasks.php` | `db/tasks.php` |
 | `MOODLE_DEV_RULES.md` | Trechos de padrões de código: segurança, API de banco, estrutura de arquivos de plugin, eventos, tasks | arquivos da raiz do Moodle (veja abaixo) |
 | `MOODLE_PLUGIN_GUIDE.md` | Nomenclatura de components, arquivos obrigatórios, template de `version.php`, caminhos de classes com autoload | arquivos da raiz do Moodle (veja abaixo) |
-| `tags` | Índice de símbolos ctags do código PHP (`ctags -R --languages=PHP`, excluindo `vendor` e `node_modules`). Ignorado silenciosamente quando não há executável `ctags` no `PATH`, ou quando ele não é o Universal Ctags (como o `ctags` BSD que vem no macOS, sem essas flags) | arquivos da raiz do Moodle (veja abaixo) |
+| `tags` | Índice de símbolos ctags do código PHP (`ctags -R --links=no --tag-relative=yes --languages=PHP`, excluindo `vendor`, `node_modules` e `.build82`): os caminhos são relativos ao arquivo `tags` e links simbólicos não são seguidos; uma execução de mais de 10 minutos é interrompida e reportada como falha. Ignorado silenciosamente quando não há executável `ctags` no `PATH`, ou quando ele não é o Universal Ctags (como o `ctags` BSD que vem no macOS, sem essas flags) | arquivos da raiz do Moodle (veja abaixo) |
 
 **Arquivos da raiz do Moodle:** `version.php`, `lib/moodlelib.php` e `lib/accesslib.php` na raiz do Moodle.
 
@@ -51,7 +51,7 @@ Gerados por `generate_plugin_context`, `plugin_batch`, `update_indexes` com `inc
 | `PLUGIN_RUNTIME_FLOW.md` | Entry points, arquivos de lógica principal e um resumo de classes/eventos/tasks/serviços |
 | `PLUGIN_DB_TABLES.md` | Schema extraído de `db/install.xml`: tabelas, campos, tipos, chaves e índices |
 | `PLUGIN_FUNCTION_INDEX.md` | Funções PHP de nível superior, agrupadas por arquivo |
-| `PLUGIN_CALLBACK_INDEX.md` | Callbacks legados de `lib.php` e registros/definições da Hook API (Moodle 4.3+), com avisos de migração de legado para hook |
+| `PLUGIN_CALLBACK_INDEX.md` | Callbacks legados declarados em `lib.php` (o arquivo que o Moodle carrega para chamá-los; nomes comparados sem diferenciar maiúsculas de minúsculas), cada um com o callback da Hook API que o substitui; callbacks legados declarados em `locallib.php`, numa seção de aviso separada, já que o Moodle nunca os chama ali; e registros/definições da Hook API (Moodle 4.3+) |
 | `PLUGIN_EVENTS.md` | Observers de eventos registrados em `db/events.php` |
 | `PLUGIN_ENDPOINT_INDEX.md` | Web services, endpoints AJAX e módulos AMD definidos pelo plugin |
 | `PLUGIN_DEPENDENCIES.md` | Tasks agendadas, web services, capabilities, uso da Hook API, histórico de upgrades e tipos de subplugin hospedados |
@@ -63,7 +63,7 @@ Gerados por `generate_plugin_context`, `plugin_batch`, `update_indexes` com `inc
 | Arquivo | Local | Descrição |
 |---|---|---|
 | `.indevelopment` | `{raiz_plugin}/.build82/` | Marcador que coloca o plugin em desenvolvimento. Contém um timestamp. Escrito por `generate_plugin_context`, por `plugin_batch` no modo `dev` (ou com `mark_as_dev`), por `update_indexes` com `include_plugins` e pelo watcher |
-| `.cache.json` | `{raiz_moodle}/.build82/` | Marcas de atualidade persistidas do cache mtime: `{"version": 1, "entries": {"<caminho absoluto da saída>": "<timestamp>"}}`. Um arquivo ausente, corrompido ou de versão diferente é tratado como cache vazio. Gravado de forma atômica; sem lock entre processos |
+| `.cache.json` | `{raiz_moodle}/.build82/` | Marcas de atualidade persistidas do cache mtime: `{"version": 2, "entries": {"<caminho absoluto da saída>": {"at": "<horário em que as fontes foram lidas>", "set": "<hash dos caminhos das fontes>"}}}`. Um arquivo ausente, corrompido ou de versão diferente (inclusive um arquivo da versão 1 de uma release anterior) é tratado como cache vazio. Gravado de forma atômica; sem lock entre processos |
 
 ---
 
@@ -94,7 +94,7 @@ O build82 grava a saída do ctags em `{raiz_moodle}/.build82/tags`, e somente qu
 set tags=./.build82/tags;
 ```
 
-O `;` final faz o Vim procurar para cima a partir do diretório do arquivo atual até encontrar um `.build82/tags`, funcionando em qualquer subdiretório da árvore do Moodle.
+O `;` final faz o Vim procurar para cima a partir do diretório do arquivo atual até encontrar um `.build82/tags`, funcionando em qualquer subdiretório da árvore do Moodle. Os caminhos no arquivo são relativos ao próprio arquivo `tags` (o `tagrelative` padrão do Vim os resolve), então ele continua funcionando quando a árvore do Moodle é movida ou montada em outro caminho.
 
 ---
 

@@ -17,13 +17,12 @@ mcp-build82/
 ├── docs/                 ← full documentation (en/ and pt-br/)
 ├── scripts/release/      ← cross-compiles every release binary + build82.mcpb (MCPB bundle) + checksums.txt + server.json (MCP Registry manifest) into dist/
 ├── testdata/moodle/      ← fixture Moodle tree used by integration tests
-├── cmd/build82/      ← main.go — CLI dispatch: stdio (default), --http, install, self-update, uninstall
+├── cmd/build82/      ← main.go — CLI dispatch: stdio server (default), install, self-update, uninstall
 └── internal/
     ├── server/           ← MCP server wiring (tools + resources + prompts)
-    ├── transport/        ← Streamable HTTP + SSE transport
-    ├── tools/            ← 13 MCP tools
+    ├── tools/            ← 15 MCP tools
     ├── resources/        ← 13 global + 1 aggregate + 12 per-plugin resource templates
-    ├── prompts/          ← 3 MCP prompt templates
+    ├── prompts/          ← 4 MCP prompt templates
     ├── extractors/       ← reads and parses Moodle PHP/XML files (regex backend + tsbackend/ tree-sitter backend)
     ├── generators/       ← writes context .md files under .build82/ (global + per-plugin) and migrates legacy flat files
     ├── cache/            ← mtime cache, persisted to .build82/.cache.json
@@ -32,6 +31,7 @@ mcp-build82/
     ├── installer/        ← `install`/`uninstall` — configures/removes the MCP client registration
     ├── selfupdate/       ← `self-update` — checks GitHub Releases, verifies signature (cosign) and checksum, atomic binary swap
     ├── moodletype/       ← plugin type ↔ directory map, path resolution and containment checks
+    ├── phpcs/            ← detects phpcs with the moodle standard and runs it (JSON report) for check_coding_style and doctor
     ├── phparray/         ← shared PHP array/string literal parsing helpers
     ├── phpdoc/           ← shared PHPDoc parsing (visibility, @deprecated, @since...)
     ├── phptypes/         ← data-shape types shared by both extractor backends (type definitions only, no logic)
@@ -45,9 +45,9 @@ mcp-build82/
 
 ## Data flow
 
-**Entry point.** `cmd/build82/main.go` dispatches on the first argument: no arguments (or an unknown flag) starts the MCP server over **stdio**; `--http` starts it over Streamable HTTP + SSE; `install`, `self-update` and `uninstall` run their own one-shot flows and exit. Both server modes call `server.NewServer()`, which registers the 13 tools, the resources (13 global + 1 aggregate + 12 per-plugin templates) and the 3 prompts, and reports a 64×64 PNG icon in `serverInfo` as an embedded data URI. Every handler is wrapped in a panic-recovery wrapper (`withRecover`, `withRecoverResource`, and the prompt equivalent), so a panic triggered by malformed plugin source becomes an error result instead of killing the process.
+**Entry point.** `cmd/build82/main.go` dispatches on the first argument: no arguments (or an unknown flag) starts the MCP server over **stdio**; `install`, `self-update` and `uninstall` run their own one-shot flows and exit. The server calls `server.NewServer()`, which registers the 15 tools, the resources (13 global + 1 aggregate + 12 per-plugin templates) and the 4 prompts, and reports a 64×64 PNG icon in `serverInfo` as an embedded data URI. Every handler is wrapped in a panic-recovery wrapper (`withRecover`, `withRecoverResource`, and the prompt equivalent), so a panic triggered by malformed plugin source becomes an error result instead of killing the process.
 
-**Side effects.** The only things `build82` writes are: the generated `.md` files, the `.indevelopment` marker and `.cache.json` under `.build82/` (Moodle root and plugin roots), `~/.build82` (config), the `tags` file (when `ctags` is available), the ZIP created by `release_plugin`, the plugin skeleton created by `create_plugin_skeleton`, and — through `install`/`uninstall`/`self-update` — MCP client configuration files and the binary itself. Extractors never write to disk.
+**Side effects.** The only things `build82` writes are: the generated `.md` files, the `.indevelopment` marker and `.cache.json` under `.build82/` (Moodle root and plugin roots), `~/.build82` (config), the `tags` file (when `ctags` is available), the ZIP created by `release_plugin`, the plugin skeleton created by `create_plugin_skeleton`, the `version.php` and `db/upgrade.php` edits made by `bump_plugin_version`, and — through `install`/`uninstall`/`self-update` — MCP client configuration files and the binary itself. Extractors never write to disk.
 
 ```
 1. AI assistant calls init_moodle_context
@@ -68,11 +68,13 @@ mcp-build82/
    └─ get_plugin_info → returns the plugin's PLUGIN_AI_CONTEXT.md (or live metadata if it was never generated)
    └─ search_api → searches in MOODLE_API_INDEX.md
    └─ watch_plugins → enables an fsnotify watcher on dev plugin directories (dev plugin = has a .build82/.indevelopment marker)
+   └─ every tool or watcher regeneration → notifications/resources/updated to the sessions subscribed to the rewritten resources
 
 5. AI client uses Prompts
    └─ scaffold_plugin → injects Moodle context + few-shot template
    └─ review_plugin → injects plugin context + review checklist
    └─ debug_plugin → injects context + keyword-matched Moodle debugging hints
+   └─ upgrade_plugin → injects deprecated calls, legacy callbacks and upgrade-step findings + migration steps
 ```
 
 ---
@@ -94,25 +96,9 @@ BUILD82_MOODLE_PATH environment variable
 
 ---
 
-## Transport modes
+## Transport
 
-| Mode      | When to use                                              | How to start                                                           |
-| --------- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **stdio** | Local Moodle — same machine as your editor/CLI (the default) | `build82`                                                              |
-| **HTTP**  | Remote Moodle — separate server or isolated environment      | `build82 --http --port 3000 --host 0.0.0.0 --token your-token`         |
-
-In HTTP mode the server exposes `/mcp` (Streamable HTTP) and `/sse` (SSE), both behind Bearer-token auth when a token is set, plus an unauthenticated `/health`. All routes except `/health` go through Host-header validation.
-
-Available flags in HTTP mode:
-
-| Flag             | Default     | Description                                                         |
-| ----------------- | ------------- | ----------------------------------------------------------------------- |
-| `--port`         | `3000`      | TCP port                                                             |
-| `--host`         | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces)                         |
-| `--token`        | —           | Bearer token for `/mcp` and `/sse` (fallback: `BUILD82_TOKEN` env var). Not enforced, but a warning is logged when it is unset, and strongly recommended on non-loopback hosts |
-| `--allowed-host` | —           | Extra hostname allowed by Host header validation (repeatable)       |
-
-> For use with Docker, see the guide [Docker](../guides/environments/docker.md).
+build82 runs over **stdio** only: the AI client starts `build82` as a subprocess and exchanges MCP messages over its standard input and output. No network port is opened. This fits its use as a local development tool, next to the Moodle source and the AI client; with Moodle in Docker, build82 runs on the host and reads the mounted files (see [Docker](../guides/environments/docker.md)). The HTTP mode (`--http`) of earlier versions was removed in v1.2.0.
 
 ---
 
@@ -120,7 +106,7 @@ Available flags in HTTP mode:
 
 | Dependency | Why it is used |
 | --- | --- |
-| `github.com/modelcontextprotocol/go-sdk` | The official MCP Go SDK: protocol handling, stdio and Streamable HTTP/SSE transports, tool/resource/prompt registration |
+| `github.com/modelcontextprotocol/go-sdk` | The official MCP Go SDK: protocol handling, the stdio transport, tool/resource/prompt registration |
 | `github.com/odvcencio/gotreesitter` | Pure-Go (no cgo) tree-sitter runtime with the PHP grammar, used only by the opt-in `tsbackend` extractor backend |
 | `github.com/fsnotify/fsnotify` | Filesystem notifications for `watch_plugins` (automatic regeneration on save) |
 

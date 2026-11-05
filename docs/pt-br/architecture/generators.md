@@ -23,8 +23,8 @@ Todo generator segue o mesmo contrato:
 - Recebe um caminho (`moodlePath` ou `extractors.PluginInfo`) como entrada
 - Chama o(s) extractor(es) que precisa
 - Constrói o conteúdo Markdown em memória (via `strings.Builder`)
-- Verifica o [cache mtime](./cache-system.md) antes de escrever — se o arquivo `.md` já existe e é mais novo que as fontes PHP/XML rastreadas, a escrita é pulada (`Skipped: true`)
-- Escreve o arquivo via `genutil.Write` (cria o diretório, `os.WriteFile` simples), que também marca o cache como fresco em caso de sucesso
+- Verifica o [cache mtime](./cache-system.md) antes de escrever — se o arquivo `.md` está marcado como fresco para o mesmo conjunto de fontes e nenhuma mudou desde que as fontes foram lidas, a escrita é pulada (`Skipped: true`)
+- Escreve o arquivo via `genutil.Write` (cria o diretório, recusa um `.build82` que seja link simbólico, escreve um arquivo temporário e o renomeia para o lugar com `fsutil.WriteReplace` — sem fsync, pois as saídas são regeneráveis); em caso de sucesso, o `genutil.RunCached` marca a saída como fresca com o horário em que as fontes foram lidas e o conjunto de fontes
 - Retorna um `GeneratorResult{ File, Success, Skipped, Error }`
 - Cada corpo de generator é envolto em uma **barreira de erro** via `genutil.Safely` — um panic ou erro em um generator nunca interrompe os outros
 
@@ -34,7 +34,7 @@ Todo generator segue o mesmo contrato:
 
 Geram arquivos sob `{raiz_moodle}/.build82/`. Chamados por `init_moodle_context` e `update_indexes`.
 
-O ponto de entrada é `GenerateAll(moodlePath, moodleVersion)`, que migra qualquer arquivo legado solto primeiro, depois roda os 12 primeiros generators abaixo concorrentemente (cada um é independente — arquivos de saída diferentes, sem estado mutável compartilhado além do cache mtime, que por sua vez é protegido por mutex). O `GenerateAiIndex` roda depois, porque lista os arquivos que a primeira onda acabou de escrever, e o `GenerateCtags` roda por último. Cada generator é envolvido por `genutil.RunCached`, que faz a checagem `IsStale` e registra um resultado `Skipped: true` sem chamar o generator quando nada mudou.
+O ponto de entrada é `GenerateAll(moodlePath, moodleVersion)`, que migra qualquer arquivo legado solto primeiro, depois roda os 12 primeiros generators abaixo concorrentemente (cada um é independente — arquivos de saída diferentes, sem estado mutável compartilhado além do cache mtime, que por sua vez é protegido por mutex). O `GenerateAiIndex` roda depois, porque lista os arquivos que a primeira onda acabou de escrever, e o `GenerateCtags` roda por último. Cada generator é envolvido por `genutil.RunCached`, que faz a checagem `IsStale` e registra um resultado `Skipped: true` sem chamar o generator quando nada mudou. Antes disso, uma única varredura da árvore do Moodle lista todos os arquivos que os índices leem (`db/events.php`, `db/tasks.php`, `db/services.php`, `db/install.xml`, `db/access.php`, `classes/**/*.php` e os marcadores `.indevelopment`); cada lista é ao mesmo tempo as fontes de cache do índice e os arquivos que o generator dele lê.
 
 | Função | Arquivo gerado | Extractors usados |
 | --- | --- | --- |
@@ -61,7 +61,7 @@ Geram arquivos sob `{raiz_plugin}/.build82/`. Chamados por `generate_plugin_cont
 
 O ponto de entrada é `GenerateAllForPlugin(pluginPath, moodlePath, markAsDev, existingInfo)`, que carrega o cache mtime, delega para `GenerateAllForPluginCore`, e depois persiste o cache. Orquestradores de lote (`plugin_batch`, o caminho `include_plugins` do `update_indexes`) chamam `GenerateAllForPluginCore` diretamente, envolvendo o loop *inteiro* deles num único par de carga/salvamento de cache — chamar `Save()` uma vez por plugin num lote grande, do contrário, serializaria o I/O e anularia o propósito do worker pool do `plugin_batch`.
 
-Os 10 extractors de plugin (Classes, Hooks, Schema, Events, Tasks, Services, Capabilities, Upgrade, Subplugins, Settings) rodam concorrentemente antecipadamente para uma struct `PreloadedPluginData` compartilhada, então os generators abaixo leem dados já extraídos, em vez de reprocessar os arquivos do plugin. Quando `markAsDev` é verdadeiro, a execução termina escrevendo o marcador `.build82/.indevelopment` (uma falha é logada em stderr, não retornada).
+A obsolescência das 12 saídas é checada primeiro; quando todas estão frescas, o plugin nem é analisado. Caso contrário, os 10 extractors de plugin (Classes, Hooks, Schema, Events, Tasks, Services, Capabilities, Upgrade, Subplugins, Settings) rodam concorrentemente para uma struct `PreloadedPluginData` compartilhada, e só os generators das saídas desatualizadas rodam, lendo dados já extraídos em vez de reprocessar os arquivos do plugin. Quando `markAsDev` é verdadeiro, a execução termina escrevendo o marcador `.build82/.indevelopment` (uma falha é logada em stderr, não retornada).
 
 | Função | Arquivo gerado | Campos usados de `PreloadedPluginData` |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ Os 10 extractors de plugin (Classes, Hooks, Schema, Events, Tasks, Services, Cap
 | `GeneratePluginEvents` | `PLUGIN_EVENTS.md` | `Events` |
 | `GeneratePluginDependencies` | `PLUGIN_DEPENDENCIES.md` | `Tasks`, `Services`, `Capabilities`, `Hooks`, `Upgrade`, `Subplugins` |
 | `GeneratePluginFunctionIndex` | `PLUGIN_FUNCTION_INDEX.md` | — (glob + leitura de arquivo, extractor `api` por arquivo) |
-| `GeneratePluginCallbackIndex` | `PLUGIN_CALLBACK_INDEX.md` | `Hooks` (+ uma única leitura de `lib.php`/`locallib.php`, compartilhada entre as checagens de sufixo legado de `legacyhooks.Map`) |
+| `GeneratePluginCallbackIndex` | `PLUGIN_CALLBACK_INDEX.md` | `Hooks` (os `LegacyWarnings` são as linhas de callback legado do lib.php, então o índice lista os mesmos callbacks que os demais arquivos) + `extractors.DetectLegacyCallbacksInFile` no `locallib.php` para a seção de aviso "never called" |
 | `GeneratePluginEndpointIndex` | `PLUGIN_ENDPOINT_INDEX.md` | `Services` |
 | `GeneratePluginRuntimeFlow` | `PLUGIN_RUNTIME_FLOW.md` | `Classes`, `Events`, `Tasks`, `Services` |
 | `GeneratePluginArchitecture` | `PLUGIN_ARCHITECTURE.md` | `Classes` |
@@ -151,7 +151,7 @@ Os generators de plugin em `GenerateAllForPluginCore` também rodam concorrentem
 
 ### `GenerateCtags` — geração opcional de ctags
 
-Só chama `ctags` externamente (`ctags -R --languages=PHP`, excluindo `vendor` e `node_modules`) se um binário `ctags` for encontrado no `PATH`, e só se os arquivos-fonte rastreados forem mais novos que o `.build82/tags` existente (mesma checagem de cache mtime dos outros generators globais). Se `ctags` não estiver instalado, retorna um resultado de sucesso ignorado (`Skipped: true`) e nenhum arquivo `tags` é criado — o `doctor` reporta isso como uma ferramenta opcional, não obrigatória.
+Só chama `ctags` externamente (`ctags -R --links=no --tag-relative=yes --languages=PHP`, excluindo `vendor`, `node_modules` e `.build82`, interrompido após 10 minutos) se um binário `ctags` for encontrado no `PATH`, e só se os arquivos-fonte rastreados forem mais novos que o `.build82/tags` existente (mesma checagem de cache mtime dos outros generators globais). Se `ctags` não estiver instalado, retorna um resultado de sucesso ignorado (`Skipped: true`) e nenhum arquivo `tags` é criado — o `doctor` reporta isso como uma ferramenta opcional, não obrigatória.
 
 ---
 

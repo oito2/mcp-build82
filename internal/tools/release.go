@@ -32,7 +32,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
-	"github.com/oito2/mcp-build82/internal/toolutil"
+	"github.com/oito2/mcp-build82/internal/moodletype"
 )
 
 // excludedNames is the fixed set of base names never packaged into a release ZIP: the .build82/
@@ -71,6 +71,7 @@ type ReleasePluginInput struct {
 func RegisterReleaseTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "release_plugin",
+		InputSchema: inputSchemaFor[ReleasePluginInput](),
 		Annotations: toolAnnotations("Package Plugin Release", false, true, true, false),
 		Description: "Packages a plugin directory into a distributable ZIP, excluding build82's own " +
 			"generated files and other non-shippable artifacts. With strict:true, also validates the " +
@@ -88,12 +89,9 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 	if strings.TrimSpace(in.Component) == "" {
 		return textResult(true, "❌ component is required: a component (e.g. 'local_myplugin'), a path relative to the Moodle root (e.g. 'local/myplugin'), or an absolute path."), nil, nil
 	}
-	cfg, err := requireConfig()
-	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
-	}
-	if cfg == nil {
-		return toolutil.NotInitialized(), nil, nil
+	cfg, errResult := loadConfigResult()
+	if errResult != nil {
+		return errResult, nil, nil
 	}
 
 	outputDir := in.OutputDir
@@ -125,10 +123,14 @@ func handleReleasePlugin(ctx context.Context, req *mcp.CallToolRequest, in Relea
 		}
 	}
 
-	// The file name uses info.Component (read from the plugin's version.php) rather than the raw
-	// client-supplied identifier, which may be a path.
+	// The file name uses info.Component (read from the plugin's version.php, and replaced by
+	// DetectPlugin when it is not a frankenstyle name) rather than the raw client-supplied
+	// identifier, which may be a path. The ZIP must land directly in outputDir whatever the name.
 	zipName := fmt.Sprintf("%s_%s.zip", info.Component, info.Version)
 	destination := filepath.Join(outputDir, zipName)
+	if filepath.Dir(destination) != filepath.Clean(outputDir) {
+		return textResult(true, fmt.Sprintf("❌ Refusing to write %q outside output_dir.", zipName)), nil, nil
+	}
 	folderName := filepath.Base(pluginPath)
 
 	excluded := mergeBuildIgnore(pluginPath, excludedNames)
@@ -204,14 +206,14 @@ func validateForRelease(pluginPath, requestedComponent string, info extractors.P
 		issues = append(issues, fmt.Sprintf("version.php declares an unrecognized $plugin->maturity value %q (expected one of MATURITY_ALPHA, MATURITY_BETA, MATURITY_RC, MATURITY_STABLE)", info.Maturity))
 	}
 
-	langFile := filepath.Join(pluginPath, "lang", "en", info.Component+".php")
-	if !fileExists(langFile) {
-		issues = append(issues, fmt.Sprintf("missing language file lang/en/%s.php", info.Component))
+	langName := moodletype.LangFileName(info.Component)
+	if !fileExists(filepath.Join(pluginPath, "lang", "en", langName+".php")) {
+		issues = append(issues, fmt.Sprintf("missing language file lang/en/%s.php", langName))
 	}
 
 	// Every plugin must declare a Privacy API provider; one that stores no personal data
-	// implements null_provider. This is a plain file-existence check.
-	if !fileExists(filepath.Join(pluginPath, "classes", "privacy", "provider.php")) {
+	// implements null_provider. The doctor's Privacy API section uses the same detection.
+	if !extractors.DetectPrivacyProvider(pluginPath).Exists {
 		issues = append(issues, "missing classes/privacy/provider.php — every plugin must declare a Privacy API "+
 			"provider (implement \\core_privacy\\local\\metadata\\null_provider if the plugin stores no personal data)")
 	}
@@ -363,15 +365,27 @@ func writeZip(pluginPath, destPath, folderName string, excluded map[string]struc
 		if relErr != nil {
 			return relErr
 		}
-		w, createErr := zw.Create(filepath.ToSlash(filepath.Join(folderName, rel)))
-		if createErr != nil {
-			return createErr
-		}
 		src, openErr := fsutil.OpenRegular(path)
 		if openErr != nil {
 			return openErr
 		}
 		defer src.Close()
+		// The entry keeps the file's modification time and permission bits, read from the opened
+		// file itself.
+		fi, statErr := src.Stat()
+		if statErr != nil {
+			return statErr
+		}
+		hdr, hdrErr := zip.FileInfoHeader(fi)
+		if hdrErr != nil {
+			return hdrErr
+		}
+		hdr.Name = filepath.ToSlash(filepath.Join(folderName, rel))
+		hdr.Method = zip.Deflate
+		w, createErr := zw.CreateHeader(hdr)
+		if createErr != nil {
+			return createErr
+		}
 		_, copyErr := io.Copy(w, src)
 		return copyErr
 	})

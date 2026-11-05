@@ -17,12 +17,12 @@ package tsbackend
 
 import (
 	"sort"
-	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/odvcencio/gotreesitter"
 
+	"github.com/oito2/mcp-build82/internal/moodletype"
+	"github.com/oito2/mcp-build82/internal/phpdoc"
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
@@ -68,16 +68,14 @@ func ParseUpgradePhp(filePath string) *phptypes.UpgradeExtraction {
 	}
 
 	sort.SliceStable(steps, func(i, j int) bool {
-		vi, _ := strconv.Atoi(steps[i].Version)
-		vj, _ := strconv.Atoi(steps[j].Version)
-		return vi < vj
+		return moodletype.UpgradeVersionLess(steps[i].Version, steps[j].Version)
 	})
 	return &phptypes.UpgradeExtraction{File: filePath, Steps: steps}
 }
 
 // findOldversionIfs walks body's whole subtree (not just its direct statements — the regex
 // backend's own flat text search doesn't care about nesting depth either) and collects every
-// if_statement whose condition matches $oldversion < <10-digit integer>.
+// if_statement whose condition matches $oldversion < <version> (see oldversionThreshold).
 func findOldversionIfs(body *gotreesitter.Node, src []byte) []*gotreesitter.Node {
 	var found []*gotreesitter.Node
 	gotreesitter.Walk(body, func(n *gotreesitter.Node, depth int) gotreesitter.WalkAction {
@@ -92,8 +90,8 @@ func findOldversionIfs(body *gotreesitter.Node, src []byte) []*gotreesitter.Node
 }
 
 // oldversionThreshold extracts the version number from an if_statement's condition, requiring the
-// exact shape `$oldversion < NNNNNNNNNN` (10 digits) — same restriction as the regex backend's own
-// `\d{10}`.
+// exact shape `$oldversion < V` with V an integer or float literal that moodletype.IsUpgradeVersion
+// accepts (ten digits, optionally with a decimal part) — the regex backend's rule.
 func oldversionThreshold(ifStmt *gotreesitter.Node, src []byte) (string, bool) {
 	paren := FirstChildOfType(ifStmt, "parenthesized_expression")
 	if paren == nil || paren.NamedChildCount() == 0 {
@@ -107,7 +105,7 @@ func oldversionThreshold(ifStmt *gotreesitter.Node, src []byte) (string, bool) {
 	if left.Type(phpLang) != "variable_name" || left.Text(src) != "$oldversion" {
 		return "", false
 	}
-	if right.Type(phpLang) != "integer" || len(right.Text(src)) != 10 {
+	if t := right.Type(phpLang); (t != "integer" && t != "float") || !moodletype.IsUpgradeVersion(right.Text(src)) {
 		return "", false
 	}
 	return right.Text(src), true
@@ -139,7 +137,7 @@ func upgradeDescription(ifStmt, block *gotreesitter.Node, src []byte) string {
 	if block.NamedChildCount() > 0 {
 		if first := block.NamedChild(0); first.StartPoint().Row == ifRow {
 			if text, ok := lineCommentText(first, src); ok {
-				return truncate120(text)
+				return phpdoc.CommentSummary(text)
 			}
 		}
 	}
@@ -153,7 +151,7 @@ func upgradeDescription(ifStmt, block *gotreesitter.Node, src []byte) string {
 		return ok
 	}); c != nil {
 		text, _ := lineCommentText(c, src)
-		return truncate120(text)
+		return phpdoc.CommentSummary(text)
 	}
 
 	return ""
@@ -171,20 +169,6 @@ func lineCommentText(node *gotreesitter.Node, src []byte) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(strings.TrimPrefix(text, "//")), true
-}
-
-// truncate120 trims surrounding whitespace from s and cuts the result to at most 120 bytes,
-// backing up to the nearest rune boundary so a multi-byte character is never split.
-func truncate120(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) > 120 {
-		cut := 120
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		return s[:cut]
-	}
-	return s
 }
 
 // firstXmldbTableRef finds the first `new xmldb_table('name')` object_creation_expression

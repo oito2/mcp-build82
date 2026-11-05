@@ -28,7 +28,7 @@ import (
 	"github.com/oito2/mcp-build82/internal/config"
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/generators"
-	"github.com/oito2/mcp-build82/internal/toolutil"
+	"github.com/oito2/mcp-build82/internal/resources"
 	"github.com/oito2/mcp-build82/internal/watcher"
 )
 
@@ -45,13 +45,17 @@ type UpdateIndexesInput struct {
 func RegisterUpdateTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "update_indexes",
+		InputSchema: inputSchemaFor[UpdateIndexesInput](),
 		Annotations: toolAnnotations("Update Indexes", false, false, true, false),
 		Description: "Regenerates the 13 global index files, re-detecting the Moodle version in case " +
 			"the installation was upgraded since init. Optionally also regenerates every .indevelopment plugin.",
-	}, withRecover(handleUpdateIndexes))
+	}, withRecover(withResourceNotifications(server, handleUpdateIndexes, func(_ UpdateIndexesInput, out UpdateIndexesOutput) []string {
+		return append(resources.GlobalURIs(), pluginResourceURIs(out.pluginComponents...)...)
+	})))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "watch_plugins",
+		InputSchema: inputSchemaFor[WatchInput](),
 		Annotations: toolAnnotations("Watch Dev Plugins", false, false, true, false),
 		Description: "Starts, stops, or reports the status of the file-watcher that auto-regenerates " +
 			"dev-plugin context on change. Every currently connected session is notified when a " +
@@ -65,20 +69,21 @@ func RegisterUpdateTool(server *mcp.Server) {
 // A missing or invalid configuration is returned as an error, so that result has no structured
 // output.
 func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in UpdateIndexesInput) (*mcp.CallToolResult, UpdateIndexesOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, UpdateIndexesOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, UpdateIndexesOutput{}, resultError(toolutil.NotInitialized())
+		return nil, UpdateIndexesOutput{}, err
 	}
 
+	statsBefore := cache.Global.Stats()
 	installInfo := extractors.DetectMoodleInstall(cfg.MoodlePath)
 	moodleVersion, moodleFullVersion := cfg.MoodleVersion, cfg.MoodleFullVersion
 	if installInfo != nil {
 		moodleVersion, moodleFullVersion = installInfo.Version, installInfo.Build
 	}
-	if moodleVersion != cfg.MoodleVersion || moodleFullVersion != cfg.MoodleFullVersion {
+	// Only a configuration read from ~/.build82 is updated there: an environment-sourced one
+	// (BUILD82_MOODLE_PATH, as `build82 install` sets) would overwrite the file with another
+	// installation's path, and the environment would still win on the next load.
+	if cfg.Source == config.SourceFile && (moodleVersion != cfg.MoodleVersion || moodleFullVersion != cfg.MoodleFullVersion) {
 		// A failed save is only logged, so the stored configuration keeps the old version.
 		if err := config.Save(config.Config{MoodlePath: cfg.MoodlePath, MoodleVersion: moodleVersion, MoodleFullVersion: moodleFullVersion}); err != nil {
 			fmt.Fprintln(os.Stderr, "[build82] warning: failed to persist updated Moodle version:", err)
@@ -91,13 +96,14 @@ func handleUpdateIndexes(ctx context.Context, req *mcp.CallToolRequest, in Updat
 
 	globalResults := generators.GenerateAll(cfg.MoodlePath, moodleVersion)
 
-	var pluginLines []string
+	var pluginLines, pluginComponents []string
 	if in.IncludePlugins {
-		pluginLines = updatePlugins(cfg.MoodlePath, in.Force)
+		pluginLines, pluginComponents = updatePlugins(cfg.MoodlePath, in.Force)
 	}
 
 	out := buildUpdateIndexesOutput(cfg.MoodlePath, moodleVersion, globalResults, pluginLines)
-	return structuredResult(in.Format, false, renderUpdateIndexesReport(cfg.MoodlePath, moodleVersion, globalResults, in.IncludePlugins, pluginLines), out)
+	out.pluginComponents = pluginComponents
+	return structuredResult(in.Format, false, renderUpdateIndexesReport(cfg.MoodlePath, moodleVersion, globalResults, in.IncludePlugins, pluginLines, cache.Global.Stats().Since(statsBefore)), out)
 }
 
 // forceGlobalRegeneration invalidates the cache entries of every output GenerateAll produces for
@@ -120,10 +126,11 @@ func pluginPanicLine(moodlePath, dir string, r any) string {
 
 // updatePlugins regenerates the context of every .indevelopment plugin under `moodlePath`
 // (bypassing the cache when `force` is set), persists the cache, and returns one summary line per
-// plugin. A panic while processing a plugin is recovered and reported in that plugin's line.
-func updatePlugins(moodlePath string, force bool) []string {
+// plugin and the components of the plugins it regenerated. A panic while processing a plugin is
+// recovered and reported in that plugin's line.
+func updatePlugins(moodlePath string, force bool) (lines, components []string) {
 	devDirs := generators.FindDevPlugins(moodlePath)
-	lines := make([]string, 0, len(devDirs))
+	lines = make([]string, 0, len(devDirs))
 
 	cache.Global.EnsureLoaded(moodlePath)
 	defer func() {
@@ -145,6 +152,9 @@ func updatePlugins(moodlePath string, force bool) []string {
 				}
 			}
 			result := generators.GenerateAllForPluginCore(dir, moodlePath, true, nil)
+			if result.Plugin != "" {
+				components = append(components, result.Plugin)
+			}
 			ok, fail := 0, 0
 			for _, f := range result.Files {
 				if f.Success && !f.Skipped {
@@ -161,18 +171,22 @@ func updatePlugins(moodlePath string, force bool) []string {
 			return fmt.Sprintf("%s %s (%d regenerated, %d cached, %d failed)", icon, result.Plugin, ok, skipped, fail)
 		}())
 	}
-	return lines
+	return lines, components
 }
 
 // UpdateIndexesOutput is the structured output of update_indexes: the detected Moodle version, the
 // global index files regenerated, served from the cache and failed (relative to the Moodle root),
 // and one summary line per .indevelopment plugin when include_plugins is set.
 type UpdateIndexesOutput struct {
-	MoodleVersion string       `json:"moodle_version"`
-	Regenerated   []string     `json:"regenerated,omitempty"`
-	Skipped       []string     `json:"skipped,omitempty"`
-	Failed        []FailedFile `json:"failed,omitempty"`
-	Plugins       []string     `json:"plugins,omitempty"`
+	MoodleVersion string       `json:"moodle_version" jsonschema:"Moodle release detected during this update"`
+	Regenerated   []string     `json:"regenerated,omitempty" jsonschema:"Global index files rewritten by this call"`
+	Skipped       []string     `json:"skipped,omitempty" jsonschema:"Global index files served from the cache"`
+	Failed        []FailedFile `json:"failed,omitempty" jsonschema:"Global index files that could not be generated"`
+	Plugins       []string     `json:"plugins,omitempty" jsonschema:"One summary line per .indevelopment plugin, when include_plugins was set"`
+
+	// pluginComponents lists the components of the plugins regenerated by this call, so the
+	// resources announced as updated name them without scanning the tree again. Not serialized.
+	pluginComponents []string
 }
 
 // buildUpdateIndexesOutput builds the structured output from the detected `moodleVersion`, the
@@ -185,7 +199,7 @@ func buildUpdateIndexesOutput(moodlePath, moodleVersion string, results []genera
 
 // renderUpdateIndexesReport renders the Markdown report: global index counts, the dev plugin
 // summary lines when `includePlugins` is set, and cache statistics.
-func renderUpdateIndexesReport(moodlePath, moodleVersion string, results []generators.GeneratorResult, includePlugins bool, pluginLines []string) string {
+func renderUpdateIndexesReport(moodlePath, moodleVersion string, results []generators.GeneratorResult, includePlugins bool, pluginLines []string, stats cache.CacheStats) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Update Indexes\n\nMoodle version: %s\n\n", moodleVersion)
 
@@ -204,8 +218,7 @@ func renderUpdateIndexesReport(moodlePath, moodleVersion string, results []gener
 		}
 	}
 
-	stats := cache.Global.Stats()
-	fmt.Fprintf(&b, "Cache: %d hits, %d misses, %d skips\n", stats.Hits, stats.Misses, stats.Skips)
+	fmt.Fprintf(&b, "Cache (this call): %d hits, %d misses, %d skips\n", stats.Hits, stats.Misses, stats.Skips)
 	return b.String()
 }
 
@@ -270,12 +283,9 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 			if activeWatcher != nil && activeWatcher.Running() {
 				return textResult(false, "⚠ Watcher is already running. Use action: 'stop' first."), nil, nil
 			}
-			cfg, err := requireConfig()
-			if err != nil {
-				return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
-			}
-			if cfg == nil {
-				return toolutil.NotInitialized(), nil, nil
+			cfg, errResult := loadConfigResult()
+			if errResult != nil {
+				return errResult, nil, nil
 			}
 			if activeWatcher != nil {
 				// A previous watcher that has stopped running; discard it before replacing it.
@@ -286,10 +296,11 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 			w.OnChange(func(ev watcher.WatchEvent) {
 				// The callback fires asynchronously, possibly long after this tool call returned and
 				// its request context was cancelled, so it uses a fresh background context.
+				notifyResourcesUpdated(server, pluginResourceURIs(ev.Component))
+				// Transitional: the log message also reaches clients that do not subscribe to
+				// resources. MCP logging is deprecated but still part of the protocol.
 				logCtx := context.Background()
 				for session := range server.Sessions() {
-					// MCP logging is deprecated but still part of the protocol; it is the channel through
-					// which every connected client is told about a regeneration.
 					_ = session.Log(logCtx, &mcp.LoggingMessageParams{ //nolint:staticcheck // best-effort; ignore error (e.g. transport closed)
 						Level:  "info",
 						Logger: "build82/watcher",

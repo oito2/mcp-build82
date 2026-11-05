@@ -21,7 +21,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,12 +224,16 @@ func buildFakeCtags(t *testing.T, dir, argvFile string) {
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		os.Stdout.WriteString("Universal Ctags 6.1.0, Copyright (C) 2015-2023 Universal Ctags Team\n")
 		return
+	}
+	if os.Getenv("FAKE_CTAGS_HANG") != "" {
+		time.Sleep(time.Minute)
 	}
 	f, err := os.Create(%q)
 	if err != nil {
@@ -403,5 +409,156 @@ func TestGenerateEventsIndex_TieBreaksSameEvent(t *testing.T) {
 			t.Fatalf("rows not ordered by source then callback:\n%s", s)
 		}
 		last = i
+	}
+}
+
+// writeOld writes `content` to `path`, creating parent directories, and sets its mtime one hour in
+// the past, as an archive unpacked with its original timestamps would.
+func writeOld(t *testing.T, path, content string) {
+	t.Helper()
+	mustMkdirAll(t, filepath.Dir(path))
+	mustWriteFile(t, path, content)
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// resultFor returns the result for the output whose path ends with `name`, failing the test when
+// there is none.
+func resultFor(t *testing.T, results []GeneratorResult, name string) GeneratorResult {
+	t.Helper()
+	for _, r := range results {
+		if strings.HasSuffix(r.File, string(filepath.Separator)+name) {
+			return r
+		}
+	}
+	t.Fatalf("no result for %s", name)
+	return GeneratorResult{}
+}
+
+// TestGenerateAll_RemovedPluginRegeneratesIndexes verifies that removing a plugin regenerates the
+// global indexes that listed it, although no remaining source is newer than their marks.
+func TestGenerateAll_RemovedPluginRegeneratesIndexes(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	GenerateAll(moodlePath, "4.3")
+	if err := os.RemoveAll(filepath.Join(moodlePath, "local", "demo")); err != nil {
+		t.Fatal(err)
+	}
+	results := GenerateAll(moodlePath, "4.3")
+
+	for _, name := range []string{"MOODLE_PLUGIN_INDEX.md", "AI_CONTEXT.md", "MOODLE_CLASSES_INDEX.md"} {
+		if resultFor(t, results, name).Skipped {
+			t.Errorf("%s was skipped after a plugin was removed", name)
+		}
+	}
+	content, _ := os.ReadFile(GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_INDEX.md"))
+	if strings.Contains(string(content), "local_demo") {
+		t.Errorf("the removed plugin is still listed:\n%s", content)
+	}
+}
+
+// TestGenerateAll_PluginUnpackedWithOldMtimesIsIndexed verifies that a plugin added with mtimes
+// older than the previous run, and a class added the same way, appear in the global indexes.
+func TestGenerateAll_PluginUnpackedWithOldMtimesIsIndexed(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	GenerateAll(moodlePath, "4.3")
+	extra := filepath.Join(moodlePath, "local", "unpacked")
+	writeOld(t, filepath.Join(extra, "version.php"),
+		"<?php\n$plugin->component = 'local_unpacked';\n$plugin->version = 2024010100;\n")
+	writeOld(t, filepath.Join(extra, "classes", "unpacked_helper.php"),
+		"<?php\nnamespace local_unpacked;\nclass unpacked_helper {}\n")
+	GenerateAll(moodlePath, "4.3")
+
+	for name, want := range map[string]string{
+		"MOODLE_PLUGIN_INDEX.md":  "local_unpacked",
+		"MOODLE_CLASSES_INDEX.md": "unpacked_helper",
+	} {
+		content, _ := os.ReadFile(GlobalOutputPath(moodlePath, name))
+		if !strings.Contains(string(content), want) {
+			t.Errorf("%s does not mention %s after the plugin was unpacked:\n%s", name, want, content)
+		}
+	}
+}
+
+// TestGenerateAll_WalksTheTreeOnce verifies that a cold GenerateAll walks the Moodle tree a single
+// time for all the indexes, and that the single walk lists the same files as one glob per index.
+func TestGenerateAll_WalksTheTreeOnce(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	var mu sync.Mutex
+	walks := 0
+	realWalk := walkMoodleFiles
+	walkMoodleFiles = func(root string, visit func(path, relSlash string)) {
+		mu.Lock()
+		walks++
+		mu.Unlock()
+		realWalk(root, visit)
+	}
+	t.Cleanup(func() { walkMoodleFiles = realWalk })
+
+	GenerateAll(moodlePath, "4.3")
+	if walks != 1 {
+		t.Errorf("GenerateAll walked the Moodle tree %d times, want 1", walks)
+	}
+
+	tree := scanMoodleTree(moodlePath)
+	for name, pair := range map[string][2][]string{
+		"events":       {tree.events, globMoodleSuffix(moodlePath, "db/events.php")},
+		"tasks":        {tree.tasks, globMoodleSuffix(moodlePath, "db/tasks.php")},
+		"services":     {tree.services, globMoodleSuffix(moodlePath, "db/services.php")},
+		"dbTables":     {tree.dbTables, globMoodleSuffix(moodlePath, "db/install.xml")},
+		"capabilities": {tree.capabilities, globMoodleSuffix(moodlePath, "db/access.php")},
+		"classes":      {tree.classes, globMoodleClassesPhp(moodlePath)},
+		"devPlugins":   {tree.devPlugins, FindDevPlugins(moodlePath)},
+	} {
+		if !slices.Equal(pair[0], pair[1]) || len(pair[0]) == 0 && name == "classes" {
+			t.Errorf("%s: single walk listed %v, glob listed %v", name, pair[0], pair[1])
+		}
+	}
+}
+
+// TestGenerateCtags_RelativePathsNoLinksAndTimeout verifies that ctags is asked not to follow
+// symbolic links, to record paths relative to the tags file and to skip ContextDir, and that a ctags
+// run longer than ctagsTimeout is stopped and reported.
+func TestGenerateCtags_RelativePathsNoLinksAndTimeout(t *testing.T) {
+	binDir := t.TempDir()
+	argvFile := filepath.Join(binDir, "argv.txt")
+	buildFakeCtags(t, binDir, argvFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if result := GenerateCtags(t.TempDir()); !result.Success {
+		t.Fatalf("expected success, got: %+v", result)
+	}
+	recorded, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(recorded)), "\n")
+	for _, want := range []string{"--links=no", "--tag-relative=yes", "--exclude=" + ContextDir} {
+		if !slices.Contains(args, want) {
+			t.Errorf("ctags arguments %v miss %s", args, want)
+		}
+	}
+
+	t.Setenv("FAKE_CTAGS_HANG", "1")
+	saved := ctagsTimeout
+	ctagsTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { ctagsTimeout = saved })
+	start := time.Now()
+	result := GenerateCtags(t.TempDir())
+	if result.Success || !strings.Contains(result.Error, "did not finish") {
+		t.Errorf("expected a timeout error, got %+v", result)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Second {
+		t.Errorf("GenerateCtags returned after %s", elapsed)
 	}
 }

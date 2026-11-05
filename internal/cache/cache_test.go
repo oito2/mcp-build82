@@ -18,6 +18,7 @@ package cache
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -113,7 +114,7 @@ func TestIsStale_HitAfterMark(t *testing.T) {
 }
 
 // TestIsStale_MarkInvalidatedBySourceChangeAfterMark verifies that a source modified after the mark
-// drops the mark and falls back to the output mtime comparison.
+// drops the mark and makes the output stale.
 func TestIsStale_MarkInvalidatedBySourceChangeAfterMark(t *testing.T) {
 	c := NewMtimeCache()
 	dir := t.TempDir()
@@ -126,8 +127,7 @@ func TestIsStale_MarkInvalidatedBySourceChangeAfterMark(t *testing.T) {
 
 	c.Mark(output)
 
-	// A source changed after the mark drops the mark, and the output mtime comparison then
-	// decides.
+	// A source changed after the mark drops the mark and makes the output stale.
 	touch(t, src, now.Add(1*time.Hour))
 
 	if !c.IsStale(output, []string{src}) {
@@ -313,8 +313,8 @@ func TestEnsureLoaded_VersionMismatchDegradesToEmpty(t *testing.T) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	future := cacheFile{Version: cacheFileVersion + 1, Entries: map[string]time.Time{
-		filepath.Join(dir, "out.md"): time.Now(),
+	future := cacheFile{Version: cacheFileVersion + 1, Entries: map[string]mark{
+		filepath.Join(dir, "out.md"): {At: time.Now()},
 	}}
 	b, _ := json.Marshal(future)
 	if err := os.WriteFile(filepath.Join(cacheDir, ".cache.json"), b, 0o644); err != nil {
@@ -360,6 +360,29 @@ func TestEnsureLoaded_SavesPreviousRootBeforeSwitching(t *testing.T) {
 	c2.EnsureLoaded(dirA)
 	if c2.IsStale(outputA, nil) {
 		t.Error("expected root A's mark, saved during the switch, to survive a reload as a hit")
+	}
+}
+
+// TestEnsureLoaded_DoesNotRecreateRemovedPreviousRoot verifies that switching away from a root that
+// was removed drops its unsaved marks instead of recreating the root to hold its cache file.
+func TestEnsureLoaded_DoesNotRecreateRemovedPreviousRoot(t *testing.T) {
+	c := NewMtimeCache()
+	dirA := filepath.Join(t.TempDir(), "moodle")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outputA := filepath.Join(dirA, "out.md")
+	touch(t, outputA, time.Now())
+	c.EnsureLoaded(dirA)
+	c.Mark(outputA) // unsaved
+
+	if err := os.RemoveAll(dirA); err != nil {
+		t.Fatal(err)
+	}
+	c.EnsureLoaded(t.TempDir())
+
+	if _, err := os.Stat(dirA); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the removed root %s was recreated: %v", dirA, err)
 	}
 }
 
@@ -457,8 +480,8 @@ func TestSave_WritesAndRoundTrips(t *testing.T) {
 // a null or absent "entries" value loads as an empty cache that accepts Mark without panicking.
 func TestEnsureLoaded_NullOrMissingEntriesIsEmpty(t *testing.T) {
 	for name, body := range map[string]string{
-		"null":    `{"version": 1, "entries": null}`,
-		"missing": `{"version": 1}`,
+		"null":    `{"version": 2, "entries": null}`,
+		"missing": `{"version": 2}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -475,5 +498,167 @@ func TestEnsureLoaded_NullOrMissingEntriesIsEmpty(t *testing.T) {
 			touch(t, out, time.Now())
 			c.Mark(out)
 		})
+	}
+}
+
+// TestSave_RefusesSymlinkedContextDir verifies that the cache file is not written through a
+// symlinked .build82 directory.
+func TestSave_RefusesSymlinkedContextDir(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, ".build82")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	c := NewMtimeCache()
+	c.EnsureLoaded(root)
+	c.Mark(filepath.Join(root, "x.md"))
+	if err := c.Save(); err == nil {
+		t.Error("expected Save to refuse the symlinked directory")
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Errorf("%d file(s) written through the symlink", len(entries))
+	}
+}
+
+// TestIsStale_SymlinkedOutputIsStale verifies that an output replaced by a symbolic link is
+// regenerated even when the link target is newer than every source.
+func TestIsStale_SymlinkedOutputIsStale(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.php")
+	touch(t, src, time.Now().Add(-time.Hour))
+	target := filepath.Join(t.TempDir(), "target")
+	touch(t, target, time.Now())
+	out := filepath.Join(dir, "out.md")
+	if err := os.Symlink(target, out); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !NewMtimeCache().IsStale(out, []string{src}) {
+		t.Error("a symlinked output must be stale")
+	}
+}
+
+// TestIsStale_SourceSetChangeIsStale verifies that an output marked with MarkAt is stale when the
+// set of sources differs from the marked one, even when every source is older than the mark: a
+// source that was removed, or added with an old mtime (an unpacked archive), changes the output.
+func TestIsStale_SourceSetChangeIsStale(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-time.Hour)
+	a := filepath.Join(dir, "a.php")
+	b := filepath.Join(dir, "b.php")
+	added := filepath.Join(dir, "added.php")
+	for _, f := range []string{a, b, added} {
+		touch(t, f, old)
+	}
+	out := filepath.Join(dir, "out.md")
+	touch(t, out, time.Now())
+
+	for name, later := range map[string][]string{
+		"removed": {a},
+		"added":   {a, b, added},
+		"renamed": {a, added},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := NewMtimeCache()
+			c.MarkAt(out, time.Now(), []string{a, b})
+			if c.IsStale(out, []string{b, a}) {
+				t.Fatal("the same set in another order must be a hit")
+			}
+			if !c.IsStale(out, later) {
+				t.Errorf("a %s source must make the output stale", name)
+			}
+		})
+	}
+}
+
+// TestMarkAt_SourceEditedDuringGenerationIsStale verifies that a source saved after the sources were
+// read, but before the output was marked, makes the output stale on the next check.
+func TestMarkAt_SourceEditedDuringGenerationIsStale(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.php")
+	touch(t, src, time.Now().Add(-time.Hour))
+	out := filepath.Join(dir, "out.md")
+	touch(t, out, time.Now())
+
+	readAt := time.Now()
+	touch(t, src, readAt.Add(time.Second)) // edited while the output was being generated
+	c := NewMtimeCache()
+	c.MarkAt(out, readAt, []string{src})
+	if !c.IsStale(out, []string{src}) {
+		t.Error("a source edited after the sources were read must make the output stale")
+	}
+}
+
+// TestMarkAt_SourceSetSurvivesRestart verifies that the source set of a mark is persisted, so a
+// source removed while the server was down is still detected.
+func TestMarkAt_SourceSetSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.php")
+	b := filepath.Join(dir, "b.php")
+	touch(t, a, time.Now().Add(-time.Hour))
+	touch(t, b, time.Now().Add(-time.Hour))
+	out := filepath.Join(dir, ContextDirName, "out.md")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	touch(t, out, time.Now())
+
+	c1 := NewMtimeCache()
+	c1.EnsureLoaded(dir)
+	c1.MarkAt(out, time.Now(), []string{a, b})
+	if err := c1.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	c2 := NewMtimeCache()
+	c2.EnsureLoaded(dir)
+	if !c2.IsStale(out, []string{a}) {
+		t.Error("a source removed across a restart must make the output stale")
+	}
+}
+
+// TestMarks_KeptPerRoot verifies that a mark taken for an output of root A after the cache was
+// bound to root B is stored and saved under root A, never written into root B's cache file.
+func TestMarks_KeptPerRoot(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	outA := filepath.Join(dirA, ContextDirName, "out.md")
+	if err := os.MkdirAll(filepath.Dir(outA), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	touch(t, outA, time.Now())
+
+	c := NewMtimeCache()
+	c.EnsureLoaded(dirA)
+	c.EnsureLoaded(dirB) // another session switches roots while a run on A is in flight
+	c.Mark(outA)
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if b, err := os.ReadFile(cachePath(dirB)); err == nil && strings.Contains(string(b), "out.md") {
+		t.Errorf("root A's mark was saved into root B's cache file: %s", b)
+	}
+	fresh := NewMtimeCache()
+	fresh.EnsureLoaded(dirA)
+	if fresh.IsStale(outA, nil) {
+		t.Error("root A's mark must be saved to root A's cache file")
+	}
+}
+
+// TestIsStale_SourceNewerThanMarkIsStaleDespiteNewerOutput verifies that a source saved after the
+// mark time makes the output stale even when the output file was written after that source, as
+// happens when the source is saved while the output is being generated.
+func TestIsStale_SourceNewerThanMarkIsStaleDespiteNewerOutput(t *testing.T) {
+	dir := t.TempDir()
+	readAt := time.Now().Add(-time.Minute)
+	src := filepath.Join(dir, "src.php")
+	touch(t, src, readAt.Add(time.Second))
+	out := filepath.Join(dir, "out.md")
+	touch(t, out, readAt.Add(2*time.Second))
+
+	c := NewMtimeCache()
+	c.MarkAt(out, readAt, []string{src})
+	if !c.IsStale(out, []string{src}) {
+		t.Error("a source saved after the sources were read must make the output stale")
 	}
 }

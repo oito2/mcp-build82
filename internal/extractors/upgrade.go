@@ -19,12 +19,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/oito2/mcp-build82/internal/extractors/tsbackend"
+	"github.com/oito2/mcp-build82/internal/moodletype"
 	"github.com/oito2/mcp-build82/internal/phparray"
+	"github.com/oito2/mcp-build82/internal/phpdoc"
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
@@ -35,65 +35,34 @@ type UpgradeExtraction = phptypes.UpgradeExtraction
 // upgradeFnPattern matches the declaration of the xmldb_<component>_upgrade() function.
 var upgradeFnPattern = regexp.MustCompile(`function\s+xmldb_\w+_upgrade\s*\(`)
 
-// extractFunctionBody returns the body of the xmldb_<component>_upgrade() function in `content`,
-// without the outer braces. The boolean is false when the function or its closing brace is not
-// found.
-func extractFunctionBody(content string) (string, bool) {
+// functionBodyBounds returns the byte range [start, end) of the body of the
+// xmldb_<component>_upgrade() function in `content`, without the outer braces. ok is false when
+// the function or its closing brace is not found.
+func functionBodyBounds(content string) (start, end int, ok bool) {
 	loc := upgradeFnPattern.FindStringIndex(content)
 	if loc == nil {
-		return "", false
+		return 0, 0, false
 	}
 	braceStart := strings.Index(content[loc[0]:], "{")
 	if braceStart == -1 {
-		return "", false
+		return 0, 0, false
 	}
 	braceStart += loc[0]
 
-	end := phparray.FindBalancedEnd(content, braceStart, '{', '}')
-	if end == -1 {
-		return "", false
+	closing := phparray.FindBalancedEnd(content, braceStart, '{', '}')
+	if closing == -1 {
+		return 0, 0, false
 	}
-	return content[braceStart+1 : end], true
+	return braceStart + 1, closing, true
 }
 
-// Patterns used to read upgrade steps: the version-gated `if ($oldversion < N) {` opening, an
-// inline comment on that line, an xmldb_table reference, and any `//` comment.
+// Patterns used to describe upgrade steps: an inline comment on the step's if line, an
+// xmldb_table reference, and any `//` comment.
 var (
-	stepPattern              = regexp.MustCompile(`if\s*\(\s*\$oldversion\s*<\s*(\d{10})\s*\)\s*\{`)
 	stepInlineCommentPattern = regexp.MustCompile(`if\s*\([^)]+\)\s*\{?\s*//\s*(.+)`)
 	xmldbTableRefPattern     = regexp.MustCompile(`new\s+xmldb_table\s*\(\s*['"]([^'"]+)['"]`)
 	bareCommentPattern       = regexp.MustCompile(`//\s*(.+)`)
 )
-
-// truncate120 trims whitespace from `s` and cuts the result to at most 120 bytes,
-// backing up to a UTF-8 rune boundary so no multi-byte character is split.
-func truncate120(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) > 120 {
-		cut := 120
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		return s[:cut]
-	}
-	return s
-}
-
-// extractStepBlock returns the brace-balanced if-block, braces included, whose opening brace is the
-// last character of the stepPattern match ending at `matchEnd` in `body`. When the brace never
-// closes it returns a raw slice of up to 500 bytes so a malformed step is still described.
-func extractStepBlock(body string, matchEnd int) string {
-	braceStart := matchEnd - 1
-	end := phparray.FindBalancedEnd(body, braceStart, '{', '}')
-	if end == -1 {
-		limit := braceStart + 500
-		if limit > len(body) {
-			limit = len(body)
-		}
-		return body[braceStart:limit]
-	}
-	return body[braceStart : end+1]
-}
 
 // extractDescription returns a short description of an upgrade step from `ifLineWindow` (the text
 // of its if line) and `stepBlock` (its body). It uses, in order, an inline comment on the if line,
@@ -101,19 +70,23 @@ func extractStepBlock(body string, matchEnd int) string {
 // in the block, and returns "" when none exists.
 func extractDescription(ifLineWindow, stepBlock string) string {
 	if m := stepInlineCommentPattern.FindStringSubmatch(ifLineWindow); m != nil {
-		return truncate120(m[1])
+		return phpdoc.CommentSummary(m[1])
 	}
 	if m := xmldbTableRefPattern.FindStringSubmatch(stepBlock); m != nil {
 		return "xmldb_table: " + m[1]
 	}
 	if m := bareCommentPattern.FindStringSubmatch(stepBlock); m != nil {
-		return truncate120(m[1])
+		return phpdoc.CommentSummary(m[1])
 	}
 	return ""
 }
 
 // ParseUpgradePhp parses the version-gated steps of the xmldb_<component>_upgrade() function in the
-// db/upgrade.php file at `filePath`, sorted by ascending version. It returns nil when the file
+// db/upgrade.php file at `filePath`, sorted by ascending version (a ten-digit version, optionally
+// with a decimal part). Steps are located by locateUpgradeSteps, the locator ParseUpgradeOperations
+// uses, in the text with comments and heredoc bodies blanked out (stripCommentsAndHeredocs, which keeps every offset), so a
+// commented-out step is not reported and a quote inside a heredoc cannot hide the steps after it;
+// descriptions are read from the original text at the same offsets. It returns nil when the file
 // cannot be read, and an empty extraction when the function is not found.
 func ParseUpgradePhp(filePath string) *UpgradeExtraction {
 	if useTreesitter() {
@@ -124,36 +97,32 @@ func ParseUpgradePhp(filePath string) *UpgradeExtraction {
 		return nil
 	}
 	s := string(content)
+	stripped := stripCommentsAndHeredocs(s)
 
-	body, ok := extractFunctionBody(s)
+	bodyStart, bodyEnd, ok := functionBodyBounds(stripped)
 	if !ok {
 		return &UpgradeExtraction{File: filePath, Steps: []UpgradeStep{}}
 	}
-
 	steps := []UpgradeStep{}
-	for _, m := range stepPattern.FindAllStringSubmatchIndex(body, -1) {
-		version := body[m[2]:m[3]]
-		matchEnd := m[1]
-
-		lineEnd := strings.IndexByte(body[matchEnd:], '\n')
-		var ifLineWindow string
-		if lineEnd == -1 {
-			ifLineWindow = body[m[0]:]
-		} else {
-			ifLineWindow = body[m[0] : matchEnd+lineEnd]
+	for _, step := range locateUpgradeSteps(stripped) {
+		if step.start < bodyStart || step.bodyEnd > bodyEnd {
+			continue // outside the upgrade function
 		}
-
-		block := extractStepBlock(body, matchEnd)
+		// The if line, from the `if` to the end of its line, read from the original text so an
+		// inline comment on it is kept.
+		lineEnd := strings.IndexByte(s[step.bodyStart:], '\n')
+		ifLineWindow := s[step.start:]
+		if lineEnd != -1 {
+			ifLineWindow = s[step.start : step.bodyStart+lineEnd]
+		}
 		steps = append(steps, UpgradeStep{
-			Version:     version,
-			Description: extractDescription(ifLineWindow, block),
+			Version:     step.version,
+			Description: extractDescription(ifLineWindow, s[step.bodyStart-1:step.bodyEnd+1]),
 		})
 	}
 
 	sort.SliceStable(steps, func(i, j int) bool {
-		vi, _ := strconv.Atoi(steps[i].Version)
-		vj, _ := strconv.Atoi(steps[j].Version)
-		return vi < vj
+		return moodletype.UpgradeVersionLess(steps[i].Version, steps[j].Version)
 	})
 
 	return &UpgradeExtraction{File: filePath, Steps: steps}

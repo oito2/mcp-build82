@@ -16,6 +16,9 @@
 package main
 
 import (
+	"debug/buildinfo"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -82,5 +85,31 @@ func TestReleaseBuildEnv_PinsEverySetting(t *testing.T) {
 	want := []string{"GOOS=windows", "GOARCH=arm64", "CGO_ENABLED=0", "GOAMD64=v1", "GOARM64=v8.0", "GOFLAGS=", "GOEXPERIMENT="}
 	if !slices.Equal(got, want) {
 		t.Errorf("releaseBuildEnv = %q, want %q", got, want)
+	}
+}
+
+// TestBuildOne_EmbedsNoVCSState verifies that a release build records no version-control
+// information (vcs.revision, vcs.modified, ...) in the binary's build info, so the binary does not
+// depend on whether the checkout is clean, modified or not a git checkout at all.
+func TestBuildOne_EmbedsNoVCSState(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds ./cmd/build82")
+	}
+	repoRoot, err := repoRootDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "build82")
+	if err := buildOne(repoRoot, runtime.GOOS, runtime.GOARCH, "v1.2.3", out); err != nil {
+		t.Fatal(err)
+	}
+	info, err := buildinfo.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range info.Settings {
+		if strings.HasPrefix(s.Key, "vcs") {
+			t.Errorf("release binary embeds %s=%s", s.Key, s.Value)
+		}
 	}
 }

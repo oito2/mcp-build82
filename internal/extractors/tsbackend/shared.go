@@ -17,9 +17,9 @@ package tsbackend
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
@@ -33,11 +33,15 @@ import (
 var phpLang = grammars.PhpLanguage()
 
 // maxParseFileSize caps how large a file ParseFile will read+parse. Parsing allocates a large
-// multiple of the source size, so without a cap a plugin directory containing one unusually
-// large/generated/minified .php file (whether benign or adversarial) could force a
-// disproportionate memory spike per call. 8 MiB is generous headroom over any real Moodle
-// core/plugin .php file.
-const maxParseFileSize = 8 << 20
+// multiple of the source size (hundreds of bytes per source byte), and up to 10 extractors run
+// concurrently per plugin, so without a cap one unusually large/generated/minified .php file
+// (whether benign or adversarial) could force a memory spike of gigabytes. 2 MiB stays above the
+// largest non-vendor .php file of a Moodle core install (about 1.3 MB).
+const maxParseFileSize = 2 << 20
+
+// parseTimeout bounds one parse. A parse that hits it stops early and ParseFile reports an error
+// instead of returning a partial tree. Tests lower it to force an early stop.
+var parseTimeout = 10 * time.Second
 
 // maxConcatFragments caps how many `.`-joined operands StringValue will flatten and evaluate for
 // a single string_value tree before giving up. It exists purely as a work/memory bound for
@@ -48,21 +52,22 @@ const maxConcatFragments = 10000
 // every Node.Text/Type call also needs. Only a regular file is read: a symbolic link or a FIFO at
 // path is an error (see fsutil.ReadRegular).
 func ParseFile(path string) (*gotreesitter.Tree, []byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	if info.Size() > maxParseFileSize {
-		return nil, nil, fmt.Errorf("parse %s: file too large (%d bytes, max %d)", path, info.Size(), maxParseFileSize)
-	}
 	src, err := fsutil.ReadRegular(path, maxParseFileSize)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	parser := gotreesitter.NewParser(phpLang)
+	parser.SetTimeoutMicros(uint64(parseTimeout / time.Microsecond))
 	tree, err := parser.Parse(src)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	// A parse stopped by the timeout or the parser's memory budget returns a partial tree, which
+	// would silently drop declarations; it is reported as an error instead.
+	if tree.ParseStoppedEarly() {
+		reason := tree.ParseStopReason()
+		tree.Release()
+		return nil, nil, fmt.Errorf("parse %s: stopped early (%s)", path, reason)
 	}
 	return tree, src, nil
 }
@@ -101,7 +106,7 @@ func FindAssignment(root *gotreesitter.Node, lhsMatch func(lhs *gotreesitter.Nod
 // Concatenation chains are flattened and evaluated ITERATIVELY with an explicit stack rather than
 // by having StringValue call itself on both operands of every `.`: a PHP file consisting of a
 // single string built from thousands of tiny `.`-joined fragments (e.g. 'a'.'a'.'a'..., which fits
-// within the 8 MiB maxParseFileSize cap and can pack well over a million fragments) yields a
+// within the 2 MiB maxParseFileSize cap and can pack well over a million fragments) yields a
 // binary_expression tree whose depth is proportional to the fragment count, and recursing on it
 // would exhaust the goroutine stack (a fatal "stack overflow", not a recoverable panic). Using an
 // explicit heap-allocated stack keeps Go call-stack depth O(1) regardless of chain length.
@@ -152,12 +157,19 @@ func isConcatExpr(node *gotreesitter.Node, src []byte) bool {
 	return node.Type(phpLang) == "binary_expression" && node.NamedChildCount() == 2 && concatOperator(node, src)
 }
 
-// stringLiteralValue extracts a single `string`/`encapsed_string` leaf's inner text, unescaped.
-// This is the non-concatenation base case of StringValue, split out so the iterative concatenation
-// walk above can call it directly on each flattened operand.
+// stringLiteralValue extracts a single `string`/`encapsed_string` leaf's inner text, unescaped, or
+// the class name of a `X::class` constant (as written, with or without a leading backslash), the
+// form Moodle documents for hook, event, task and service registrations. This is the
+// non-concatenation base case of StringValue, split out so the iterative concatenation walk above
+// can call it directly on each flattened operand (so `X::class . '::m'` gives "X::m").
 func stringLiteralValue(node *gotreesitter.Node, src []byte) (string, bool) {
 	switch node.Type(phpLang) {
 	case "string", "encapsed_string":
+	case "class_constant_access_expression":
+		if node.NamedChildCount() == 2 && strings.EqualFold(node.NamedChild(1).Text(src), "class") {
+			return node.NamedChild(0).Text(src), true
+		}
+		return "", false
 	default:
 		return "", false
 	}
@@ -173,6 +185,22 @@ func stringLiteralValue(node *gotreesitter.Node, src []byte) (string, bool) {
 		raw += node.Child(i).Text(src)
 	}
 	return phparray.UnescapeString(raw), true
+}
+
+// CallbackValue returns the callback named by `node`: a `[X::class, 'method']` (or
+// `['X', 'method']`) array gives "X::method"; anything else is read with StringValue.
+func CallbackValue(node *gotreesitter.Node, src []byte) (string, bool) {
+	if elements := ArrayElements(node); len(elements) == 2 {
+		_, classNode := KeyValue(elements[0])
+		_, methodNode := KeyValue(elements[1])
+		class, okClass := StringValue(classNode, src)
+		method, okMethod := StringValue(methodNode, src)
+		if okClass && okMethod {
+			return class + "::" + method, true
+		}
+		return "", false
+	}
+	return StringValue(node, src)
 }
 
 // concatOperator reports whether a binary_expression's operator token is PHP's string
@@ -200,19 +228,25 @@ func IntValue(node *gotreesitter.Node, src []byte) (int, bool) {
 	return n, true
 }
 
-// BoolValue extracts a boolean-ish value, matching internal/phparray.ExtractBool's own
-// case-insensitive true/false/1/0 semantics exactly: a `boolean` node ("true"/"false") or an
-// `integer` node ("1"/"0") — Moodle db/*.php files use both forms interchangeably for these
-// fields.
+// BoolValue extracts a boolean-ish value with internal/phparray.ExtractBool's semantics: a
+// `boolean` node (true/false in any letter case) or an `integer` node that is exactly 1 or 0 —
+// Moodle db/*.php files use both forms for these fields. Any other node, another integer included,
+// gives ok=false, so the caller keeps its default as the regex backend does.
 func BoolValue(node *gotreesitter.Node, src []byte) (bool, bool) {
 	if node == nil {
 		return false, false
 	}
 	switch node.Type(phpLang) {
 	case "boolean":
-		return node.Text(src) == "true", true
+		return strings.EqualFold(node.Text(src), "true"), true
 	case "integer":
-		return node.Text(src) == "1", true
+		switch node.Text(src) {
+		case "1":
+			return true, true
+		case "0":
+			return false, true
+		}
+		return false, false
 	default:
 		return false, false
 	}
@@ -225,12 +259,29 @@ func ArrayElements(node *gotreesitter.Node) []*gotreesitter.Node {
 		return nil
 	}
 	var elements []*gotreesitter.Node
-	for i := 0; i < node.NamedChildCount(); i++ {
-		if c := node.NamedChild(i); c.Type(phpLang) == "array_element_initializer" {
+	for _, c := range namedChildren(node) {
+		if c.Type(phpLang) == "array_element_initializer" {
 			elements = append(elements, c)
 		}
 	}
 	return elements
+}
+
+// namedChildren returns the named children of `n`, in order, in a single pass over its children.
+// Iterating with NamedChildCount/NamedChild(i) instead rescans the children on every call, which is
+// quadratic in the number of children (a file root with thousands of declarations).
+func namedChildren(n *gotreesitter.Node) []*gotreesitter.Node {
+	if n == nil {
+		return nil
+	}
+	count := n.ChildCount()
+	out := make([]*gotreesitter.Node, 0, count)
+	for i := 0; i < count; i++ {
+		if c := n.Child(i); c != nil && c.IsNamed() {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // MatchVariable returns an LHS matcher for a plain $name variable (as opposed to
@@ -261,8 +312,9 @@ func FirstChildOfType(node *gotreesitter.Node, typeName string) *gotreesitter.No
 	if node == nil {
 		return nil
 	}
-	for i := 0; i < node.NamedChildCount(); i++ {
-		if c := node.NamedChild(i); c.Type(phpLang) == typeName {
+	count := node.ChildCount()
+	for i := 0; i < count; i++ {
+		if c := node.Child(i); c != nil && c.IsNamed() && c.Type(phpLang) == typeName {
 			return c
 		}
 	}

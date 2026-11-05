@@ -11,6 +11,11 @@
     "properties": {
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "plugin": {
@@ -28,33 +33,43 @@
     "additionalProperties": false,
     "properties": {
       "ai_context": {
+        "description": "Full content of .build82/PLUGIN_AI_CONTEXT.md, when it exists",
         "type": "string"
       },
       "component": {
+        "description": "Frankenstyle component of the plugin",
         "type": "string"
       },
       "display_name": {
+        "description": "Plugin name from its English language file",
         "type": "string"
       },
       "has_ai_context": {
+        "description": "Whether .build82/PLUGIN_AI_CONTEXT.md has been generated for the plugin",
         "type": "boolean"
       },
       "maturity": {
+        "description": "Declared maturity constant, such as MATURITY_STABLE",
         "type": "string"
       },
       "name": {
+        "description": "Plugin directory name",
         "type": "string"
       },
       "path": {
+        "description": "Plugin directory relative to the Moodle root",
         "type": "string"
       },
       "requires": {
+        "description": "Minimum Moodle version required ($plugin-\u003erequires)",
         "type": "string"
       },
       "type": {
+        "description": "Moodle plugin type",
         "type": "string"
       },
       "version": {
+        "description": "Plugin version from its version.php",
         "type": "string"
       }
     },

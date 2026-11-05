@@ -22,14 +22,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/config"
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/generators"
 	"github.com/oito2/mcp-build82/internal/moodletype"
+	"github.com/oito2/mcp-build82/internal/resources"
 	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
@@ -60,6 +64,53 @@ func withRecover[In, Out any](
 		}()
 		return fn(ctx, req, in)
 	}
+}
+
+// toolHandler is the signature of a typed tool handler.
+type toolHandler[In, Out any] func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, Out, error)
+
+// notifyResourcesUpdated sends notifications/resources/updated for each of `uris` to the sessions
+// subscribed to it. It uses a background context, so it also works from the watcher's
+// asynchronous callback after the request that started the watcher ended, and it is best-effort:
+// a session that cannot be reached is skipped. When any URI is given, it first drops the cached
+// moodle://plugins/with-context listing (resources.InvalidatePluginsWithContext).
+func notifyResourcesUpdated(server *mcp.Server, uris []string) {
+	if len(uris) > 0 {
+		// A client that re-reads an announced resource at once must not get the listing cached
+		// before the regeneration.
+		resources.InvalidatePluginsWithContext()
+	}
+	for _, uri := range uris {
+		_ = server.ResourceUpdated(context.Background(), &mcp.ResourceUpdatedNotificationParams{URI: uri})
+	}
+}
+
+// withResourceNotifications wraps the handler `fn` of a tool that rewrites generated files: after
+// a call that succeeded (no error, and a result not flagged IsError), the resources named by
+// urisOf(in, out) are announced as updated to their subscribers. A nil or empty list notifies
+// nothing.
+func withResourceNotifications[In, Out any](server *mcp.Server, fn toolHandler[In, Out], urisOf func(In, Out) []string) toolHandler[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		res, out, err := fn(ctx, req, in)
+		if err == nil && (res == nil || !res.IsError) {
+			notifyResourcesUpdated(server, urisOf(in, out))
+		}
+		return res, out, err
+	}
+}
+
+// pluginResourceURIs returns the resources a regeneration of the plugins `components` changes:
+// each plugin's resources and the global ones that index the plugins (resources.PluginIndexURIs).
+// It returns nil when `components` is empty.
+func pluginResourceURIs(components ...string) []string {
+	if len(components) == 0 {
+		return nil
+	}
+	var uris []string
+	for _, c := range components {
+		uris = append(uris, resources.PluginURIs(c)...)
+	}
+	return append(uris, resources.PluginIndexURIs()...)
 }
 
 // structuredResult returns the result of a tool with structured output `out`: a single text block
@@ -97,6 +148,28 @@ func textOf(res *mcp.CallToolResult) string {
 	return strings.Join(parts, "\n")
 }
 
+// enumSchemas declares the values build82's enum-like input types accept, as JSON Schema enums.
+// The empty string stands for the documented default.
+var enumSchemas = map[reflect.Type]*jsonschema.Schema{
+	reflect.TypeFor[Format]():              {Type: "string", Enum: []any{"", "text", "json"}},
+	reflect.TypeFor[WatchAction]():         {Type: "string", Enum: []any{"", "start", "stop", "status"}},
+	reflect.TypeFor[BatchMode]():           {Type: "string", Enum: []any{"", "dev", "all", "list"}},
+	reflect.TypeFor[ApiVisibilityFilter](): {Type: "string", Enum: []any{"", "public", "deprecated", "all"}},
+}
+
+// inputSchemaFor returns the input schema of a tool whose input is T, inferred as the SDK does but
+// with the enum-like fields restricted to their values (enumSchemas), so the SDK rejects any other
+// value (e.g. "Stop" for watch_plugins' action) before the handler runs instead of the handler
+// falling back to a default action. It panics when T cannot be described, which is a programming
+// error caught at server start.
+func inputSchemaFor[T any]() *jsonschema.Schema {
+	schema, err := jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: enumSchemas})
+	if err != nil {
+		panic(fmt.Sprintf("input schema for %T: %v", *new(T), err))
+	}
+	return schema
+}
+
 // toolAnnotations returns the annotations of a tool with every hint set explicitly, so no client
 // falls back to the protocol defaults (which assume a destructive, open-world tool): `title` is the
 // human-readable name; `readOnly` means the tool changes nothing; `destructive` means it may
@@ -112,9 +185,15 @@ func toolAnnotations(title string, readOnly, destructive, idempotent, openWorld 
 	}
 }
 
+// configErrorText returns the message for a configuration that cannot be resolved because of
+// `err`.
+func configErrorText(err error) string {
+	return "❌ Failed to resolve build82 configuration: " + err.Error()
+}
+
 // configError returns the toolError for a configuration that cannot be resolved because of `err`.
 func configError(err error) error {
-	return toolError("❌ Failed to resolve build82 configuration: " + err.Error())
+	return toolError(configErrorText(err))
 }
 
 // Format is the optional output-format field shared by every tool's input struct.
@@ -141,8 +220,8 @@ func jsonResult(isError bool, data any) *mcp.CallToolResult {
 // FailedFile is the JSON shape of one file that failed to generate, used by every tool whose
 // output distinguishes generated, skipped and failed generator results.
 type FailedFile struct {
-	File  string `json:"file"`
-	Error string `json:"error"`
+	File  string `json:"file" jsonschema:"Path of the file that failed to generate (relative to the Moodle root for global files, to the plugin for plugin files)"`
+	Error string `json:"error" jsonschema:"Why the file could not be generated"`
 }
 
 // classifyResults splits generator `results` into the names of generated files, the names of
@@ -164,6 +243,30 @@ func classifyResults(results []generators.GeneratorResult, base string) (generat
 	return
 }
 
+// writeGenerationResults writes the "## Results" section of a generation report to `b`: the counts,
+// the `failed` files with their errors, then the `generated` and `skipped` (cached) file names,
+// each list sorted. The slices themselves are not reordered.
+func writeGenerationResults(b *strings.Builder, generated, skipped []string, failed []FailedFile) {
+	fmt.Fprintf(b, "## Results\n\n%d generated, %d cached, %d failed\n\n", len(generated), len(skipped), len(failed))
+	if len(failed) > 0 {
+		b.WriteString("### Failed\n\n")
+		for _, f := range failed {
+			fmt.Fprintf(b, "✖ %s: %s\n", f.File, f.Error)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("### Generated\n\n")
+	for _, n := range slices.Sorted(slices.Values(generated)) {
+		fmt.Fprintf(b, "✔ %s\n", n)
+	}
+	if len(skipped) > 0 {
+		b.WriteString("\n### Cached\n\n")
+		for _, n := range slices.Sorted(slices.Values(skipped)) {
+			fmt.Fprintf(b, "✔ %s\n", n)
+		}
+	}
+}
+
 // resolvedPlugin is the outcome of resolving and validating a plugin identifier: the absolute
 // plugin directory and its detected metadata.
 type resolvedPlugin struct {
@@ -173,7 +276,8 @@ type resolvedPlugin struct {
 
 // resolveAndValidatePlugin resolves `identifier` — a frankenstyle component ("local_myplugin"), a
 // path relative to the Moodle root ("local/myplugin"), or an absolute path — against `moodlePath`,
-// and checks that it lies within the Moodle root, exists, and contains a version.php. On any
+// and checks that it lies within the Moodle root, is not the Moodle root itself (whose version.php
+// is core's, and whose ContextDir holds the global files), exists, and contains a version.php. On any
 // failure it returns a non-nil error result (IsError set) that the caller should return as is; on
 // success the result is nil and the resolvedPlugin is populated.
 func resolveAndValidatePlugin(identifier, moodlePath string) (resolvedPlugin, *mcp.CallToolResult) {
@@ -185,6 +289,10 @@ func resolveAndValidatePlugin(identifier, moodlePath string) (resolvedPlugin, *m
 	if !moodletype.IsWithinMoodle(full, moodlePath) {
 		return resolvedPlugin{}, textResult(true,
 			"❌ Invalid plugin path: must be within the Moodle installation.")
+	}
+	if moodletype.IsRoot(full, moodlePath) {
+		return resolvedPlugin{}, textResult(true,
+			"❌ Invalid plugin path: the Moodle root itself is not a plugin; name a plugin directory inside it.")
 	}
 	if _, err := os.Stat(full); err != nil {
 		return resolvedPlugin{}, textResult(true, fmt.Sprintf(
@@ -222,41 +330,42 @@ func resolvePluginIdentifier(identifier, moodlePath string) string {
 }
 
 // resolvePluginPathWithinMoodle resolves `identifier` (component, relative path, or absolute path)
-// via moodletype.ResolvePluginPath and checks it with moodletype.IsWithinMoodle against
-// `moodlePath`. Unlike resolveAndValidatePlugin it does not require version.php to exist. It
-// returns the resolved path and true, or ("", false) when resolution or containment fails.
+// via moodletype.ResolvePluginPath and checks that it lies within `moodlePath`
+// (moodletype.IsWithinMoodle), is not the Moodle root itself, and contains a version.php. It
+// returns the resolved path and true, or ("", false) when any check fails.
 func resolvePluginPathWithinMoodle(identifier, moodlePath string) (string, bool) {
 	path, ok := moodletype.ResolvePluginPath(identifier, moodlePath)
-	if ok && !moodletype.IsWithinMoodle(path, moodlePath) {
-		ok = false
+	if !ok || !moodletype.IsWithinMoodle(path, moodlePath) || moodletype.IsRoot(path, moodlePath) ||
+		!fileExists(filepath.Join(path, "version.php")) {
+		return "", false
 	}
-	return path, ok
+	return path, true
 }
 
-// findAllPlugins returns the de-duplicated plugin directories under `moodlePath`, found by globbing
-// {typeDir}/*/version.php for every value in moodletype.PluginTypeToDir. The result is unsorted;
-// sorting is the caller's responsibility.
-func findAllPlugins(moodlePath string) []string {
-	seen := map[string]struct{}{}
-	var dirs []string
-	for _, typeDir := range moodletype.PluginTypeToDir {
-		matches, _ := filepath.Glob(filepath.Join(moodlePath, typeDir, "*", "version.php"))
-		for _, m := range matches {
-			d := filepath.Dir(m)
-			if _, ok := seen[d]; !ok {
-				seen[d] = struct{}{}
-				dirs = append(dirs, d)
-			}
-		}
+// loadConfigResult loads the build82 configuration (config.Load). It returns the configuration and
+// a nil result, or a nil configuration and the error result to return as is: a configuration that
+// cannot be resolved (configErrorText), or no configuration yet (toolutil.NotInitialized). A
+// configuration file that exists but cannot be read is reported by config.Load on stderr and counts
+// as no configuration.
+func loadConfigResult() (*config.Config, *mcp.CallToolResult) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, textResult(true, configErrorText(err))
 	}
-	return dirs
+	if cfg == nil {
+		return nil, toolutil.NotInitialized()
+	}
+	return cfg, nil
 }
 
-// requireConfig loads the build82 configuration. It returns (nil, nil) when no configuration
-// exists yet, which callers report with toolutil.NotInitialized, and a non-nil error only when the
-// configuration location cannot be resolved or the file cannot be read.
-func requireConfig() (*config.Config, error) {
-	return config.Load()
+// loadConfig is loadConfigResult for tools with structured output: the error result is returned
+// as a toolError carrying the same text.
+func loadConfig() (*config.Config, error) {
+	cfg, res := loadConfigResult()
+	if res != nil {
+		return nil, resultError(res)
+	}
+	return cfg, nil
 }
 
 // readPluginFileTruncated reads the generated file `filename` from the plugin's .build82/
@@ -264,11 +373,6 @@ func requireConfig() (*config.Config, error) {
 // the file is missing or unreadable; callers treat that as "not available".
 func readPluginFileTruncated(pluginPath, filename string, maxChars int) string {
 	return toolutil.ReadFileTruncated(generators.PluginOutputPath(pluginPath, filename), maxChars)
-}
-
-// joinPath joins path `parts` with the OS path separator.
-func joinPath(parts ...string) string {
-	return filepath.Join(parts...)
 }
 
 // fileExists reports whether `path` exists and is not a directory.

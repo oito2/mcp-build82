@@ -46,8 +46,8 @@ func ParseEventsPhp(filePath string) *EventsExtraction {
 
 	observers := []EventObserver{}
 	for _, block := range phparray.SplitIntoBlocks(body) {
-		eventname := phparray.ExtractString(block, "eventname")
-		callback := phparray.ExtractString(block, "callback")
+		eventname := phparray.ExtractStringOrClass(block, "eventname")
+		callback := phparray.ExtractStringOrClass(block, "callback")
 		if eventname == "" && callback == "" {
 			continue
 		}

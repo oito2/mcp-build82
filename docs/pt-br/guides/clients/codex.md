@@ -194,7 +194,7 @@ Esta é uma característica da configuração compartilhada. Se ambos pararem de
 
 ### SSE não é suportado
 
-O `build82` roda via stdio por padrão, que é o que todas as opções acima registram. O modo `--http` do servidor (Streamable HTTP + SSE) é um modo separado e opcional, e não é configurado por nenhum passo desta página.
+O `build82` roda via stdio, que é o que todas as opções acima registram; ele não tem modo HTTP nem SSE.
 
 ### Contexto desatualizado após mudanças
 

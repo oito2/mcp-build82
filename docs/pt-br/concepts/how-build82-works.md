@@ -74,7 +74,7 @@ Com os arquivos de contexto criados, o servidor MCP os expõe ao cliente de IA d
 
 - **Tools** — a IA as chama explicitamente para disparar ações (`init_moodle_context`, `search_api`, `get_plugin_info`, `watch_plugins`, etc.)
 - **Resources** — a IA os lê passivamente como contexto, sem ação explícita do usuário (`moodle://api-index`, `moodle://plugin/{component}`, etc.)
-- **Prompts** — templates pré-construídos que injetam contexto automaticamente e guiam a IA em tarefas complexas (`scaffold_plugin`, `review_plugin`, `debug_plugin`)
+- **Prompts** — templates pré-construídos que injetam contexto automaticamente e guiam a IA em tarefas complexas (`scaffold_plugin`, `review_plugin`, `debug_plugin`, `upgrade_plugin`)
 
 ---
 

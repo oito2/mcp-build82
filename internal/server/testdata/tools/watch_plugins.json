@@ -11,6 +11,12 @@
     "properties": {
       "action": {
         "description": "'start' (default) to begin watching, 'stop' to stop, 'status' to check.",
+        "enum": [
+          "",
+          "start",
+          "stop",
+          "status"
+        ],
         "type": "string"
       }
     },

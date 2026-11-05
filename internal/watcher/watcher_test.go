@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -264,6 +265,9 @@ func TestDebounce_CoalescesRapidTouches(t *testing.T) {
 	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
+	// A window much longer than the gaps between the writes below, so a scheduling stall on a
+	// loaded machine cannot split them into two quiet periods.
+	w.debounce = 2 * time.Second
 	defer w.Stop()
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
@@ -279,7 +283,9 @@ func TestDebounce_CoalescesRapidTouches(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	first := waitForCallback(t, events, 2*time.Second)
+	// The wait covers the debounce window plus a regeneration, which can take seconds when the
+	// whole suite runs under the race detector; returning early keeps the usual run short.
+	first := waitForCallback(t, events, 30*time.Second)
 	if first == nil {
 		t.Fatal("expected exactly one coalesced regeneration, got none")
 	}
@@ -291,7 +297,7 @@ func TestDebounce_CoalescesRapidTouches(t *testing.T) {
 	select {
 	case extra := <-events:
 		t.Errorf("expected only one coalesced regeneration, got an extra one: %+v", extra)
-	case <-time.After(700 * time.Millisecond):
+	case <-time.After(w.debounce + 300*time.Millisecond):
 		// no extra event, as expected
 	}
 }
@@ -466,4 +472,56 @@ func TestRegeneratePlugin_ChangeDuringRunIsReplayed(t *testing.T) {
 		t.Errorf("unexpected extra regeneration: %+v", extra)
 	case <-time.After(300 * time.Millisecond):
 	}
+}
+
+// TestWatch_DeletionTriggersRegeneration verifies that removing a watched source file regenerates
+// the plugin's context, so context derived from the removed file does not linger.
+func TestWatch_DeletionTriggersRegeneration(t *testing.T) {
+	freshCache(t)
+	moodlePath := t.TempDir()
+	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
+	libPhp := filepath.Join(pluginDir, "lib.php")
+	mustWriteFile(t, libPhp, "<?php\nfunction local_demo_extend_navigation() {}\n")
+
+	w := NewMoodleWatcher(moodlePath, "4.3")
+	defer w.Stop()
+	if count := w.Start(); count == 0 {
+		t.Fatal("expected at least one watched file")
+	}
+	events := make(chan WatchEvent, 10)
+	w.OnChange(func(e WatchEvent) { events <- e })
+
+	if err := os.Remove(libPhp); err != nil {
+		t.Fatal(err)
+	}
+	if waitForCallback(t, events, 3*time.Second) == nil {
+		t.Fatal("removing a watched file did not trigger a regeneration")
+	}
+}
+
+// TestStart_IgnoresMarkersEveryOtherToolIgnores verifies that the watcher finds dev plugins with
+// the same walk as the tools: a .indevelopment marker that is a symbolic link, or one inside a
+// .git directory, does not make a plugin watched.
+func TestStart_IgnoresMarkersEveryOtherToolIgnores(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symbolic links needs extra privileges on Windows")
+	}
+	freshCache(t)
+	moodlePath := t.TempDir()
+
+	linked := filepath.Join(moodlePath, "local", "linked")
+	mustMkdirAll(t, filepath.Join(linked, genutil.ContextDir))
+	mustWriteFile(t, filepath.Join(linked, "version.php"), "<?php\n$plugin->component = 'local_linked';\n$plugin->version = 2024010100;\n")
+	target := filepath.Join(t.TempDir(), "marker")
+	mustWriteFile(t, target, "ts")
+	if err := os.Symlink(target, filepath.Join(linked, genutil.ContextDir, ".indevelopment")); err != nil {
+		t.Fatal(err)
+	}
+	markPluginDev(t, moodlePath, filepath.Join(".git", "local", "copy"), "local_copy")
+
+	w := NewMoodleWatcher(moodlePath, "4.3")
+	if count := w.Start(); count != 0 {
+		t.Errorf("expected nothing watched, got %d file(s)", count)
+	}
+	w.Stop()
 }

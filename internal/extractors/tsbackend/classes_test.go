@@ -175,7 +175,7 @@ func TestParseRenamedClassesPhp_MissingFile(t *testing.T) {
 // TestExtractClasses_RealFileRegression runs the tree-sitter backend against every real *.php
 // file under a real Moodle installation's lib/classes/ tree (a large, real class-heavy corpus).
 func TestExtractClasses_RealFileRegression(t *testing.T) {
-	root := "/srv/workspace/www/html/mdle/dev-500/lib/classes"
+	root := filepath.Join(realMoodle("mdle-500"), "lib", "classes")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("real Moodle fixture tree not available: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestExtractClasses_RealFileRegression(t *testing.T) {
 func TestParseRenamedClassesPhp_RealFileRegression(t *testing.T) {
 	var found int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

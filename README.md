@@ -41,9 +41,10 @@ with existing conventions, and keep the docs in sync as you work.
   classes, web services, the plugin index and more.
 - **12 per-plugin context files** — architecture, dependencies, runtime flow, settings, and an
   AI-ready summary.
-- **13 MCP tools, 3 MCP prompts and MCP resources** — generate context, search the API and
-  plugins, explain a plugin, diagnose the environment (`doctor`), package a plugin for release,
-  and create a new plugin skeleton.
+- **15 MCP tools, 4 MCP prompts and MCP resources** — generate context, search the API and
+  plugins, explain a plugin, plan a migration to a newer Moodle, diagnose the environment
+  (`doctor`), check the Moodle coding style (with `phpcs`), package a plugin for release, create a
+  new plugin skeleton, and bump a plugin's version with its upgrade step.
 - **File watcher** that regenerates a dev plugin's context whenever its sources change.
 - **Two PHP extraction backends** — fast regex (default) or pure-Go tree-sitter.
 - **Clean output** — everything is written under `.build82/` (at the Moodle root and at each
@@ -59,6 +60,8 @@ with existing conventions, and keep the docs in sync as you work.
 - An MCP client — see [Client Setup](#client-setup).
 - Optional: [`universal-ctags`](https://github.com/universal-ctags/ctags) on `PATH`, to also
   generate a `.build82/tags` file for editor navigation.
+- Optional: `phpcs` with the Moodle coding standard (`composer global require moodlehq/moodle-cs`),
+  for the `check_coding_style` tool.
 - Only to build from source: Go 1.26+.
 
 **Download a release binary** (no Go toolchain required). Every release ships a `checksums.txt` —

@@ -8,6 +8,7 @@
 *.prof
 *.trace
 coverage.out
+cover.out
 coverage.html
 
 # IDEs
@@ -33,3 +34,6 @@ coverage.html
 
 # Local scratch notes (not part of the project)
 /.dev/
+
+# Local sync82 memory config
+/.sync82.json

@@ -22,10 +22,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -34,27 +32,16 @@ import (
 	"github.com/oito2/mcp-build82/internal/prompt"
 	"github.com/oito2/mcp-build82/internal/selfupdate"
 	"github.com/oito2/mcp-build82/internal/server"
-	"github.com/oito2/mcp-build82/internal/transport"
 	"github.com/oito2/mcp-build82/internal/version"
 )
 
 const helpText = `build82 — MCP server for Moodle plugin development
 
 Usage:
-  build82                  Run the MCP server over stdio (default)
-  build82 --http           Run the MCP server over Streamable HTTP + SSE
+  build82                  Run the MCP server over stdio
   build82 install [target] Configure build82 as an MCP server in an AI tool
   build82 self-update      Update to the latest released version
   build82 uninstall [target] Remove build82's MCP server registration
-
-Server flags (only apply with --http):
-  --port <n>            Port to listen on (default 3000)
-  --host <host>          Host to bind to (default 127.0.0.1)
-  --token <token>        Require this Bearer token for /mcp and /sse (default: auth disabled).
-                         Can also be set via the BUILD82_TOKEN environment variable; --token takes
-                         precedence when both are set. Passing --token with an empty value is a
-                         configuration error (use neither at all to run without authentication).
-  --allowed-host <host>  Additional allowed Host header value (repeatable)
 
 self-update flags:
   --check                Report whether an update is available, without installing it; exits
@@ -146,20 +133,8 @@ func wantsHelp(args []string) bool {
 }
 
 // usageExitCode is the process exit status for command-line usage errors: unknown flags, missing
-// flag values, server-only flags without --http, and unexpected arguments.
+// flag values and unexpected arguments.
 const usageExitCode = 2
-
-// serveFlags holds the parsed server-mode flags. They are parsed with a manual argv walk rather
-// than the flag package because flag's automatic -h/--help handling would conflict with this
-// command's own subcommand-aware help text.
-type serveFlags struct {
-	http         bool
-	port         int
-	host         string
-	token        string
-	tokenSet     bool // true iff --token was passed on the CLI with a following value (even "")
-	allowedHosts []string
-}
 
 // flagValue returns the value following the flag at args[i] and the index of that value. It
 // returns an error when the flag is the last argument.
@@ -170,70 +145,36 @@ func flagValue(args []string, i int) (string, int, error) {
 	return args[i+1], i + 1, nil
 }
 
-// parseServeFlags parses the server-mode flags in `args` (--http, --port, --host, --token,
-// --allowed-host) and returns them, with defaults of port 3000 and host 127.0.0.1. A "--" ends the
-// flags; the server takes no positional argument, so anything after it is an error. It returns an
-// error for an unknown argument, a flag that is missing its value, or a server-only flag (--port,
-// --host, --token, --allowed-host) used without --http. An out-of-range or non-numeric port
-// produces a warning on stderr and keeps the default. --help/-h and --version print their output
-// and terminate the process with status 0.
-func parseServeFlags(args []string) (serveFlags, error) {
-	f := serveFlags{port: 3000, host: "127.0.0.1"}
-	var serverOnly []string
-	for i := 0; i < len(args); i++ {
-		var err error
-		if args[i] == "--" {
-			if i+1 < len(args) {
-				return f, fmt.Errorf("unexpected argument %q", args[i+1])
-			}
-			break
-		}
-		switch args[i] {
-		case "--http":
-			f.http = true
-		case "--port":
-			serverOnly = append(serverOnly, args[i])
-			var v string
-			if v, i, err = flagValue(args, i); err != nil {
-				return f, err
-			}
-			if n, convErr := strconv.Atoi(v); convErr == nil && n > 0 && n < 65536 {
-				f.port = n
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: invalid --port value %q, keeping %d\n", v, f.port)
-			}
-		case "--host":
-			serverOnly = append(serverOnly, args[i])
-			if f.host, i, err = flagValue(args, i); err != nil {
-				return f, err
-			}
-		case "--token":
-			serverOnly = append(serverOnly, args[i])
-			if f.token, i, err = flagValue(args, i); err != nil {
-				return f, err
-			}
-			f.tokenSet = true
-		case "--allowed-host":
-			serverOnly = append(serverOnly, args[i])
-			var v string
-			if v, i, err = flagValue(args, i); err != nil {
-				return f, err
-			}
-			f.allowedHosts = append(f.allowedHosts, v)
-		case "--help", "-h":
-			fmt.Print(helpText)
-			os.Exit(0)
-		case "--version":
-			fmt.Println(version.Current)
-			os.Exit(0)
-		default:
-			return f, fmt.Errorf("unknown argument %q", args[i])
-		}
+// removedHTTPFlags are the flags of the HTTP mode, removed in v1.2.0; they get an explanatory
+// usage error instead of a bare "unknown argument".
+var removedHTTPFlags = map[string]bool{"--http": true, "--port": true, "--host": true, "--token": true, "--allowed-host": true}
+
+// parseServeArgs checks the arguments of the server mode, which runs over stdio and takes no flag
+// besides --help/-h and --version (they print their output and terminate the process with status
+// 0). A "--" ends the arguments; the server takes no positional argument, so anything after it is
+// an error. Any other first argument is an error, with a note for the flags of the removed HTTP
+// mode (removedHTTPFlags); since every case ends the check, only the first argument is examined.
+func parseServeArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
 	}
-	if !f.http && len(serverOnly) > 0 {
-		return f, fmt.Errorf("%s only applies with --http", serverOnly[0])
+	switch arg := args[0]; arg {
+	case "--":
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected argument %q", args[1])
+		}
+		return nil
+	case "--help", "-h":
+		fmt.Print(helpText)
+		os.Exit(0)
+	case "--version":
+		fmt.Println(version.Current)
+		os.Exit(0)
 	}
-	return f, nil
+	if removedHTTPFlags[args[0]] {
+		return fmt.Errorf("unknown argument %q: the HTTP mode was removed in v1.2.0; build82 runs over stdio only", args[0])
+	}
+	return fmt.Errorf("unknown argument %q", args[0])
 }
 
 // parseSelfUpdateFlags parses the flags of `build82 self-update` (--check, --yes/-y,
@@ -241,8 +182,7 @@ func parseServeFlags(args []string) (serveFlags, error) {
 // defaulting the channel to "stable", plus whether --rollback was given. A "--" ends the flags;
 // self-update takes no positional argument. It returns an error for an
 // unknown argument, a --channel without a value, --rollback combined with any other flag, or
-// --require-signature combined with --check, which downloads nothing. It is separate from
-// parseServeFlags because the two flag sets are disjoint.
+// --require-signature combined with --check, which downloads nothing.
 func parseSelfUpdateFlags(args []string) (opts selfupdate.RunOptions, rollback bool, err error) {
 	opts = selfupdate.RunOptions{Channel: "stable"}
 	var others []string
@@ -362,8 +302,8 @@ func interruptContext() context.Context {
 	return ctx
 }
 
-// main dispatches on the first argument: no arguments or server flags start the MCP server
-// (stdio by default, Streamable HTTP with --http), the install, self-update and uninstall
+// main dispatches on the first argument: no arguments start the MCP server over stdio, the
+// install, self-update and uninstall
 // subcommands run their own flows (or print their own help with -h/--help before any "--"),
 // --help and --version print and return, and any other bareword is rejected as an unknown
 // command with exit status 1. Unknown flags, missing flag values and unexpected arguments are
@@ -380,8 +320,6 @@ func main() {
 	}
 
 	switch os.Args[1] {
-	case "--http":
-		runServe(os.Args[1:])
 	case "install":
 		target, err := parseInstallArgs(os.Args[2:])
 		exitUsage("install", err)
@@ -408,8 +346,8 @@ func main() {
 		fmt.Println(version.Current)
 	default:
 		if strings.HasPrefix(os.Args[1], "-") {
-			// Any other flag is parsed as a server flag; unknown flags and server-only flags
-			// without --http are usage errors.
+			// Any other flag is checked as a server argument; unknown flags (including those of the
+			// removed HTTP mode) are usage errors.
 			runServe(os.Args[1:])
 			return
 		}
@@ -440,16 +378,11 @@ func runRollback() {
 	fmt.Printf("✅ Rolled back to %s at %s (the replaced version is kept at %s.bak; run --rollback again to undo).\n", restored, binaryPath, binaryPath)
 }
 
-// runServe parses the server flags in `args` and runs the MCP server over Streamable HTTP when
-// --http is set, or over stdio otherwise. It returns only when the server stops.
+// runServe checks the server arguments in `args` (parseServeArgs) and runs the MCP server over
+// stdio. It returns only when the server stops.
 func runServe(args []string) {
-	flags, err := parseServeFlags(args)
-	exitUsage("", err)
-	if !flags.http {
-		runStdio()
-		return
-	}
-	runHTTP(flags)
+	exitUsage("", parseServeArgs(args))
+	runStdio()
 }
 
 // stdioMaxLineLength bounds the size in bytes of one inbound JSON-RPC message on stdio, well above
@@ -466,71 +399,5 @@ func runStdio() {
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{MaxLineLength: stdioMaxLineLength}); err != nil {
 		fmt.Fprintln(os.Stderr, "Fatal error:", err)
 		os.Exit(1)
-	}
-}
-
-// buildTokenEnvVar names the environment variable that supplies the --http Bearer token. It is
-// read only when --token was not passed on the command line, so an explicit --token (even an
-// empty one, which resolveToken rejects) always wins. Using the environment keeps the token out
-// of `ps` output, /proc/<pid>/cmdline and shell history.
-const buildTokenEnvVar = "BUILD82_TOKEN"
-
-// resolveToken returns the effective --http Bearer token from `flags` and the BUILD82_TOKEN
-// environment variable, with the command-line value taking precedence. It returns an empty token
-// and a nil error when neither source is present, which disables authentication. It returns an
-// error when a source is present but empty, so that an empty shell variable (for example
-// `--token "$TOKEN"`) cannot silently turn authentication off. Authentication is therefore
-// disabled only when --token is omitted and BUILD82_TOKEN is unset.
-func resolveToken(flags serveFlags) (string, error) {
-	if flags.tokenSet {
-		if flags.token == "" {
-			return "", fmt.Errorf("--token was passed with an empty value; omit --token entirely to run --http without authentication")
-		}
-		return flags.token, nil
-	}
-	if envToken, ok := os.LookupEnv(buildTokenEnvVar); ok {
-		if envToken == "" {
-			return "", fmt.Errorf("%s is set but empty; unset it entirely to run --http without authentication", buildTokenEnvVar)
-		}
-		return envToken, nil
-	}
-	return "", nil
-}
-
-// shutdownTimeout bounds how long graceful shutdown waits for in-flight connections, notably
-// long-lived SSE and Streamable HTTP sessions, before the listener is forced closed.
-const shutdownTimeout = 10 * time.Second
-
-// runHTTP starts the Streamable HTTP and SSE server from `flags` and blocks until SIGINT or
-// SIGTERM, then shuts it down gracefully within shutdownTimeout. It exits with status 1 on an
-// invalid token configuration or when the server cannot start.
-func runHTTP(flags serveFlags) {
-	token, err := resolveToken(flags)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	cleanup, err := transport.StartHTTPServer(ctx, transport.HTTPServerOptions{
-		Port: flags.port, Host: flags.host, Token: token, AllowedHosts: flags.allowedHosts,
-		ServerFactory: func() (*mcp.Server, error) { return server.NewServer(), nil },
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Fatal error:", err)
-		os.Exit(1)
-	}
-
-	<-ctx.Done()
-	fmt.Fprintln(os.Stderr, "[build82] shutting down...")
-	// Shutdown waits for every connection to become idle, and long-lived SSE and Streamable
-	// HTTP sessions can stay open indefinitely. The timeout guarantees the process exits, closing
-	// any remaining connections once it expires.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := cleanup(shutdownCtx); err != nil {
-		fmt.Fprintln(os.Stderr, "[build82] graceful shutdown did not complete within", shutdownTimeout, "-", err)
 	}
 }

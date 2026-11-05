@@ -18,7 +18,6 @@ package resources
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,7 +63,7 @@ var pluginFileResources = []pluginFileResource{
 // is the only listing, and it covers just the AI-context file kind.
 func RegisterPluginResources(server *mcp.Server) {
 	server.AddResource(&mcp.Resource{
-		URI:         "moodle://plugins/with-context",
+		URI:         pluginsWithContextURI,
 		Name:        "Plugins With AI Context",
 		Description: "Lists all Moodle plugins that have AI context files generated.",
 		MIMEType:    "text/markdown",
@@ -133,6 +132,14 @@ var (
 	pluginsWithContextCache   = map[string]pluginsWithContextCacheEntry{}
 )
 
+// InvalidatePluginsWithContext drops the cached moodle://plugins/with-context listing, so the
+// next read recomputes it. Call it before announcing that resource as updated.
+func InvalidatePluginsWithContext() {
+	pluginsWithContextCacheMu.Lock()
+	clear(pluginsWithContextCache)
+	pluginsWithContextCacheMu.Unlock()
+}
+
 // pluginsWithContextRows returns, sorted by component, the plugins under `moodlePath` that have a
 // generated PLUGIN_AI_CONTEXT.md. Plugins whose metadata cannot be detected are skipped. The
 // result, which involves a full directory walk and a version.php parse per match, is cached for
@@ -145,7 +152,7 @@ func pluginsWithContextRows(moodlePath string) []pluginContextRow {
 	}
 	pluginsWithContextCacheMu.Unlock()
 
-	matches := globContextFiles(moodlePath, "PLUGIN_AI_CONTEXT.md")
+	matches := generators.FindContextFiles(moodlePath, "PLUGIN_AI_CONTEXT.md")
 	var rows []pluginContextRow
 	for _, m := range matches {
 		pluginDir := filepath.Dir(filepath.Dir(m)) // grandparent: out of .build82/, to the plugin root
@@ -164,29 +171,6 @@ func pluginsWithContextRows(moodlePath string) []pluginContextRow {
 	pluginsWithContextCacheMu.Unlock()
 
 	return rows
-}
-
-// globContextFiles returns the paths of every `.build82/<filename>` file found under `moodlePath`,
-// skipping vendor and node_modules directories below the root and ignoring unreadable entries.
-func globContextFiles(moodlePath, filename string) []string {
-	var matches []string
-	_ = filepath.WalkDir(moodlePath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if path != moodlePath && (name == "vendor" || name == "node_modules") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Name() == filename && filepath.Base(filepath.Dir(path)) == generators.ContextDir {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	return matches
 }
 
 // makePluginFileHandler returns a resource-template handler for `def`: it extracts the component

@@ -16,6 +16,13 @@
 | Moodle             | 4.1              | Hook API requires Moodle 4.3+              |
 | Operating system   | Linux, macOS, Windows | Prebuilt binaries: Linux and macOS on amd64/arm64, Windows on amd64 only |
 
+**Optional tools** — build82 works without them; `doctor` reports whether each one is usable:
+
+| Tool | Used for | How to install |
+| :--- | :--- | :--- |
+| [Universal Ctags](https://github.com/universal-ctags/ctags) | The `.build82/tags` file for editor navigation | Your package manager (`universal-ctags`) |
+| [`phpcs`](https://github.com/PHPCSStandards/PHP_CodeSniffer) with the [`moodle` standard](https://github.com/moodlehq/moodle-cs) | The `check_coding_style` tool | `composer global require moodlehq/moodle-cs` (needs PHP and Composer), then put Composer's global `vendor/bin` on `PATH`; check with `phpcs -i`, which must list `moodle` |
+
 You will also need a **compatible MCP client** to interact with the server. build82's `install` command auto-configures any of these it finds:
 
 - [Claude Code](../guides/clients/claude-code.md)
@@ -232,7 +239,7 @@ See [Contributing](../../../CONTRIBUTING.md) for the full development workflow.
 
 ## ⚙️ Configuring the Moodle Path
 
-build82 persists its configuration to a small file at `~/.build82` once you run `init_moodle_context` — you don't need to set anything by hand for day-to-day use. Environment variables remain available and take precedence, which is useful for CI or one-off overrides. The three variables below cover the Moodle location; the full list (including `BUILD82_EXTRACTOR_BACKEND` and `BUILD82_TOKEN`) is in the [Configuration Reference](../reference/configuration.md):
+build82 persists its configuration to a small file at `~/.build82` once you run `init_moodle_context` — you don't need to set anything by hand for day-to-day use. Environment variables remain available and take precedence, which is useful for CI or one-off overrides. The three variables below cover the Moodle location; the full list (including `BUILD82_EXTRACTOR_BACKEND`) is in the [Configuration Reference](../reference/configuration.md):
 
 | Variable                    | Required | Description                                                                             |
 | :--------------------------- | :------: | :---------------------------------------------------------------------------------------- |

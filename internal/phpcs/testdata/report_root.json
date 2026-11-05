@@ -1,0 +1,1 @@
+{"totals":{"errors":1,"warnings":0,"fixable":0},"files":{"{{ROOT}}/lib.php":{"errors":1,"warnings":0,"messages":[{"message":"Missing docblock for function local_demo_extend_navigation","source":"moodle.Commenting.MissingDocblock.Function","severity":5,"fixable":false,"type":"ERROR","line":3,"column":1}]}}}

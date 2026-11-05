@@ -18,6 +18,8 @@ package moodletype
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -42,7 +44,7 @@ var PluginTypeToDir = map[string]string{
 	"gradeimport":        "grade/import",
 	"gradeexport":        "grade/export",
 	"plagiarism":         "plagiarism",
-	"portfolio":          "portfolio/type",
+	"portfolio":          "portfolio",
 	"repository":         "repository",
 	"profilefield":       "user/profile/field",
 	"workshopform":       "mod/workshop/form",
@@ -64,6 +66,28 @@ var PluginTypeToDir = map[string]string{
 	"paygw":              "payment/gateway",
 	"mlbackend":          "lib/mlbackend",
 	"search":             "search/engine",
+	"aiplacement":        "ai/placement",
+	"aiprovider":         "ai/provider",
+	"cachelock":          "cache/locks",
+	"cachestore":         "cache/stores",
+	"communication":      "communication/provider",
+	"contenttype":        "contentbank/contenttype",
+	"coursereport":       "course/report",
+	"customfield":        "customfield/field",
+	"dataformat":         "dataformat",
+	"fileconverter":      "files/converter",
+	"gradepenalty":       "grade/penalty",
+	"gradingform":        "grade/grading/form",
+	"h5plib":             "h5p/h5plib",
+	"media":              "media/player",
+	"message":            "message/output",
+	"mnetservice":        "mnet/service",
+	"qbank":              "question/bank",
+	"qbehaviour":         "question/behaviour",
+	"qformat":            "question/format",
+	"smsgateway":         "sms/gateway",
+	"tiny":               "lib/editor/tiny/plugins",
+	"webservice":         "webservice",
 }
 
 // IsWithinMoodle reports whether absolutePath is located inside moodlePath (or equal to it).
@@ -80,15 +104,18 @@ func IsWithinMoodle(absolutePath, moodlePath string) bool {
 		return false
 	}
 
-	// When both paths exist on disk, resolve symlinks before comparing, so a symlink inside the
-	// Moodle root pointing outside it (e.g. local/evil -> /etc) is detected. Only applied when
-	// EvalSymlinks succeeds for BOTH sides: a target that doesn't exist yet falls through to the
-	// plain lexical comparison, and resolving only one side could mismatch when moodlePath itself
-	// sits behind a symlink.
+	// When the Moodle root exists, resolve symlinks on both sides before comparing, so a symlink
+	// inside the root pointing outside it (e.g. local/evil -> /etc) is detected. A target that does
+	// not exist yet is resolved through its deepest existing ancestor (evalExisting), so a new path
+	// under a symlinked directory (local -> /outside, then local/newplugin) is detected too. When
+	// the root does not exist, both sides stay lexical, since resolving only one side could
+	// mismatch when moodlePath itself sits behind a symlink.
 	if em, errM := filepath.EvalSymlinks(resolvedMoodle); errM == nil {
-		if et, errT := filepath.EvalSymlinks(resolvedTarget); errT == nil {
-			resolvedMoodle, resolvedTarget = em, et
+		et, ok := evalExisting(resolvedTarget)
+		if !ok {
+			return false
 		}
+		resolvedMoodle, resolvedTarget = em, et
 	}
 
 	rel, err := filepath.Rel(resolvedMoodle, resolvedTarget)
@@ -98,10 +125,72 @@ func IsWithinMoodle(absolutePath, moodlePath string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+// evalExisting returns `p` with the symbolic links of its deepest existing ancestor resolved and the
+// missing elements re-appended. It returns false when an element exists but cannot be resolved,
+// such as a dangling symbolic link, whose eventual target cannot be checked.
+func evalExisting(p string) (string, bool) {
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest), true
+		}
+		if _, err := os.Lstat(p); err == nil {
+			return "", false
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest), true
+		}
+		rest, p = filepath.Join(filepath.Base(p), rest), parent
+	}
+}
+
+// LangFileName returns the base name, without ".php", of the English language file of the plugin
+// `component`: the module name for an activity module ("mod_forum" → "forum", as in
+// mod/forum/lang/en/forum.php), the component itself for every other plugin type.
+func LangFileName(component string) string {
+	if name, ok := strings.CutPrefix(component, "mod_"); ok {
+		return name
+	}
+	return component
+}
+
+// ComponentNames returns every spelling Moodle accepts for the plugin `component` as a
+// get_string() component and as the prefix of its lib.php callbacks: an activity module is known
+// both as "mod_forum" and as "forum"; every other plugin only by its component.
+func ComponentNames(component string) []string {
+	if name, ok := strings.CutPrefix(component, "mod_"); ok {
+		return []string{component, name}
+	}
+	return []string{component}
+}
+
+// IsRoot reports whether `path` is the Moodle root `moodlePath` itself, comparing absolute paths
+// with symbolic links resolved when both exist.
+func IsRoot(path, moodlePath string) bool {
+	a, errA := filepath.Abs(path)
+	b, errB := filepath.Abs(moodlePath)
+	if errA != nil || errB != nil {
+		return false
+	}
+	if ra, err := filepath.EvalSymlinks(a); err == nil {
+		if rb, err := filepath.EvalSymlinks(b); err == nil {
+			a, b = ra, rb
+		}
+	}
+	return a == b
+}
+
+// componentPartsPattern matches the type and name of a component identifier: a lowercase type, an
+// underscore, then lowercase letters, digits and underscores. It keeps "." and ".." (e.g.
+// "mod_..") from being joined into a path.
+var componentPartsPattern = regexp.MustCompile(`^([a-z][a-z0-9]*)_([a-z0-9_]+)$`)
+
 // ResolvePluginPath resolves `identifier` — an absolute path, a path relative to `moodlePath`
-// containing "/", or a component string ("type_name") — to a path on disk. A component whose
-// type is missing from PluginTypeToDir uses the type itself as the directory. Returns ("", false)
-// if the identifier can't be resolved to an existing path. The returned path is cleaned, so it can
+// containing "/", or a component string ("type_name", see componentPartsPattern) — to a path on
+// disk. A component whose type is missing from PluginTypeToDir uses the type itself as the
+// directory. Returns ("", false) if the identifier can't be resolved to an existing path or is a
+// malformed component. The returned path is cleaned, so it can
 // be passed straight into IsWithinMoodle.
 func ResolvePluginPath(identifier, moodlePath string) (string, bool) {
 	if filepath.IsAbs(identifier) {
@@ -110,9 +199,8 @@ func ResolvePluginPath(identifier, moodlePath string) (string, bool) {
 	if strings.Contains(identifier, "/") {
 		return existsOrEmpty(filepath.Join(moodlePath, identifier))
 	}
-	if idx := strings.Index(identifier, "_"); idx != -1 {
-		typ := identifier[:idx]
-		name := identifier[idx+1:]
+	if m := componentPartsPattern.FindStringSubmatch(identifier); m != nil {
+		typ, name := m[1], m[2]
 		dir, ok := PluginTypeToDir[typ]
 		if !ok {
 			dir = typ
@@ -128,4 +216,22 @@ func existsOrEmpty(path string) (string, bool) {
 		return "", false
 	}
 	return path, true
+}
+
+// upgradeVersionPattern matches a Moodle version number as an upgrade step compares it: ten digits
+// (YYYYMMDDXX), optionally followed by a decimal part.
+var upgradeVersionPattern = regexp.MustCompile(`^\d{10}(?:\.\d+)?$`)
+
+// IsUpgradeVersion reports whether `s` is a version number an `if ($oldversion < V)` upgrade step
+// can name: ten digits, optionally with a decimal part (2024010100 or 2024010100.01).
+func IsUpgradeVersion(s string) bool {
+	return upgradeVersionPattern.MatchString(s)
+}
+
+// UpgradeVersionLess reports whether the version number `a` is lower than `b`, comparing them as
+// numbers so a decimal part counts (2024010100 < 2024010100.01).
+func UpgradeVersionLess(a, b string) bool {
+	va, _ := strconv.ParseFloat(a, 64)
+	vb, _ := strconv.ParseFloat(b, 64)
+	return va < vb
 }

@@ -81,7 +81,7 @@ O `internal/extractors` importa o `tsbackend` para o dispatch, então o `tsbacke
 
 **Arquivo-fonte:** `lib/*.php`, só funções de nível superior (não métodos dentro de classes).
 
-**Estratégia de parsing (regex):** varredura linha a linha pareando um bloco `/** ... */` de PHPDoc precedente (tolerando até 3 linhas em branco e, desde o trabalho de paridade com tree-sitter, um atributo `#[...]` do PHP 8 no meio) com a declaração `function` seguinte.
+**Estratégia de parsing (regex):** varredura linha a linha pareando um bloco `/** ... */` de PHPDoc precedente (tolerando até 3 linhas em branco e atributos `#[...]` do PHP 8 no meio, de uma ou várias linhas, e um fechamento `**/`) com a declaração `function` seguinte.
 
 **Classificação de visibilidade** (compartilhada com o backend tree-sitter via `internal/phpdoc`):
 
@@ -93,7 +93,7 @@ O `internal/extractors` importa o `tsbackend` para o dispatch, então o `tsbacke
 | Nenhuma tag restritiva | `public` |
 | Nenhum PHPDoc | `unverified` |
 
-O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos prioritários primeiro, sem recursão), conta cada classe de visibilidade e devolve apenas as funções `public` e `deprecated`.
+O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (ordenados por nome, sem recursão), conta cada classe de visibilidade e devolve apenas as funções `public` e `deprecated`.
 
 **Alimenta:** `MOODLE_API_INDEX.md`.
 
@@ -103,7 +103,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 **Arquivo-fonte:** `db/install.xml` de qualquer plugin.
 
-**Estratégia de parsing:** o `encoding/xml` padrão do Go para decodificar o XMLDB, tolerando tabelas individuais malformadas sem abortar o arquivo inteiro. Os atributos string `NOTNULL`/`SEQUENCE`/`NEXT` do XMLDB (`"true"`/`"false"`) são normalizados para booleanos de verdade.
+**Estratégia de parsing:** o `encoding/xml` padrão do Go para decodificar o XMLDB; um arquivo que não decodifica por inteiro não gera schema (não há recuperação por tabela). Os atributos string `NOTNULL`/`SEQUENCE`/`NEXT` do XMLDB (`"true"`/`"false"`) são normalizados para booleanos de verdade.
 
 **Alimenta:** `PLUGIN_DB_TABLES.md` e `MOODLE_DB_TABLES_INDEX.md`.
 
@@ -121,9 +121,9 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 ### `hooks.go` — Hook API (Moodle 4.3+)
 
-**Arquivo-fonte:** `db/hooks.php` (callbacks registrados) + `classes/hook/*.php` (definições de hook) + `lib.php`/`locallib.php` do plugin (detecção de callback legado).
+**Arquivo-fonte:** `db/hooks.php` (callbacks registrados) + `classes/hook/*.php` (definições de hook) + `lib.php` do plugin (detecção de callback legado — o Moodle só carrega o `lib.php` para chamar os callbacks de um plugin, então uma função no `locallib.php` não é um callback; o `DetectLegacyCallbacksInFile` aplica as mesmas regras a outro arquivo, e o `PLUGIN_CALLBACK_INDEX.md` o usa para listar à parte, como aviso, as declarações do `locallib.php`).
 
-**Estratégia de parsing:** três sub-varreduras — o array de callbacks em `db/hooks.php`, metadados de classe em `classes/hook/*.php`, e um regex sobre `lib.php` comparando com qualquer um dos 12 sufixos de callback legado (`before_footer`, `extend_navigation`, `cron`, ...) que têm um substituto documentado na Hook API em `internal/legacyhooks`.
+**Estratégia de parsing:** três sub-varreduras — o array de callbacks em `db/hooks.php`, metadados de classe em `classes/hook/*.php`, e um regex sobre `lib.php` comparando com qualquer um dos 11 sufixos de callback legado (`before_footer`, `before_http_headers`, `standard_footer_html`, ...) que o core do Moodle declara como substituídos por um hook (o atributo `replaces_callbacks` da classe do hook ou `get_deprecated_plugin_callbacks()`), listados com o hook em `internal/legacyhooks`; os callbacks de um módulo de atividade são reconhecidos tanto como `mod_<nome>_` quanto como `<nome>_`, e os nomes são comparados sem diferenciar maiúsculas de minúsculas, como faz o PHP. Os dois backends montam os avisos com `legacyhooks.Warnings`, e a tabela do lib.php no `PLUGIN_CALLBACK_INDEX.md` lista exatamente esses avisos. Uma declaração indentada dentro de um guard `if (!function_exists(...))` conta (com chaves ou na forma `if (): ... endif;`); uma comentada não. Registros e observers de eventos podem citar classes como strings entre aspas ou como `X::class` (sozinho, `X::class . '::metodo'` ou `[X::class, 'metodo']`, que dão `X::metodo`), uma classe de hook pode ser declarada com quaisquer modificadores `abstract`, `final` e `readonly` (a mesma regra de declaração do `classes.go`), e os metadados do hook são lidos dos atributos `#[\core\attribute\label]`, `#[\core\attribute\tags]` e `#[\core\attribute\hook\replaces_callbacks]` antes dos métodos `get_hook_description()`/`get_hook_tags()` e do docblock da classe.
 
 **Alimenta:** `PLUGIN_CALLBACK_INDEX.md` e `PLUGIN_DEPENDENCIES.md`.
 
@@ -133,7 +133,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 **Arquivo-fonte:** `db/access.php` de qualquer plugin.
 
-**Estratégia de parsing:** parsing de array literal sobre o array `$capabilities`, com chave `component:capabilityname`. O `riskbitmask` pode ser uma única constante nomeada (ex: `RISK_SPAM`) ou uma expressão composta com `|` entre várias — o backend tree-sitter resolve a expressão completa; o backend regex só captura o primeiro token (documentado como divergência conhecida, não um bug a corrigir, já que é um limite inerente da abordagem regex).
+**Estratégia de parsing:** parsing de array literal sobre o array `$capabilities`, com chave `tipo/nome:capabilityname`. O `riskbitmask` pode ser uma única constante nomeada (ex: `RISK_SPAM`) ou uma expressão composta com `|` entre várias — o backend tree-sitter resolve a expressão completa; o backend regex só captura o primeiro token (documentado como divergência conhecida, não um bug a corrigir, já que é um limite inerente da abordagem regex).
 
 **Alimenta:** `PLUGIN_DEPENDENCIES.md` e `MOODLE_CAPABILITIES_INDEX.md`.
 
@@ -143,7 +143,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 **Arquivo-fonte:** `classes/**/*.php` de qualquer plugin (também o glob restrito `**/classes/**/*.php` do `MOODLE_CLASSES_INDEX.md` em toda a instalação) e `db/renamedclasses.php`.
 
-**Estratégia de parsing:** regex linha a linha para declarações `class`/`interface`/`trait`/`enum`, com um pequeno look-ahead para juntar uma declaração multi-linha até o `{` de abertura. Pula arquivos symlink durante a varredura do diretório — um arquivo real plantado como symlink apontando para fora da árvore varrida não deve ter o conteúdo do seu alvo interpretado.
+**Estratégia de parsing:** regex linha a linha para declarações `class`/`interface`/`trait`/`enum` (com quaisquer modificadores `abstract`, `final` e `readonly`), com um pequeno look-ahead para juntar uma declaração multi-linha até o `{` de abertura. Pula arquivos symlink durante a varredura do diretório — um arquivo real plantado como symlink apontando para fora da árvore varrida não deve ter o conteúdo do seu alvo interpretado.
 
 **Alimenta:** `MOODLE_CLASSES_INDEX.md` e `PLUGIN_ARCHITECTURE.md`.
 
@@ -153,7 +153,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 **Arquivo-fonte:** `db/services.php` de qualquer plugin.
 
-**Estratégia de parsing:** parsing de array literal sobre o array `$functions`, com chave por nome de função, extraindo `classname`, `methodname`, `description`, `type`, `ajax`, `capabilities`.
+**Estratégia de parsing:** parsing de array literal sobre o array `$functions`, com chave por nome de função, extraindo `classname`, `methodname`, `description`, `type`, `ajax`, `capabilities`. Um valor escrito como concatenação `.` de strings (comum nas descrições longas do core) é lido inteiro pelo backend tree-sitter; o backend regex fica só com o primeiro fragmento (`tsbackend/KNOWN_DIVERGENCES.md` §3). Campos booleanos (`ajax` aqui, `internal`, `blocking`, `defaultenabled` nos outros) aceitam `true`/`false` em qualquer caixa e `1`/`0` nos dois backends; qualquer outro valor mantém o padrão do campo.
 
 **Alimenta:** `PLUGIN_ENDPOINT_INDEX.md` e `MOODLE_SERVICES_INDEX.md`.
 
@@ -173,7 +173,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 **Arquivo-fonte:** `db/upgrade.php` de qualquer plugin.
 
-**Estratégia de parsing:** varredura de fluxo de controle (não só arrays literais) por blocos `if ($oldversion < NNNNNNNNNN)` (exatamente 10 dígitos), com um fallback de descrição em 3 níveis: comentário na mesma linha, depois a primeira referência `new xmldb_table('literal')` cujo argumento de fato resolve para uma string literal, depois o primeiro comentário `//` solto em qualquer lugar do bloco.
+**Estratégia de parsing:** varredura de fluxo de controle (não só arrays literais) por blocos `if ($oldversion < V)`, em que V é uma versão de dez dígitos com parte decimal opcional (`2024010100` ou `2024010100.01`; qualquer outro número não é um passo), passos ordenados numericamente, com um fallback de descrição em 3 níveis: comentário na mesma linha, depois a primeira referência `new xmldb_table('literal')` cujo argumento de fato resolve para uma string literal, depois o primeiro comentário `//` solto em qualquer lugar do bloco. O backend regex localiza os passos com comentários e corpos de heredoc apagados, então um passo comentado não é reportado e uma aspa dentro de um heredoc não esconde os passos seguintes; as descrições são lidas do texto original. Os passos são localizados pela mesma função que o `ParseUpgradeOperations` usa (`upgradeops.go`, que alimenta a verificação de consistência de upgrade do `doctor`), e o backend tree-sitter aplica a mesma regra de versão (`moodletype.IsUpgradeVersion`).
 
 **Alimenta:** `PLUGIN_DEPENDENCIES.md`.
 
@@ -193,7 +193,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 **Arquivo-fonte:** `version.php` do plugin + `lang/en/<component>.php`.
 
-**Estratégia de parsing:** regex sobre `$plugin->component`, `$plugin->version`, `$plugin->requires`, `$plugin->maturity`. Usa o mapa `PluginTypeToDir` (37 entradas) do `internal/moodletype` como única fonte de verdade para resolver o tipo do plugin a partir do caminho do diretório.
+**Estratégia de parsing:** regex sobre `$plugin->component`, `$plugin->version`, `$plugin->requires`, `$plugin->maturity`, com os comentários apagados antes (uma atribuição comentada é ignorada). Quando um campo é atribuído mais de uma vez, vale a última atribuição, como quando o PHP executa o arquivo, e uma versão decimal (`2024010100.01`) mantém a parte decimal; o backend tree-sitter lê os mesmos valores. Usa o mapa `PluginTypeToDir` (os tipos de plugin do core do `lib/components.json` mais os tipos de subplugin comuns) do `internal/moodletype` como única fonte de verdade para resolver o tipo do plugin a partir do caminho do diretório.
 
 **Alimenta:** `PLUGIN_CONTEXT.md` e `MOODLE_PLUGIN_INDEX.md`.
 
@@ -201,7 +201,7 @@ O `ExtractMoodleApi` varre os arquivos `.php` diretamente sob `lib/` (arquivos p
 
 ### `settings.go`, `subplugins.go` — metadados extras do plugin
 
-O `settings.go` varre o `settings.php` com regex atrás de declarações `new admin_setting_*(` (um nome não literal é mantido com nome vazio). O `subplugins.go` lê o `db/subplugins.json` (tanto a chave `plugintypes` quanto a mais nova `subplugintypes`) e só recorre ao `db/subplugins.php` quando o JSON não existe. Nenhum dos dois tem equivalente em tree-sitter.
+O `settings.go` varre o `settings.php` com regex atrás de declarações `new admin_setting_*(` (um nome não literal é mantido com nome vazio). O `subplugins.go` lê o `db/subplugins.json` (os caminhos de `plugintypes`, relativos à raiz do Moodle; um tipo presente só na chave `subplugintypes`, relativa ao plugin, é juntado ao diretório do plugin) e só recorre ao `db/subplugins.php` quando o JSON não existe. Nenhum dos dois tem equivalente em tree-sitter.
 
 **Alimentam:** `PLUGIN_SETTINGS.md` (settings); `PLUGIN_DEPENDENCIES.md` e `PLUGIN_AI_CONTEXT.md` (subplugins; settings também no contexto de IA).
 
@@ -209,13 +209,13 @@ O `settings.go` varre o `settings.php` com regex atrás de declarações `new ad
 
 ### `deprecated.go`, `capabilityusage.go`, `langstrings.go` — diagnósticos do `doctor`
 
-Varreduras somente com regex usadas exclusivamente pela tool `doctor`, e por nenhum generator: chamadas diretas a funções marcadas `@deprecated` no índice de API do core (chamadas de método e estáticas são ignoradas), checagens de capability contra o prefixo das capabilities do próprio plugin (`mod/nome`, `block/nome` para esses dois tipos, o component frankenstyle nos demais) e chamadas `get_string()` versus as chaves declaradas em `lang/en/<component>.php`.
+Varreduras somente com regex usadas exclusivamente pela tool `doctor`, e por nenhum generator: chamadas diretas a funções marcadas `@deprecated` no índice de API do core (chamadas de método e estáticas são ignoradas), checagens de capability contra o prefixo das capabilities do próprio plugin (`tipo/nome`, a forma que o Moodle exige para todo tipo de plugin) e chamadas `get_string()` que citam o plugin (`mod_forum` ou `forum` num módulo) versus as chaves declaradas no seu arquivo de idioma inglês (`lang/en/<component>.php`, `lang/en/<nome>.php` num módulo).
 
 ---
 
 ### `shared.go` — acesso seguro a arquivos
 
-O `readFileCapped` se recusa a carregar em memória arquivos maiores que 8 MiB e só lê arquivos regulares (`fsutil.ReadRegular`: um link simbólico no arquivo não é seguido, e um FIFO ou dispositivo é recusado sem bloquear), e a varredura de diretório compartilhada ignora arquivos que são symlinks, de modo que analisar código de plugins de terceiros não confiáveis não esgota a memória, não lê arquivos fora da árvore do plugin nem trava num FIFO plantado. O backend tree-sitter aplica o mesmo limite de tamanho e a mesma regra de arquivo regular.
+O `readFileCapped` se recusa a carregar em memória arquivos maiores que 8 MiB e só lê arquivos regulares (`fsutil.ReadRegular`: um link simbólico no arquivo não é seguido, e um FIFO ou dispositivo é recusado sem bloquear), e a varredura de diretório compartilhada ignora arquivos que são symlinks, de modo que analisar código de plugins de terceiros não confiáveis não esgota a memória, não lê arquivos fora da árvore do plugin nem trava num FIFO plantado. Um arquivo que cresce além do limite durante a leitura também é recusado. O backend tree-sitter aplica a mesma regra de arquivo regular com um limite menor, de 2 MiB, já que um parse aloca centenas de bytes por byte de fonte, e interrompe um parse após 10 segundos; um parse interrompido antes do fim (timeout ou orçamento de memória do parser) é um erro, nunca uma árvore parcial. Os números de linha das correspondências de regex vêm de um índice pré-calculado das quebras de linha, então um arquivo com muitas correspondências é analisado em tempo linear.
 
 ---
 

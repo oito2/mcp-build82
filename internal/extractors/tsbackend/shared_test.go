@@ -182,7 +182,7 @@ func buildConcatChain(n int) (php string, want string) {
 
 // TestStringValue_LongConcatenationChain verifies that a long chain of `.`-joined fragments is
 // resolved correctly and quickly without growing the Go call stack. A PHP file consisting of a
-// single string built from a very large number of tiny fragments fits within the 8 MiB
+// single string built from a very large number of tiny fragments fits within the 2 MiB
 // maxParseFileSize cap, and resolving it by recursion proportional to the chain length would
 // exhaust the goroutine stack (a fatal error that cannot be recovered). The 9000-fragment chain
 // built here is under 40 KiB of source and just under maxConcatFragments, large enough to be

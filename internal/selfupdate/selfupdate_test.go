@@ -818,3 +818,34 @@ func TestAtomicReplace_RefusesWrongVersion(t *testing.T) {
 		t.Fatalf("matching version should be accepted: %v", err)
 	}
 }
+
+// TestRollback_FailedBackupRestoreSaysWhereTheBackupIs verifies that when moving the current
+// binary aside fails and putting the staged backup back fails too, the error names where the
+// backup was left and where it belongs, instead of losing track of it.
+func TestRollback_FailedBackupRestoreSaysWhereTheBackupIs(t *testing.T) {
+	dir := t.TempDir()
+	current := buildFakeBinary(t, dir, "build82", "v0.2.0\n")
+	buildFakeBinary(t, dir, filepath.Base(current)+".bak", "v0.1.0\n")
+
+	origRename := osRename
+	defer func() { osRename = origRename }()
+	calls := 0
+	osRename = func(oldpath, newpath string) error {
+		calls++
+		switch calls {
+		case 2: // current binary -> .bak
+			return errors.New("simulated aside failure")
+		case 3: // staged backup -> .bak (restore)
+			return errors.New("simulated restore failure")
+		}
+		return origRename(oldpath, newpath)
+	}
+
+	_, err := Rollback(current)
+	if err == nil || !strings.Contains(err.Error(), current+".rollback") || !strings.Contains(err.Error(), "rename it back to "+current+".bak") {
+		t.Fatalf("expected the error to say where the backup is, got: %v", err)
+	}
+	if got, err := SmokeTest(current + ".rollback"); err != nil || got != "v0.1.0" {
+		t.Errorf("the backup should be at the staged path the error names, got %q (err %v)", got, err)
+	}
+}

@@ -16,7 +16,9 @@
 package extractors
 
 import (
+	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -106,5 +108,44 @@ class cleanup {
 	calls := FindDeprecatedApiUsage(dir, deprecated)
 	if len(calls) != 1 || calls[0].File != "classes/task/cleanup.php" {
 		t.Fatalf("expected 1 call in classes/task/cleanup.php, got %+v", calls)
+	}
+}
+
+// TestFindDeprecatedApiUsage_SkipsWhatIsNotAGlobalCall verifies that declarations, instantiations,
+// variable, method, static and namespaced calls of a deprecated name are not reported, while bare
+// and fully qualified global calls are.
+func TestFindDeprecatedApiUsage_SkipsWhatIsNotAGlobalCall(t *testing.T) {
+	dir := t.TempDir()
+	src := `<?php
+namespace local_demo;
+class helper {
+    public function old_api() {}
+    public static function run() {
+        Function old_api() {}
+        $x = new old_api();
+        $y = new \local_demo\old_api();
+        $f = 'old_api';
+        $f();
+        $old_api();
+        $this->old_api();
+        $this?->old_api();
+        self::old_api();
+        \local_demo\old_api();
+        other\old_api();
+        old_api();
+        \old_api();
+    }
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "lib.php"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := FindDeprecatedApiUsage(dir, map[string]struct{}{"old_api": {}})
+	var lines []int
+	for _, c := range calls {
+		lines = append(lines, c.Line)
+	}
+	if want := []int{17, 18}; !slices.Equal(lines, want) {
+		t.Errorf("reported lines %v, want %v (only the bare and the fully qualified global call)", lines, want)
 	}
 }

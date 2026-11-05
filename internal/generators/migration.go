@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/genutil"
 )
 
@@ -136,6 +137,10 @@ func MigrateLegacyFiles(root string, filenames []string) []MigrationResult {
 			continue
 		}
 
+		if err := fsutil.RefuseSymlinkedDir(destDir); err != nil {
+			results = append(results, MigrationResult{File: f, Error: err.Error()})
+			continue
+		}
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			results = append(results, MigrationResult{File: f, Error: err.Error()})
 			continue

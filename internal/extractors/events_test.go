@@ -117,7 +117,7 @@ func TestParseEventsPhp_TreesitterBackendParity(t *testing.T) {
 // TestParseEventsPhp_TreesitterBackendParity_RealFiles verifies that both backends agree on every
 // db/events.php of a local Moodle installation. The test is skipped when none is found.
 func TestParseEventsPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
-	root := "/srv/workspace/www/html/mdle/dev-500"
+	root := realMoodle("mdle-500")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("real Moodle fixture tree not available: %v", err)
 	}

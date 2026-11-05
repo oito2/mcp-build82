@@ -14,7 +14,7 @@ Source of truth: `internal/config/config.go`, `cmd/build82/main.go`, `internal/e
 | Written by | The `init_moodle_context` tool (only when not yet initialized, or with `force: true`) and `update_indexes` (only when the detected Moodle version differs from the stored one). Never written by the CLI subcommands. |
 | Read by | Every tool, resource and prompt that needs the Moodle root; `build82 uninstall --purge`. |
 | Deleted by | `build82 uninstall --purge`. See [Uninstallation](../getting-started/uninstallation.md). |
-| Write method | Atomic replace, mode `0644`. No cross-process lock; with concurrent writers the last one wins. |
+| Write method | Atomic replace, flushed to disk, mode `0644` (on Windows a rename blocked by another process is retried for up to 1 second). No cross-process lock; with concurrent writers the last one wins. |
 
 ### Format
 
@@ -51,30 +51,15 @@ Parsing rules when reading:
 | `BUILD82_MOODLE_VERSION` | Server | string | empty | Moodle version. Read only when `BUILD82_MOODLE_PATH` is set. Whitespace trimmed. |
 | `BUILD82_MOODLE_FULLVERSION` | Server | string | empty | Numeric build number (the `$version` of `version.php`, e.g. `2024100700`). Read only when `BUILD82_MOODLE_PATH` is set. Whitespace trimmed. |
 | `BUILD82_EXTRACTOR_BACKEND` | Server | string | unset | Exactly `treesitter` selects the tree-sitter PHP extractor backend. Any other value, or unset, selects the regex backend. Case-sensitive; evaluated on every extraction call. See [Extractors](../architecture/extractors.md). |
-| `BUILD82_TOKEN` | `--http` | string | unset | Bearer token for `/mcp` and `/sse`. See the semantics below. |
-| `CLINE_DATA_DIR` | `install`, `uninstall` | string (absolute path) | unset | The Cline CLI's own data directory, which replaces `~/.cline/data`. When set to a non-empty value, the `cline` target detects the Cline CLI by this directory and writes/removes `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` instead of `~/.cline/data/settings/cline_mcp_settings.json`. Takes precedence over `CLINE_DIR`. See [Cline](../guides/clients/cline.md). |
+| `CLINE_DATA_DIR` | `install`, `uninstall` | string (absolute path) | unset | The Cline CLI's own data directory, which replaces `~/.cline/data`. When it holds an absolute path (a relative value is ignored), the `cline` target detects the Cline CLI by this directory and writes/removes `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` instead of `~/.cline/data/settings/cline_mcp_settings.json`. Takes precedence over `CLINE_DIR`. See [Cline](../guides/clients/cline.md). |
 | `CLINE_DIR` | `install`, `uninstall` | string (absolute path) | unset | The Cline CLI's own configuration directory, which replaces `~/.cline`. When it holds an absolute path (a relative value is ignored) and `CLINE_DATA_DIR` is unset, the `cline` target detects the Cline CLI by this directory and writes/removes `$CLINE_DIR/data/settings/cline_mcp_settings.json`. See [Cline](../guides/clients/cline.md). |
 | `LOCALAPPDATA` | `install`, `uninstall` (Windows) | string (absolute path) | `%USERPROFILE%\AppData\Local` | Base of the `Packages\Claude_<id>\LocalCache\Roaming\Claude` directories of Claude Desktop's MSIX package, also used by the `claude-desktop` target. See [Claude Desktop](../guides/clients/claude-desktop.md). |
-
-### `BUILD82_TOKEN` semantics
-
-| State | Effect |
-| :--- | :--- |
-| Unset, and no `--token` flag | Authentication disabled (warning on stderr). |
-| Set to a non-empty value, no `--token` flag | The value is the token. |
-| Set but empty (`export BUILD82_TOKEN=`), no `--token` flag | Startup error, exit code 1: `BUILD82_TOKEN is set but empty; unset it entirely to run --http without authentication`. |
-| Any value, with `--token <non-empty>` | The flag wins; the variable is ignored. |
-| Any value, with `--token ""` | Startup error, exit code 1 (the flag is checked first). |
-
-The value is not trimmed. Only read with `--http`; ignored for stdio. Full flow: [CLI Reference](./cli.md#token-resolution).
 
 ## Precedence
 
 | Setting | Order (highest first) |
 | :--- | :--- |
 | Moodle root, version, full version | 1. `BUILD82_MOODLE_PATH` (with its `BUILD82_MOODLE_VERSION` and `BUILD82_MOODLE_FULLVERSION`) 2. `~/.build82`. |
-| HTTP Bearer token | 1. `--token` 2. `BUILD82_TOKEN` 3. none (disabled). |
-| Port, host, allowed hosts | Flags only (`--port`, `--host`, `--allowed-host`); no environment variable or file. |
 | Extractor backend | `BUILD82_EXTRACTOR_BACKEND` only. |
 
 Behaviour to be aware of:

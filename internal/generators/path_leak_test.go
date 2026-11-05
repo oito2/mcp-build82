@@ -36,7 +36,7 @@ func TestGeneratePluginContext_PathIsRelativeNotAbsolute(t *testing.T) {
 	info := testPluginInfo(pluginPath)
 	info.MoodlePath = moodlePath
 
-	result := GeneratePluginContext(info, nil)
+	result := GeneratePluginContext(info, preloadPlugin(info))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}

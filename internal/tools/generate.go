@@ -19,13 +19,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/generators"
-	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
 // GenerateContextInput is the input of the generate_plugin_context tool.
@@ -38,11 +36,14 @@ type GenerateContextInput struct {
 func RegisterGenerateContextTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "generate_plugin_context",
+		InputSchema: inputSchemaFor[GenerateContextInput](),
 		Annotations: toolAnnotations("Generate Plugin Context", false, false, true, false),
 		Description: "Generates the 12 PLUGIN_*.md context files for a single Moodle plugin: metadata, " +
 			"structure, DB tables, events, dependencies, function/callback/endpoint indexes, runtime flow, " +
 			"architecture, settings, and the combined AI context file.",
-	}, withRecover(handleGenerateContext))
+	}, withRecover(withResourceNotifications(server, handleGenerateContext, func(_ GenerateContextInput, out PluginContextOutput) []string {
+		return pluginResourceURIs(out.Component)
+	})))
 }
 
 // handleGenerateContext generates the per-plugin context files for the plugin named by
@@ -51,12 +52,9 @@ func RegisterGenerateContextTool(server *mcp.Server) {
 // that result has no structured output; failures of individual files are reported inside the
 // successful report. The structured output is a PluginContextOutput in either format.
 func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in GenerateContextInput) (*mcp.CallToolResult, PluginContextOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, PluginContextOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, PluginContextOutput{}, resultError(toolutil.NotInitialized())
+		return nil, PluginContextOutput{}, err
 	}
 
 	rp, errResult := resolveAndValidatePlugin(in.PluginPath, cfg.MoodlePath)
@@ -72,20 +70,21 @@ func handleGenerateContext(ctx context.Context, req *mcp.CallToolRequest, in Gen
 		fmt.Fprintln(os.Stderr, "[build82] warning: failed to update MOODLE_AI_INDEX.md:", r.Error)
 	}
 
-	return structuredResult(in.Format, false, renderPluginContextReport(rp, cfg.MoodlePath, result), buildPluginContextOutput(rp, cfg.MoodlePath, result))
+	out := buildPluginContextOutput(rp, cfg.MoodlePath, result)
+	return structuredResult(in.Format, false, renderPluginContextReport(out), out)
 }
 
 // PluginContextOutput is the structured output of generate_plugin_context: the plugin's component,
 // type, version and path relative to the Moodle root, and the context files generated, served from
 // the cache and failed (relative to the plugin directory).
 type PluginContextOutput struct {
-	Component string       `json:"component"`
-	Type      string       `json:"type"`
-	Version   string       `json:"version"`
-	Path      string       `json:"path"`
-	Generated []string     `json:"generated,omitempty"`
-	Skipped   []string     `json:"skipped,omitempty"`
-	Failed    []FailedFile `json:"failed,omitempty"`
+	Component string       `json:"component" jsonschema:"Frankenstyle component of the plugin, such as local_myplugin"`
+	Type      string       `json:"type" jsonschema:"Moodle plugin type, such as local or mod"`
+	Version   string       `json:"version" jsonschema:"Plugin version from its version.php"`
+	Path      string       `json:"path" jsonschema:"Plugin directory relative to the Moodle root"`
+	Generated []string     `json:"generated,omitempty" jsonschema:"Context files written by this call, relative to the plugin directory"`
+	Skipped   []string     `json:"skipped,omitempty" jsonschema:"Context files served from the cache because their sources did not change"`
+	Failed    []FailedFile `json:"failed,omitempty" jsonschema:"Context files that could not be generated"`
 }
 
 // buildPluginContextOutput builds the structured output for plugin `rp` from the generator `result`.
@@ -99,39 +98,13 @@ func buildPluginContextOutput(rp resolvedPlugin, moodlePath string, result gener
 	}
 }
 
-// renderPluginContextReport renders the Markdown report for plugin `rp` from the generator
-// `result`, listing failed, generated and cached files relative to the plugin directory;
-// `moodlePath` is used to display the plugin path.
-func renderPluginContextReport(rp resolvedPlugin, moodlePath string, result generators.PluginGeneratorResult) string {
+// renderPluginContextReport renders the Markdown report of the structured output `out`: the plugin,
+// then the failed, generated and cached files relative to the plugin directory.
+func renderPluginContextReport(out PluginContextOutput) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "✅ Generated context for %s (%s), version %s.\n\nPath: %s\n\n",
-		rp.Info.Component, rp.Info.Type, rp.Info.Version, relativeToMoodle(moodlePath, rp.Path))
-
-	generated, skipped, failed := classifyResults(result.Files, rp.Path)
-	fmt.Fprintf(&b, "## Results\n\n%d generated, %d cached, %d failed\n\n", len(generated), len(skipped), len(failed))
-
-	if len(failed) > 0 {
-		b.WriteString("### Failed\n\n")
-		for _, f := range failed {
-			fmt.Fprintf(&b, "✖ %s: %s\n", f.File, f.Error)
-		}
-		b.WriteString("\n")
-	}
-
-	sort.Strings(generated)
-	b.WriteString("### Generated\n\n")
-	for _, n := range generated {
-		fmt.Fprintf(&b, "✔ %s\n", n)
-	}
-
-	if len(skipped) > 0 {
-		sort.Strings(skipped)
-		b.WriteString("\n### Cached\n\n")
-		for _, n := range skipped {
-			fmt.Fprintf(&b, "✔ %s\n", n)
-		}
-	}
-
+		out.Component, out.Type, out.Version, out.Path)
+	writeGenerationResults(&b, out.Generated, out.Skipped, out.Failed)
 	b.WriteString("\nPrimary context file: `.build82/PLUGIN_AI_CONTEXT.md`\n")
 	return b.String()
 }

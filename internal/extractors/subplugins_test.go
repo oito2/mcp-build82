@@ -44,19 +44,23 @@ func TestExtractSubplugins_ModernJson(t *testing.T) {
 	}
 }
 
-// TestExtractSubplugins_MergesSubplugintypesKey verifies that the "subplugintypes" key is merged
-// with the "plugintypes" key.
-func TestExtractSubplugins_MergesSubplugintypesKey(t *testing.T) {
-	dir := t.TempDir()
+// TestExtractSubplugins_PlugintypesIsAuthoritative verifies that the Moodle-root-relative
+// "plugintypes" paths win over the plugin-relative "subplugintypes" ones, and that a type declared
+// only under "subplugintypes" is made relative to the Moodle root through the plugin's directory.
+func TestExtractSubplugins_PlugintypesIsAuthoritative(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mod", "workshop")
 	mustMkdirAll(t, filepath.Join(dir, "db"))
 	mustWriteFile(t, filepath.Join(dir, "db", "subplugins.json"), `{
-  "plugintypes": {"workshopform": "mod/workshop/form"},
-  "subplugintypes": {"workshopform": "mod/workshop/form", "workshopeval": "mod/workshop/eval"}
+  "subplugintypes": {"workshopform": "form", "workshopeval": "eval"},
+  "plugintypes": {"workshopform": "mod/workshop/form"}
 }`)
 
-	got := ExtractSubplugins(dir)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 merged subplugin types, got %d: %+v", len(got), got)
+	got := map[string]string{}
+	for _, s := range ExtractSubplugins(dir) {
+		got[s.Type] = s.Path
+	}
+	if got["workshopform"] != "mod/workshop/form" || got["workshopeval"] != "mod/workshop/eval" || len(got) != 2 {
+		t.Errorf("subplugins = %v", got)
 	}
 }
 

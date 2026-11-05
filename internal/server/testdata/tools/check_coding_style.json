@@ -1,0 +1,183 @@
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false,
+    "readOnlyHint": true,
+    "title": "Check Coding Style"
+  },
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "files": {
+        "description": "Files or directories to check, relative to the plugin directory (default: the whole plugin)",
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "format": {
+        "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
+        "type": "string"
+      },
+      "limit": {
+        "description": "Maximum number of messages returned (default: 200)",
+        "type": "integer"
+      },
+      "plugin": {
+        "description": "Component (e.g. 'local_myplugin'), path relative to the Moodle root (e.g. 'local/myplugin'), or absolute path",
+        "type": "string"
+      },
+      "severity": {
+        "description": "'error' (default) reports errors only; 'warning' also reports warnings",
+        "type": "string"
+      }
+    },
+    "required": [
+      "plugin"
+    ],
+    "type": "object"
+  },
+  "name": "check_coding_style",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "component": {
+        "description": "Frankenstyle component of the plugin",
+        "type": "string"
+      },
+      "errors": {
+        "description": "Total number of errors",
+        "type": "integer"
+      },
+      "files": {
+        "description": "Files with violations, sorted by path",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "errors": {
+              "description": "Number of errors in the file",
+              "type": "integer"
+            },
+            "file": {
+              "description": "File path relative to the plugin directory",
+              "type": "string"
+            },
+            "messages": {
+              "description": "Violations of the file returned within the limit, by line and column",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "description": "Column of the violation",
+                    "type": "integer"
+                  },
+                  "fixable": {
+                    "description": "Whether phpcbf can fix it automatically",
+                    "type": "boolean"
+                  },
+                  "line": {
+                    "description": "Line of the violation",
+                    "type": "integer"
+                  },
+                  "message": {
+                    "description": "Description of the violation",
+                    "type": "string"
+                  },
+                  "severity": {
+                    "description": "error or warning",
+                    "type": "string"
+                  },
+                  "source": {
+                    "description": "phpcs sniff that reported it, such as moodle.Commenting.MissingDocblock.Function",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "line",
+                  "column",
+                  "severity",
+                  "source",
+                  "message"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "warnings": {
+              "description": "Number of warnings in the file (0 when severity is error)",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "file",
+            "errors",
+            "warnings",
+            "messages"
+          ],
+          "type": "object"
+        },
+        "type": [
+          "null",
+          "array"
+        ]
+      },
+      "files_checked": {
+        "description": "Number of PHP files checked",
+        "type": "integer"
+      },
+      "fixable": {
+        "description": "Number of violations phpcbf can fix automatically",
+        "type": "integer"
+      },
+      "path": {
+        "description": "Plugin directory relative to the Moodle root",
+        "type": "string"
+      },
+      "returned": {
+        "description": "Number of messages returned",
+        "type": "integer"
+      },
+      "severity": {
+        "description": "Lowest severity reported: error or warning",
+        "type": "string"
+      },
+      "standard": {
+        "description": "Coding standard used (moodle)",
+        "type": "string"
+      },
+      "truncated": {
+        "description": "Whether messages were left out because of the limit",
+        "type": "boolean"
+      },
+      "warnings": {
+        "description": "Total number of warnings (0 when severity is error)",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "component",
+      "path",
+      "standard",
+      "severity",
+      "errors",
+      "warnings",
+      "fixable",
+      "files_checked",
+      "files",
+      "returned"
+    ],
+    "type": "object"
+  }
+}

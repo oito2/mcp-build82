@@ -109,7 +109,7 @@ func TestParseServicesPhp_MissingFile(t *testing.T) {
 func TestParseServicesPhp_RealFileRegression(t *testing.T) {
 	var found int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

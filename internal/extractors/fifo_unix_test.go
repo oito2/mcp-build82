@@ -25,8 +25,9 @@ import (
 	"time"
 )
 
-// TestDetectPlugin_FIFOVersionFileDoesNotHang verifies that a plugin whose version.php is a FIFO
-// fails detection at once instead of blocking the server on the read.
+// TestDetectPlugin_FIFOVersionFileDoesNotHang verifies that a plugin whose version.php is a FIFO is
+// detected at once, without its version (the FIFO is never read), instead of blocking the server
+// on the read.
 func TestDetectPlugin_FIFOVersionFileDoesNotHang(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "local", "trap")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -35,13 +36,20 @@ func TestDetectPlugin_FIFOVersionFileDoesNotHang(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(dir, "version.php"), 0o644); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
-	done := make(chan error, 1)
+	type detection struct {
+		info PluginInfo
+		err  error
+	}
+	done := make(chan detection, 1)
 	go func() {
-		_, err := DetectPlugin(dir)
-		done <- err
+		info, err := DetectPlugin(dir)
+		done <- detection{info, err}
 	}()
 	select {
-	case <-done:
+	case d := <-done:
+		if d.err != nil || d.info.Version != "" || d.info.Component != "local_trap" {
+			t.Errorf("DetectPlugin = %+v, %v; want local_trap without a version", d.info, d.err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("DetectPlugin blocked on a FIFO version.php")
 	}

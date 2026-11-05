@@ -106,6 +106,7 @@ type resolvedPluginContext struct {
 	Component       string
 	Type            string
 	Version         string
+	Requires        string
 	MoodleVersion   string
 	MoodlePath      string
 	ConfigAvailable bool
@@ -113,9 +114,9 @@ type resolvedPluginContext struct {
 
 // resolvePluginForPrompt resolves the client-supplied `plugin` argument (a component, a path
 // relative to the Moodle root, or an absolute path) into a resolvedPluginContext shared by
-// review_plugin and debug_plugin. When no configuration is available the argument is used as a
-// literal path; otherwise it is resolved through moodletype.ResolvePluginPath against the
-// configured Moodle root. Plugin metadata is then detected from disk, and a detection failure
+// review_plugin, debug_plugin and upgrade_plugin. When no configuration is available the argument
+// is used as a literal path; otherwise it is resolved through moodletype.ResolvePluginPath against
+// the configured Moodle root. Plugin metadata is then detected from disk, and a detection failure
 // leaves the metadata fields empty. It never returns an error or panics on its own.
 //
 // A config.Load error is treated the same as a missing configuration (cfg == nil) instead of
@@ -139,14 +140,16 @@ func resolvePluginForPrompt(plugin string) resolvedPluginContext {
 		// rc.Path stays empty (the raw argument is not a safe fallback, since it is the escaping
 		// value itself), DetectPlugin is skipped, and rc.Component falls back to the raw string
 		// for display only.
-		if moodletype.IsWithinMoodle(candidate, cfg.MoodlePath) {
+		// The Moodle root itself is not a plugin: its version.php is core's and reading it as a
+		// plugin would scan the whole installation.
+		if moodletype.IsWithinMoodle(candidate, cfg.MoodlePath) && !moodletype.IsRoot(candidate, cfg.MoodlePath) {
 			rc.Path = candidate
 		}
 	}
 
 	if rc.Path != "" {
 		if info, err := extractors.DetectPlugin(rc.Path); err == nil {
-			rc.Component, rc.Type, rc.Version = info.Component, info.Type, info.Version
+			rc.Component, rc.Type, rc.Version, rc.Requires = info.Component, info.Type, info.Version, info.Requires
 		}
 	}
 	if rc.Component == "" {

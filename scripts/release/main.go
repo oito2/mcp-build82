@@ -213,14 +213,22 @@ func releaseBuildEnv(goos, goarch string) []string {
 	}
 }
 
-// buildOne cross-compiles ./cmd/build82 for `goos`/`goarch` into the file `out` with the pinned
-// environment of releaseBuildEnv and -trimpath (so the binary embeds no local path), stamping
-// `version` into the binary, and streams the build output to the console. It returns the error of
-// the failed `go build`, if any.
-func buildOne(repoRoot, goos, goarch, version, out string) error {
-	cmd := exec.Command("go", "build", "-trimpath",
+// releaseBuildArgs returns the `go build` arguments of a release build of ./cmd/build82 into `out`:
+// -trimpath (no local path in the binary), -buildvcs=false (no git revision or dirty-tree flag, so
+// a clean checkout, a modified one and a source tarball give the same binary), and the
+// releaseLDFlags of `version`.
+func releaseBuildArgs(version, out string) []string {
+	return []string{"build", "-trimpath", "-buildvcs=false",
 		"-ldflags", releaseLDFlags(version),
-		"-o", out, "./cmd/build82")
+		"-o", out, "./cmd/build82"}
+}
+
+// buildOne cross-compiles ./cmd/build82 for `goos`/`goarch` into the file `out` with the arguments
+// of releaseBuildArgs and the pinned environment of releaseBuildEnv, stamping `version` into the
+// binary, and streams the build output to the console. It returns the error of the failed
+// `go build`, if any.
+func buildOne(repoRoot, goos, goarch, version, out string) error {
+	cmd := exec.Command("go", releaseBuildArgs(version, out)...)
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(), releaseBuildEnv(goos, goarch)...)
 	cmd.Stdout = os.Stdout

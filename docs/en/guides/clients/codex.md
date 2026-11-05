@@ -194,7 +194,7 @@ This is a characteristic of the shared configuration. If both stop working after
 
 ### SSE is not supported
 
-`build82` runs over stdio by default, which is what all the options above register. The server's `--http` mode (Streamable HTTP + SSE) is a separate, opt-in mode and is not configured by any of the steps on this page.
+`build82` runs over stdio, which is what all the options above register; it has no HTTP or SSE mode.
 
 ### Stale context after changes
 

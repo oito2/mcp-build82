@@ -248,10 +248,44 @@ func TestCreatePluginSkeleton_ModTypeWritesMandatoryFiles(t *testing.T) {
 		}
 	}
 
+	// Moodle calls <modulename>_add_instance(), so the callbacks carry the module name, not the
+	// component, and write to the instance table db/install.xml defines.
 	lib := mustReadFile(t, filepath.Join(pluginPath, "lib.php"))
-	for _, fn := range []string{"mod_widget_add_instance", "mod_widget_update_instance", "mod_widget_delete_instance"} {
+	for _, fn := range []string{"function widget_add_instance(", "function widget_update_instance(", "function widget_delete_instance(", "insert_record('widget'"} {
 		if !strings.Contains(lib, fn) {
-			t.Errorf("lib.php missing mandatory function %s", fn)
+			t.Errorf("lib.php missing %s", fn)
+		}
+	}
+	if strings.Contains(lib, "mod_widget_") {
+		t.Errorf("lib.php uses the component as callback prefix:\n%s", lib)
+	}
+	installXML := mustReadFile(t, filepath.Join(pluginPath, "db", "install.xml"))
+	for _, want := range []string{`<TABLE NAME="widget"`, `<FIELD NAME="course"`, `<FIELD NAME="intro"`, `<FIELD NAME="timemodified"`} {
+		if !strings.Contains(installXML, want) {
+			t.Errorf("db/install.xml missing %s:\n%s", want, installXML)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(pluginPath, "lang", "en", "widget.php")); err != nil {
+		t.Errorf("a module's language file is lang/en/widget.php: %v", err)
+	}
+}
+
+// TestCreatePluginSkeleton_NameRulesFollowMoodle verifies the plugin-name rules Moodle enforces:
+// no underscore in a module name; for other types no leading digit, no trailing or doubled
+// underscore, and at least two characters.
+func TestCreatePluginSkeleton_NameRulesFollowMoodle(t *testing.T) {
+	cases := []struct {
+		typ, name string
+		ok        bool
+	}{
+		{"mod", "widget", true}, {"mod", "widget2", true}, {"mod", "my_activity", false},
+		{"local", "my_tool", true}, {"local", "ab", true}, {"local", "a", false},
+		{"local", "my__tool", false}, {"local", "mytool_", false}, {"local", "2tool", false},
+		{"local", "../../etc", false},
+	}
+	for _, c := range cases {
+		if got := validSkeletonName(c.typ, c.name); got != c.ok {
+			t.Errorf("validSkeletonName(%q, %q) = %v, want %v", c.typ, c.name, got, c.ok)
 		}
 	}
 }

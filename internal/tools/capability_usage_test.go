@@ -19,10 +19,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/oito2/mcp-build82/internal/extractors"
 )
 
 // TestCheckCapabilityUsage_FlagsUndeclaredOwnCapability confirms a typo'd own-capability check is
-// caught: the plugin checks 'local_test:vew' (typo) but only declares 'local_test:view'.
+// caught: the plugin checks 'local/test:vew' (typo) but only declares 'local/test:view' — the
+// "type/name:" form Moodle requires for every plugin type, not only mod and block.
 func TestCheckCapabilityUsage_FlagsUndeclaredOwnCapability(t *testing.T) {
 	pluginDir := filepath.Join(t.TempDir(), "local_test")
 	mustMkdirAll(t, filepath.Join(pluginDir, "db"))
@@ -32,7 +35,7 @@ $plugin->version = 2024010100;
 `)
 	mustWriteFile(t, filepath.Join(pluginDir, "db", "access.php"), `<?php
 $capabilities = [
-    'local_test:view' => [
+    'local/test:view' => [
         'captype' => 'read',
         'contextlevel' => CONTEXT_SYSTEM,
     ],
@@ -40,18 +43,18 @@ $capabilities = [
 `)
 	mustWriteFile(t, filepath.Join(pluginDir, "lib.php"), `<?php
 function local_test_check($context) {
-    return has_capability('local_test:vew', $context);
+    return has_capability('local/test:vew', $context);
 }
 `)
 
-	results := checkCapabilityUsage([]string{pluginDir})
+	results := checkCapabilityUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 {
 		t.Fatalf("expected exactly 1 result, got %d: %+v", len(results), results)
 	}
 	if results[0].Status != statusWarn {
 		t.Errorf("expected statusWarn, got %v", results[0].Status)
 	}
-	if !strings.Contains(results[0].Detail, "local_test:vew") {
+	if !strings.Contains(results[0].Detail, "local/test:vew") {
 		t.Errorf("detail missing the typo'd capability name: %q", results[0].Detail)
 	}
 }
@@ -67,7 +70,7 @@ $plugin->version = 2024010100;
 `)
 	mustWriteFile(t, filepath.Join(pluginDir, "db", "access.php"), `<?php
 $capabilities = [
-    'local_test:view' => [
+    'local/test:view' => [
         'captype' => 'read',
         'contextlevel' => CONTEXT_SYSTEM,
     ],
@@ -75,11 +78,11 @@ $capabilities = [
 `)
 	mustWriteFile(t, filepath.Join(pluginDir, "lib.php"), `<?php
 function local_test_check($context) {
-    return has_capability('local_test:view', $context);
+    return has_capability('local/test:view', $context);
 }
 `)
 
-	results := checkCapabilityUsage([]string{pluginDir})
+	results := checkCapabilityUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusOK {
 		t.Fatalf("expected a single OK result, got %+v", results)
 	}
@@ -101,7 +104,7 @@ function local_test_check($context) {
 }
 `)
 
-	results := checkCapabilityUsage([]string{pluginDir})
+	results := checkCapabilityUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusOK {
 		t.Fatalf("expected a single OK result (no own-namespace checks made), got %+v", results)
 	}
@@ -132,12 +135,26 @@ function mod_widget_check($context) {
 }
 `)
 
-	results := checkCapabilityUsage([]string{pluginDir})
+	results := checkCapabilityUsage(loadDevPlugins("", []string{pluginDir}))
 	if len(results) != 1 || results[0].Status != statusWarn {
 		t.Fatalf("expected a single warning about mod/widget:vew, got %+v", results)
 	}
 	if !strings.Contains(results[0].Detail, "mod/widget:vew") {
 		t.Errorf("detail missing the typo'd capability name: %q", results[0].Detail)
+	}
+}
+
+// TestCheckCapabilityUsage_FrankenstyleFormIsNotOwn confirms that the "component:" form, which
+// Moodle rejects as a capability name, is not taken for the plugin's own namespace: the doctor
+// compares against "type/name:" for every plugin type.
+func TestCheckCapabilityUsage_FrankenstyleFormIsNotOwn(t *testing.T) {
+	for _, component := range []string{"tool_bar", "report_baz", "assignsubmission_file"} {
+		if got, want := extractors.CapabilityPrefix(component), strings.Replace(component, "_", "/", 1); got != want {
+			t.Errorf("CapabilityPrefix(%q) = %q, want %q", component, got, want)
+		}
+	}
+	if got := extractors.CapabilityPrefix("core"); got != "" {
+		t.Errorf("CapabilityPrefix(core) = %q, want empty", got)
 	}
 }
 

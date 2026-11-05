@@ -108,7 +108,7 @@ $observers = [
 // TestParseEventsPhp_RealFileRegression runs the tree-sitter backend against every real
 // db/events.php in a real Moodle installation.
 func TestParseEventsPhp_RealFileRegression(t *testing.T) {
-	root := "/srv/workspace/www/html/mdle/dev-500"
+	root := realMoodle("mdle-500")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("real Moodle fixture tree not available: %v", err)
 	}

@@ -16,8 +16,10 @@
 package server
 
 import (
+	"context"
 	_ "embed"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -43,14 +45,19 @@ func serverIcons() []mcp.Icon {
 }
 
 // NewServer builds a new build82 MCP server with every tool, global and plugin resource, and
-// prompt registered. Each call returns an independent server instance, so HTTP sessions can each
-// use their own.
+// prompt registered. It supports resource subscriptions: a client may subscribe to any resource
+// the server serves (see resources.KnownURI) and is then sent notifications/resources/updated
+// when a tool or the watcher regenerates its file. Each call returns an independent server
+// instance.
 func NewServer() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "build82",
 		Version: version.Current,
 		Icons:   serverIcons(),
-	}, nil)
+	}, &mcp.ServerOptions{
+		SubscribeHandler:   subscribe,
+		UnsubscribeHandler: unsubscribe,
+	})
 
 	tools.RegisterInitTool(s)
 	tools.RegisterGenerateContextTool(s)
@@ -61,6 +68,8 @@ func NewServer() *mcp.Server {
 	tools.RegisterExplainTool(s)
 	tools.RegisterReleaseTool(s)
 	tools.RegisterCreatePluginSkeletonTool(s)
+	tools.RegisterBumpVersionTool(s)
+	tools.RegisterCodingStyleTool(s)
 
 	resources.RegisterGlobalResources(s)
 	resources.RegisterPluginResources(s)
@@ -68,6 +77,22 @@ func NewServer() *mcp.Server {
 	prompts.RegisterScaffoldPrompt(s)
 	prompts.RegisterReviewPrompt(s)
 	prompts.RegisterDebugPrompt(s)
+	prompts.RegisterUpgradePrompt(s)
 
 	return s
+}
+
+// subscribe accepts a resource subscription when the URI names a resource this server serves; the
+// SDK then records it for the session. Any other URI is refused with an error.
+func subscribe(_ context.Context, req *mcp.SubscribeRequest) error {
+	if !resources.KnownURI(req.Params.URI) {
+		return fmt.Errorf("unknown resource %q: build82 serves moodle://... resources only", req.Params.URI)
+	}
+	return nil
+}
+
+// unsubscribe accepts every unsubscription; the SDK removes the session from the URI's
+// subscribers.
+func unsubscribe(context.Context, *mcp.UnsubscribeRequest) error {
+	return nil
 }

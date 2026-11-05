@@ -24,7 +24,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/extractors"
-	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
 // ExplainSection selects which part of a plugin explain_plugin returns.
@@ -51,6 +50,7 @@ type ExplainPluginInput struct {
 func RegisterExplainTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "explain_plugin",
+		InputSchema: inputSchemaFor[ExplainPluginInput](),
 		Annotations: toolAnnotations("Explain Plugin", true, false, true, false),
 		Description: "Returns a compact, section-selectable explanation of a plugin — metadata, database, " +
 			"events, classes, services/capabilities, or runtime flow — optimized to be cheaper to read than " +
@@ -85,12 +85,9 @@ func handleExplainPlugin(ctx context.Context, req *mcp.CallToolRequest, in Expla
 			in.Section)), nil, nil
 	}
 
-	cfg, err := requireConfig()
-	if err != nil {
-		return textResult(true, "❌ Failed to resolve build82 configuration: "+err.Error()), nil, nil
-	}
-	if cfg == nil {
-		return toolutil.NotInitialized(), nil, nil
+	cfg, errResult := loadConfigResult()
+	if errResult != nil {
+		return errResult, nil, nil
 	}
 
 	rp, errResult := resolveAndValidatePlugin(in.Plugin, cfg.MoodlePath)

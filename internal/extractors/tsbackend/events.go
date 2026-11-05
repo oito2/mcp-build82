@@ -66,7 +66,7 @@ func parseObserver(inner *gotreesitter.Node, src []byte) phptypes.EventObserver 
 		case "eventname":
 			obs.EventName, _ = StringValue(value, src)
 		case "callback":
-			obs.Callback, _ = StringValue(value, src)
+			obs.Callback, _ = CallbackValue(value, src)
 		case "priority":
 			obs.Priority, _ = IntValue(value, src)
 		case "internal":

@@ -91,9 +91,13 @@ func stubCommands(t *testing.T, respond func(c recordedCall) error) *[]recordedC
 // mustTarget returns the target with the given ID, failing the test when it is missing.
 func mustTarget(t *testing.T, id string) target {
 	t.Helper()
-	tg, ok, err := targetByID(id)
-	if err != nil || !ok {
-		t.Fatalf("target %q: ok=%v err=%v", id, ok, err)
+	ts, err := targets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, err := lookupTarget(ts, id)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return tg
 }

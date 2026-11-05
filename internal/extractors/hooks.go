@@ -16,14 +16,13 @@
 package extractors
 
 import (
-	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/oito2/mcp-build82/internal/extractors/tsbackend"
 	"github.com/oito2/mcp-build82/internal/legacyhooks"
+	"github.com/oito2/mcp-build82/internal/moodletype"
 	"github.com/oito2/mcp-build82/internal/phparray"
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
@@ -37,9 +36,6 @@ type HooksExtraction = phptypes.HooksExtraction
 
 // Patterns used to read hook definition classes and db/hooks.php.
 var (
-	hookFqnNamespacePattern = regexp.MustCompile(`(?m)^namespace\s+([a-zA-Z0-9_\\]+)\s*;`)
-	hookFqnClassPattern     = regexp.MustCompile(`(?m)^(?:final\s+)?class\s+([a-zA-Z0-9_]+)`)
-
 	// hookDescriptionMethodPattern and hookTagsMethodPattern match up to and including the method's
 	// opening brace. The body is then isolated with findMethodBody before hookReturnStringPattern
 	// or hookReturnArrayPattern run, so a `return` of a different method is never matched.
@@ -88,14 +84,15 @@ func extractReturnedString(content string, methodPattern, returnPattern *regexp.
 }
 
 // findClassDocSummary returns the first descriptive line of the PHPDoc block immediately preceding
-// the class declaration in `content`, tolerating up to 3 blank lines in between. A file-header
+// the class declaration in `content` (see precedingDocBlock: blank lines and PHP 8 attributes in
+// between are allowed). A file-header
 // docblock earlier in the file is ignored. It returns "" when there is no class or no such block.
 func findClassDocSummary(content string) string {
 	lines := strings.Split(content, "\n")
 
 	classLineIdx := -1
 	for i, line := range lines {
-		if hookFqnClassPattern.MatchString(line) {
+		if classDeclPattern.MatchString(line) {
 			classLineIdx = i
 			break
 		}
@@ -104,43 +101,10 @@ func findClassDocSummary(content string) string {
 		return ""
 	}
 
-	blankCount := 0
-	closeIndex := -1
-	for i := classLineIdx - 1; i >= 0 && i >= classLineIdx-5; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "" {
-			blankCount++
-			if blankCount > 3 {
-				break
-			}
-			continue
-		}
-		if trimmed == "*/" {
-			closeIndex = i
-			break
-		}
-		break
-	}
-	if closeIndex == -1 {
+	block, ok := precedingDocBlock(lines, classLineIdx)
+	if !ok {
 		return ""
 	}
-
-	openIndex := -1
-	for i := closeIndex - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "/**") || trimmed == "/*" {
-			openIndex = i
-			break
-		}
-		if !strings.HasPrefix(trimmed, "*") && trimmed != "" {
-			break
-		}
-	}
-	if openIndex == -1 {
-		return ""
-	}
-
-	block := strings.Join(lines[openIndex:closeIndex+1], "\n")
 	if m := docSummaryPattern.FindStringSubmatch(block); m != nil {
 		return strings.TrimSpace(m[1])
 	}
@@ -150,8 +114,8 @@ func findClassDocSummary(content string) string {
 // extractFQN returns the fully-qualified class name (with a leading backslash) built from the
 // namespace and class declarations in `content`, or "" when either is missing.
 func extractFQN(content string) string {
-	ns := hookFqnNamespacePattern.FindStringSubmatch(content)
-	cls := hookFqnClassPattern.FindStringSubmatch(content)
+	ns := namespacePattern.FindStringSubmatch(content)
+	cls := classDeclPattern.FindStringSubmatch(content)
 	if ns == nil || cls == nil {
 		return ""
 	}
@@ -173,11 +137,11 @@ func parseHookCallbacks(pluginPath string) []HookCallback {
 
 	var callbacks []HookCallback
 	for _, block := range phparray.SplitIntoBlocks(body) {
-		hookname := phparray.ExtractString(block, "hookname")
+		hookname := phparray.ExtractStringOrClass(block, "hookname")
 		if hookname == "" {
-			hookname = phparray.ExtractString(block, "hook")
+			hookname = phparray.ExtractStringOrClass(block, "hook")
 		}
-		callback := phparray.ExtractString(block, "callback")
+		callback := phparray.ExtractStringOrClass(block, "callback")
 		if hookname == "" && callback == "" {
 			continue
 		}
@@ -192,8 +156,9 @@ func parseHookCallbacks(pluginPath string) []HookCallback {
 }
 
 // parseHookDefinitionFile builds a HookDefinition from the PHP source `content` of a hook class.
-// The description comes from get_hook_description() or else the class docblock summary, and the
-// replaced hook from a 'replaces' entry or a DEPRECATED_CALLBACK constant. The boolean is false
+// Attributes come first (phparray.HookAttributes: label, tags, replaces_callbacks); otherwise the
+// description comes from get_hook_description() or else the class docblock summary, the tags from
+// get_hook_tags(), and the replaced hook from a 'replaces' entry or a DEPRECATED_CALLBACK constant. The boolean is false
 // when no fully-qualified class name can be determined.
 func parseHookDefinitionFile(content string) (HookDefinition, bool) {
 	fqn := extractFQN(content)
@@ -201,23 +166,27 @@ func parseHookDefinitionFile(content string) (HookDefinition, bool) {
 		return HookDefinition{}, false
 	}
 
-	description := ""
-	if s, ok := extractReturnedString(content, hookDescriptionMethodPattern, hookReturnStringPattern); ok {
-		description = s
-	} else {
-		description = findClassDocSummary(content)
+	description, tags, replaces := phparray.HookAttributes(content)
+	if description == "" {
+		if s, ok := extractReturnedString(content, hookDescriptionMethodPattern, hookReturnStringPattern); ok {
+			description = s
+		} else {
+			description = findClassDocSummary(content)
+		}
 	}
 
-	var tags []string
-	if s, ok := extractReturnedString(content, hookTagsMethodPattern, hookReturnArrayPattern); ok {
-		tags = splitAndTrimCommaList(s)
+	if tags == nil {
+		if s, ok := extractReturnedString(content, hookTagsMethodPattern, hookReturnArrayPattern); ok {
+			tags = splitAndTrimCommaList(s)
+		}
 	}
 
-	replaces := ""
-	if m := hookReplacesArrayPattern.FindStringSubmatch(content); m != nil {
-		replaces = m[1]
-	} else if m := hookDeprecatedConstPattern.FindStringSubmatch(content); m != nil {
-		replaces = m[1]
+	if replaces == "" {
+		if m := hookReplacesArrayPattern.FindStringSubmatch(content); m != nil {
+			replaces = m[1]
+		} else if m := hookDeprecatedConstPattern.FindStringSubmatch(content); m != nil {
+			replaces = m[1]
+		}
 	}
 
 	return HookDefinition{ClassName: fqn, Description: description, Tags: tags, Replaces: replaces}, true
@@ -240,47 +209,50 @@ func parseHookDefinitions(pluginPath string) []HookDefinition {
 	return defs
 }
 
-// legacyFunctionDeclPattern matches top-level function declarations, so detectLegacyCallbacks can
-// find all declared function names in one pass instead of running one regex per legacy callback.
-var legacyFunctionDeclPattern = regexp.MustCompile(`(?m)^function\s+(\w+)\s*\(`)
+// legacyFunctionDeclPattern matches function declarations at the start of a line, indented or not
+// (an indented one is typically inside an `if (!function_exists(...))` guard), so
+// detectLegacyCallbacks can find all declared function names in one pass instead of running one
+// regex per legacy callback.
+var legacyFunctionDeclPattern = regexp.MustCompile(`(?m)^[ \t]*function\s+(\w+)\s*\(`)
 
 // detectLegacyCallbacks returns a warning, sorted by function name, for every legacy callback of
-// `component` (named `component` + "_" + suffix) that is declared in `pluginPath`/lib.php and has a
+// `component` (named <name>_<suffix> for each of moodletype.ComponentNames(component), so both
+// mod_forum_x and forum_x for a module) that is declared in `pluginPath`/lib.php and has a
 // Hook API replacement. It returns nil when lib.php cannot be read.
 func detectLegacyCallbacks(pluginPath, component string) []LegacyCallbackWarning {
-	content, err := readFileCapped(filepath.Join(pluginPath, "lib.php"))
+	return detectLegacyCallbacksInFile(filepath.Join(pluginPath, "lib.php"), component)
+}
+
+// DetectLegacyCallbacksInFile returns the legacy-callback warnings of `component` for the
+// functions declared in the PHP file at `filePath`, by the same rules as the warnings of
+// ExtractPluginHooks for lib.php, with the backend BUILD82_EXTRACTOR_BACKEND selects. It is used
+// for files Moodle never loads to call callbacks, such as locallib.php, whose callbacks are reported
+// apart. It returns nil when the file cannot be read.
+func DetectLegacyCallbacksInFile(filePath, component string) []LegacyCallbackWarning {
+	if useTreesitter() {
+		return tsbackend.DetectLegacyCallbacksInFile(filePath, component)
+	}
+	return detectLegacyCallbacksInFile(filePath, component)
+}
+
+// detectLegacyCallbacksInFile is the regex backend of DetectLegacyCallbacksInFile.
+func detectLegacyCallbacksInFile(filePath, component string) []LegacyCallbackWarning {
+	content, err := readFileCapped(filePath)
 	if err != nil {
 		return nil
 	}
-	s := string(content)
+	// Comments are blanked so a commented-out declaration is not taken for a real one.
+	s := stripCommentsAndHeredocs(string(content))
 
 	declared := map[string]struct{}{}
 	for _, m := range legacyFunctionDeclPattern.FindAllStringSubmatch(s, -1) {
-		declared[m[1]] = struct{}{}
+		declared[strings.ToLower(m[1])] = struct{}{}
 	}
 
-	var warnings []LegacyCallbackWarning
-	for suffix, replacement := range legacyhooks.Map {
-		legacyFunction := component + "_" + suffix
-		if _, ok := declared[legacyFunction]; !ok {
-			continue
-		}
-		warnings = append(warnings, LegacyCallbackWarning{
-			LegacyFunction: legacyFunction,
-			ReplacedBy:     replacement,
-			Guidance: fmt.Sprintf(
-				"Migrate %s to the Hook API: 1) add a %s entry to db/hooks.php's $callbacks array "+
-					"targeting %s; 2) implement the callback in classes/hook_callbacks.php; "+
-					"3) remove the legacy %s() function from lib.php.",
-				legacyFunction, legacyFunction, replacement, legacyFunction,
-			),
-		})
-	}
-	// Map iteration order is random, so sort to give LegacyWarnings a stable order.
-	sort.Slice(warnings, func(i, j int) bool {
-		return warnings[i].LegacyFunction < warnings[j].LegacyFunction
+	return legacyhooks.Warnings(moodletype.ComponentNames(component), func(fn string) bool {
+		_, ok := declared[fn]
+		return ok
 	})
-	return warnings
 }
 
 // PluginUsesHookApi reports whether `e` contains at least one hook callback or definition. Legacy

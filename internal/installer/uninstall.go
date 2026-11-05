@@ -21,24 +21,24 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/oito2/mcp-build82/internal/config"
 	"github.com/oito2/mcp-build82/internal/generators"
+	"github.com/oito2/mcp-build82/internal/prompt"
 )
 
 // hasEntry reports whether a target currently has a build82 registration configured — not
 // merely whether the tool itself is installed. A config file that cannot be read or parsed counts
-// as holding one, so an uninstall reports it as failed instead of skipping it. For a tool with a
-// single configuration (Codex), a failed `mcp get` counts as "not registered" only when its output
-// says so or the tool is not on PATH.
+// as holding one, so an uninstall reports it as failed instead of skipping it. For a CLI-managed
+// tool, a failed `mcp get` counts as "not registered" only when its output says so or the tool is
+// not on PATH; any other failure counts as a registration, so the uninstall reports the error.
 func hasEntry(t target) bool {
 	if t.Shape == shapeCLI {
 		out, err := runCommand(t.CLI.Bin, t.CLI.GetArgs...)
 		if err == nil {
 			return true
 		}
-		if t.CLI.Scope != nil || notRegisteredOutput(out) {
+		if notRegisteredOutput(out) {
 			return false
 		}
 		_, lookErr := lookPath(t.CLI.Bin)
@@ -220,18 +220,16 @@ func runPurge(ctx context.Context, cfg *config.Config, in *bufio.Reader) error {
 func Uninstall(ctx context.Context, targetID string, purge bool) error {
 	in := bufio.NewReader(os.Stdin)
 	problems := 0
+	changed := false // a registration was removed before any purge prompt
+	ts, err := targets()
+	if err != nil {
+		return err
+	}
 
 	if targetID != "" {
-		t, ok, err := targetByID(targetID)
+		t, err := lookupTarget(ts, targetID)
 		if err != nil {
 			return err
-		}
-		if !ok {
-			ids, err := supportedIDs()
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("unknown target %q — supported targets: %s", targetID, strings.Join(ids, ", "))
 		}
 		switch {
 		case t.Unsupported != "":
@@ -244,12 +242,9 @@ func Uninstall(ctx context.Context, targetID string, purge bool) error {
 			if err != nil {
 				return err
 			}
+			changed = changed || removed
 		}
 	} else {
-		ts, err := targets()
-		if err != nil {
-			return err
-		}
 		var configured []target
 		for _, t := range ts {
 			if hasEntry(t) {
@@ -284,6 +279,7 @@ func Uninstall(ctx context.Context, targetID string, purge bool) error {
 				if err != nil {
 					problems++
 				}
+				changed = changed || removed
 			}
 		}
 	}
@@ -294,6 +290,12 @@ func Uninstall(ctx context.Context, targetID string, purge bool) error {
 			return err
 		}
 		if err := runPurge(ctx, cfg, in); err != nil {
+			// An interrupted purge prompt must not end in "nothing was changed" when registrations
+			// were already removed above, so that error no longer wraps prompt.ErrInterrupted.
+			if changed && errors.Is(err, prompt.ErrInterrupted) {
+				return fmt.Errorf("purge interrupted; the build82 registrations reported above were already removed (%d failed): %w",
+					problems, ctx.Err())
+			}
 			return err
 		}
 	}

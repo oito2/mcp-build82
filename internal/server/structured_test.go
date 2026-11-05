@@ -22,10 +22,13 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/oito2/mcp-build82/internal/phpcs/phpcstest"
 )
 
 // updateGolden makes TestTools_SchemasMatchGolden rewrite the golden files instead of comparing
@@ -37,7 +40,7 @@ var updateGolden = flag.Bool("update", false, "rewrite the tool schema golden fi
 var structuredTools = map[string]bool{
 	"init_moodle_context": true, "generate_plugin_context": true, "plugin_batch": true,
 	"update_indexes": true, "search_plugins": true, "search_api": true, "get_plugin_info": true,
-	"list_dev_plugins": true, "doctor": true,
+	"list_dev_plugins": true, "doctor": true, "bump_plugin_version": true, "check_coding_style": true,
 }
 
 // listTools returns every tool the server advertises, keyed by name.
@@ -97,8 +100,8 @@ func TestTools_AnnotationsAreExplicit(t *testing.T) {
 	_, session, cleanup := connectInMemory(t)
 	defer cleanup()
 	tools := listTools(t, session)
-	if len(tools) != 13 {
-		t.Fatalf("expected 13 tools, got %d", len(tools))
+	if len(tools) != 15 {
+		t.Fatalf("expected 15 tools, got %d", len(tools))
 	}
 	for name, tool := range tools {
 		a := tool.Annotations
@@ -116,13 +119,16 @@ func TestTools_AnnotationsAreExplicit(t *testing.T) {
 			t.Errorf("%s: outputSchema present = %v, want %v", name, hasSchema, structuredTools[name])
 		}
 	}
-	for name, readOnly := range map[string]bool{"doctor": true, "search_api": true, "explain_plugin": true, "release_plugin": false, "create_plugin_skeleton": false, "generate_plugin_context": false} {
+	for name, readOnly := range map[string]bool{"doctor": true, "search_api": true, "explain_plugin": true, "release_plugin": false, "create_plugin_skeleton": false, "generate_plugin_context": false, "bump_plugin_version": false, "check_coding_style": true} {
 		if tools[name].Annotations.ReadOnlyHint != readOnly {
 			t.Errorf("%s: readOnlyHint = %v, want %v", name, tools[name].Annotations.ReadOnlyHint, readOnly)
 		}
 	}
 	if !*tools["release_plugin"].Annotations.DestructiveHint {
 		t.Error("release_plugin replaces an existing ZIP, so it must be marked destructive")
+	}
+	if b := tools["bump_plugin_version"].Annotations; !*b.DestructiveHint || b.IdempotentHint {
+		t.Error("bump_plugin_version edits existing files and raises the version on every call, so it must be destructive and not idempotent")
 	}
 }
 
@@ -158,6 +164,13 @@ func resolvedOutputSchemas(t *testing.T, tools map[string]*mcp.Tool) map[string]
 func TestTools_StructuredContentMatchesSchema(t *testing.T) {
 	withIsolatedHome(t)
 	root := buildE2EFixture(t)
+	phpcstest.Install(t)
+	report, err := filepath.Abs(filepath.Join("..", "phpcs", "testdata", "report_root.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_PHPCS_REPORT", report)
+	t.Setenv("FAKE_PHPCS_ROOT", filepath.Join(root, "local", "demo"))
 	_, session, cleanup := connectInMemory(t)
 	defer cleanup()
 	schemas := resolvedOutputSchemas(t, listTools(t, session))
@@ -176,6 +189,8 @@ func TestTools_StructuredContentMatchesSchema(t *testing.T) {
 		{"get_plugin_info", map[string]any{"plugin": "local_demo"}},
 		{"list_dev_plugins", map[string]any{}},
 		{"doctor", map[string]any{}},
+		{"bump_plugin_version", map[string]any{"plugin": "local_demo", "upgrade_step": true}},
+		{"check_coding_style", map[string]any{"plugin": "local_demo", "severity": "warning"}},
 	}
 	for _, format := range []string{"text", "json"} {
 		for _, c := range calls {
@@ -239,6 +254,12 @@ func TestTools_ErrorsAndTextToolsCarryNoStructuredContent(t *testing.T) {
 	if res := callTool(t, session, "get_plugin_info", map[string]any{"plugin": "local_nosuchplugin"}); !res.IsError || res.StructuredContent != nil {
 		t.Errorf("get_plugin_info on a missing plugin: expected an error without structuredContent, got %+v", res)
 	}
+	if res := callTool(t, session, "check_coding_style", map[string]any{"plugin": "local_demo", "severity": "info"}); !res.IsError || res.StructuredContent != nil {
+		t.Errorf("check_coding_style with an invalid severity: expected an error without structuredContent, got %+v", res)
+	}
+	if res := callTool(t, session, "bump_plugin_version", map[string]any{"plugin": "local_demo", "version": "1"}); !res.IsError || res.StructuredContent != nil {
+		t.Errorf("bump_plugin_version with an invalid version: expected an error without structuredContent, got %+v", res)
+	}
 	for name, args := range map[string]map[string]any{
 		"explain_plugin": {"plugin": "local_demo"},
 		"watch_plugins":  {"action": "status"},
@@ -247,5 +268,84 @@ func TestTools_ErrorsAndTextToolsCarryNoStructuredContent(t *testing.T) {
 		if res.StructuredContent != nil {
 			t.Errorf("%s: text-only tool returned structuredContent %v", name, res.StructuredContent)
 		}
+	}
+}
+
+// TestTools_OutputSchemaPropertiesHaveDescriptions verifies that every property of every output
+// schema, at any depth, carries a description, so the model reading structuredContent knows what
+// each field means.
+func TestTools_OutputSchemaPropertiesHaveDescriptions(t *testing.T) {
+	_, session, cleanup := connectInMemory(t)
+	defer cleanup()
+	var walk func(tool, path string, node any)
+	walk = func(tool, path string, node any) {
+		m, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		if props, ok := m["properties"].(map[string]any); ok {
+			for name, prop := range props {
+				p, _ := prop.(map[string]any)
+				if d, _ := p["description"].(string); d == "" {
+					t.Errorf("%s: output property %s%s has no description", tool, path, name)
+				}
+				walk(tool, path+name+".", prop)
+			}
+		}
+		if items, ok := m["items"]; ok {
+			walk(tool, path, items)
+		}
+	}
+	for name, tool := range listTools(t, session) {
+		if tool.OutputSchema == nil {
+			continue
+		}
+		raw, err := json.Marshal(tool.OutputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		walk(name, "", schema)
+	}
+}
+
+// TestTools_RejectUnknownEnumValues verifies that values outside the declared enums are rejected
+// before the handler runs, instead of the tool falling back to a default action (a "Stop" that
+// starts the watcher, an "ALL" that processes only dev plugins), and that valid values still work.
+func TestTools_RejectUnknownEnumValues(t *testing.T) {
+	withIsolatedHome(t)
+	t.Setenv("BUILD82_MOODLE_PATH", buildE2EFixture(t))
+	_, session, cleanup := connectInMemory(t)
+	defer cleanup()
+
+	for name, args := range map[string]map[string]any{
+		"watch_plugins":    {"action": "Stop"},
+		"plugin_batch":     {"mode": "ALL"},
+		"search_api":       {"query": "get", "visibility": "Deprecated"},
+		"list_dev_plugins": {"format": "JSON"},
+	} {
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+		msg := ""
+		switch {
+		case err != nil:
+			msg = err.Error()
+		case res != nil && res.IsError:
+			msg = toolText(t, res)
+		default:
+			t.Errorf("%s %v: expected a rejection, got %+v", name, args, res)
+			continue
+		}
+		if !strings.Contains(strings.ToLower(msg), "enum") && !strings.Contains(strings.ToLower(msg), "validat") {
+			t.Errorf("%s %v: expected a schema validation error, got %q", name, args, msg)
+		}
+	}
+	if res := callTool(t, session, "watch_plugins", map[string]any{"action": "status"}); res.IsError {
+		t.Errorf("watch_plugins status rejected: %s", toolText(t, res))
+	}
+	if res := callTool(t, session, "list_dev_plugins", map[string]any{"format": "text"}); res.IsError {
+		t.Errorf("list_dev_plugins format=text rejected: %s", toolText(t, res))
 	}
 }

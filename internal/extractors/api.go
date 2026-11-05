@@ -60,48 +60,14 @@ type ApiExtraction struct {
 	Counts    ApiCounts
 }
 
-// findDocBlock searches `lines` backward from the function declaration at index `funcLineIndex`
-// for the PHPDoc block that immediately precedes it, tolerating up to 3 blank lines in between. It
-// returns the parsed block, or nil when there is none.
+// findDocBlock returns the parsed PHPDoc block that immediately precedes the function declaration
+// at index `funcLineIndex` of `lines` (see precedingDocBlock: blank lines and PHP 8 attributes in
+// between are allowed), or nil when there is none.
 func findDocBlock(lines []string, funcLineIndex int) *PhpDocBlock {
-	blankCount := 0
-	closeIndex := -1
-
-	for i := funcLineIndex - 1; i >= 0 && i >= funcLineIndex-5; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "" {
-			blankCount++
-			if blankCount > 3 {
-				break
-			}
-			continue
-		}
-		if trimmed == "*/" {
-			closeIndex = i
-			break
-		}
-		break
-	}
-	if closeIndex == -1 {
+	raw, ok := precedingDocBlock(lines, funcLineIndex)
+	if !ok {
 		return nil
 	}
-
-	openIndex := -1
-	for i := closeIndex - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "/**") || trimmed == "/*" {
-			openIndex = i
-			break
-		}
-		if !strings.HasPrefix(trimmed, "*") && trimmed != "" {
-			break
-		}
-	}
-	if openIndex == -1 {
-		return nil
-	}
-
-	raw := strings.Join(lines[openIndex:closeIndex+1], "\n")
 	doc := phpdoc.ParseDocBlock(raw)
 	return &doc
 }
@@ -144,47 +110,19 @@ func scanPhpFile(filePath string) []ApiFunction {
 	return results
 }
 
-// PriorityFiles lists well-known Moodle core lib filenames in the order they are scanned first.
-var PriorityFiles = []string{
-	"moodlelib.php", "accesslib.php", "filelib.php", "weblib.php", "gradelib.php",
-	"completionlib.php", "enrollib.php", "grouplib.php", "datalib.php", "outputlib.php",
-	"navigationlib.php", "formslib.php", "filterlib.php", "messagelib.php", "badgeslib.php",
-	"blocklib.php", "cronlib.php", "dmllib.php", "eventslib.php", "externallib.php",
-	"grade/gradelib.php",
-}
-
-// getPhpFiles returns the absolute paths of the .php files directly inside `dirPath`, without
-// recursing into subdirectories, with the files named in PriorityFiles listed first. It returns
-// nil when `dirPath` is not a directory.
+// getPhpFiles returns the absolute paths of the .php files directly inside `dirPath`, sorted by
+// name, without recursing into subdirectories. It returns nil when `dirPath` is not a directory
+// or cannot be read. ExtractMoodleApi sorts its own output, so the order only makes the scan
+// deterministic.
 func getPhpFiles(dirPath string) []string {
-	if !dirExists(dirPath) {
-		return nil
-	}
-
-	var files []string
-	seen := map[string]struct{}{}
-
-	for _, pf := range PriorityFiles {
-		full := filepath.Join(dirPath, pf)
-		if fileExists(full) {
-			files = append(files, full)
-			seen[full] = struct{}{}
-		}
-	}
-
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return files
+		return nil
 	}
+	var files []string
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if strings.HasSuffix(entry.Name(), ".php") {
-			full := filepath.Join(dirPath, entry.Name())
-			if _, ok := seen[full]; !ok {
-				files = append(files, full)
-			}
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".php") {
+			files = append(files, filepath.Join(dirPath, entry.Name()))
 		}
 	}
 	return files
@@ -195,8 +133,8 @@ var visibilityOrder = map[ApiVisibility]int{
 	VisPublic: 0, VisDeprecated: 1, VisUnverified: 2, VisInternal: 3, VisPrivate: 4,
 }
 
-// ExtractMoodleApi scans every .php file directly inside `moodlePath`/lib (priority files first)
-// and classifies every function. Counts covers all functions, while Functions keeps only the
+// ExtractMoodleApi scans every .php file directly inside `moodlePath`/lib and classifies every
+// function. Counts covers all functions, while Functions keeps only the
 // public and deprecated ones, sorted by visibility, file and name.
 func ExtractMoodleApi(moodlePath string) ApiExtraction {
 	libPath := filepath.Join(moodlePath, "lib")

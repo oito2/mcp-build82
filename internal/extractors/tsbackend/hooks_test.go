@@ -151,7 +151,7 @@ func TestExtractPluginHooks_LegacyWarnings(t *testing.T) {
 func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\n"+
-		"function local_test_cron() {}\n"+
+		"function local_test_standard_footer_html() {}\n"+
 		"function local_test_before_footer() {}\n")
 
 	result, err := ExtractPluginHooks(dir, "local_test")
@@ -162,7 +162,7 @@ func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 		t.Fatalf("expected 2 legacy warnings, got %d: %+v", len(result.LegacyWarnings), result.LegacyWarnings)
 	}
 	if result.LegacyWarnings[0].LegacyFunction != "local_test_before_footer" ||
-		result.LegacyWarnings[1].LegacyFunction != "local_test_cron" {
+		result.LegacyWarnings[1].LegacyFunction != "local_test_standard_footer_html" {
 		t.Errorf("expected LegacyWarnings sorted by LegacyFunction, got %+v", result.LegacyWarnings)
 	}
 }
@@ -244,7 +244,7 @@ func TestParseHookCallbacks_MissingFile(t *testing.T) {
 func TestExtractPluginHooks_RealFileRegression(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

@@ -23,7 +23,7 @@ Use `init_moodle_context` ou `generate_plugin_context` para gerar ou atualizar o
 | Aspecto | Detalhe |
 |---|---|
 | MIME type | `text/markdown` para os 14 resources e os 12 templates |
-| Origem do conteúdo | O arquivo é lido do disco a cada requisição; o servidor não mantém cópia (exceto o cache de 5 segundos da listagem de `moodle://plugins/with-context`) |
+| Origem do conteúdo | O arquivo é lido do disco a cada requisição; o servidor não mantém cópia (exceto o cache de 5 segundos da listagem de `moodle://plugins/with-context`, descartado sempre que uma atualização de resource é anunciada) |
 | Não inicializado | Retorna o placeholder `# Resource not available` (`build82 has not been initialized. Run the init_moodle_context tool ...`), não um erro |
 | Arquivo ainda não gerado | Retorna `# <arquivo> — Not found` com o caminho relativo esperado e a tool a executar (`init_moodle_context`/`update_indexes` para arquivos globais, `generate_plugin_context` para arquivos de plugin), não um erro |
 | Erros de protocolo | Apenas quando o local da configuração não pode ser resolvido, ou em um panic interno (`internal error while reading this resource: <causa>`) |
@@ -50,7 +50,7 @@ URIs fixas apoiadas por arquivos em `{raiz_moodle}/.build82/`.
 | `moodle://plugin-index` | `MOODLE_PLUGIN_INDEX.md` | Mapa component / tipo / nome / versão / caminho dos plugins instalados |
 | `moodle://dev-rules` | `MOODLE_DEV_RULES.md` | Padrões de código, regras de segurança, convenções de banco de dados |
 | `moodle://plugin-guide` | `MOODLE_PLUGIN_GUIDE.md` | Nomenclatura de components, arquivos obrigatórios, template de `version.php`, caminhos de classes com autoload |
-| `moodle://plugins/with-context` | — | Tabela com colunas Component, Type, Path dos plugins que têm `.build82/PLUGIN_AI_CONTEXT.md`, ordenada por component, mais um trecho de uso. Calculada varrendo a árvore do Moodle (ignorando `vendor/` e `node_modules/`); o resultado fica em cache por 5 segundos |
+| `moodle://plugins/with-context` | — | Tabela com colunas Component, Type, Path dos plugins que têm `.build82/PLUGIN_AI_CONTEXT.md`, ordenada por component, mais um trecho de uso. Calculada varrendo a árvore do Moodle (ignorando `vendor/` e `node_modules/`); o resultado fica em cache por 5 segundos, e o cache é descartado antes de qualquer atualização de resource ser anunciada, então uma leitura logo após a notificação já vê o plugin novo |
 
 O arquivo `tags` não é exposto como resource.
 
@@ -74,6 +74,27 @@ Doze templates de URI, um por arquivo de plugin gerado. `{component}` é um comp
 | `moodle://plugin/{component}/endpoints` | `PLUGIN_ENDPOINT_INDEX.md` | Web services, endpoints AJAX e módulos AMD |
 | `moodle://plugin/{component}/dependencies` | `PLUGIN_DEPENDENCIES.md` | Tasks, serviços, capabilities, Hook API, histórico de upgrades, subplugins |
 | `moodle://plugin/{component}/flow` | `PLUGIN_RUNTIME_FLOW.md` | Entry points, arquivos de lógica principal e resumo de classes/eventos/tasks/serviços |
+
+---
+
+## 🔔 Assinaturas
+
+O servidor anuncia `resources.subscribe`. Um cliente pode assinar qualquer resource acima — um
+resource global, `moodle://plugins/with-context` ou `moodle://plugin/{component}{sufixo}` para
+qualquer component bem formado, mesmo antes de os arquivos serem gerados — e passa a receber
+`notifications/resources/updated` cada vez que o arquivo daquele resource é regenerado. Assinar
+qualquer outro URI é recusado com um erro (`unknown resource`). Clientes do protocolo 2025-06-18
+assinam com `resources/subscribe`; clientes mais novos usam `subscriptions/listen`. As assinaturas
+terminam com `resources/unsubscribe` ou quando a sessão é encerrada.
+
+| Regenerado por | Resources anunciados como atualizados |
+| :--- | :--- |
+| `generate_plugin_context`, `plugin_batch`, o watcher do `watch_plugins` | Os 12 resources de cada plugin regenerado, `moodle://index` e `moodle://plugins/with-context` |
+| `init_moodle_context` (exceto quando já estava inicializado), `update_indexes` | Todo resource global e `moodle://plugins/with-context`; com `include_plugins`, também os 12 resources de cada plugin `.indevelopment` |
+
+Só as sessões que assinaram um URI são notificadas, e uma chamada que falha não anuncia nada. Uma
+notificação significa que o arquivo foi regravado; leia o resource de novo para obter o conteúdo
+novo.
 
 ---
 

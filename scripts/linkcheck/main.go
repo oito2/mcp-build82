@@ -14,7 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // Command linkcheck verifies the relative links of the project's Markdown documentation: every
-// link to a local file must point to a file or directory that exists, and every "#anchor" must
+// link to a local file (inline Markdown links and images, and HTML src/href attributes) must point
+// to a file or directory that exists, and every "#anchor" must
 // match a heading (or an explicit HTML anchor) of the target page, using GitHub's heading slugs.
 // External links (http, https, mailto) are not checked. Usage, from the module root:
 //
@@ -39,6 +40,10 @@ var roots = []string{"README.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "CHAN
 // linkPattern matches an inline Markdown link or image target: the text in parentheses after
 // "](", up to the first closing parenthesis or space (a link title is ignored).
 var linkPattern = regexp.MustCompile(`\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+
+// htmlLinkPattern matches the double-quoted value of an HTML src or href attribute, such as the
+// <img src="..."> and <a href="..."> tags embedded in Markdown.
+var htmlLinkPattern = regexp.MustCompile(`\b(?:src|href)="([^"]+)"`)
 
 // headingPattern matches an ATX heading line and captures its text.
 var headingPattern = regexp.MustCompile(`^#{1,6}\s+(.*?)\s*#*\s*$`)
@@ -162,8 +167,8 @@ func isExternal(target string) bool {
 	return strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:")
 }
 
-// links returns the inline link targets of the Markdown `content`, skipping fenced code blocks and
-// inline code spans.
+// links returns the inline Markdown link targets and the HTML src/href values of the Markdown
+// `content`, skipping fenced code blocks and inline code spans.
 func links(content string) []link {
 	var out []link
 	inFence := false
@@ -176,9 +181,13 @@ func links(content string) []link {
 		if inFence {
 			continue
 		}
-		for _, m := range linkPattern.FindAllStringSubmatch(stripCodeSpans(line), -1) {
+		text := stripCodeSpans(line)
+		for _, m := range linkPattern.FindAllStringSubmatch(text, -1) {
 			target := strings.Trim(m[1], "<>")
 			out = append(out, link{target: target, line: i + 1})
+		}
+		for _, m := range htmlLinkPattern.FindAllStringSubmatch(text, -1) {
+			out = append(out, link{target: m[1], line: i + 1})
 		}
 	}
 	return out

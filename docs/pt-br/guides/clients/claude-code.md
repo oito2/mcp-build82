@@ -83,7 +83,7 @@ O Claude Code pede a cada usuário que aprove um servidor de escopo de projeto n
 claude mcp list
 ```
 
-O `build82` deve aparecer como conectado (`claude mcp get build82` mostra os detalhes). Dentro de uma sessão, execute `/mcp` para vê-lo com as 13 tools disponíveis. Se não aparecer, veja [Troubleshooting](#️-troubleshooting).
+O `build82` deve aparecer como conectado (`claude mcp get build82` mostra os detalhes). Dentro de uma sessão, execute `/mcp` para vê-lo com as 15 tools disponíveis. Se não aparecer, veja [Troubleshooting](#️-troubleshooting).
 
 ### 3. Remoção
 

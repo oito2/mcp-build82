@@ -66,7 +66,8 @@ func TestReleaseContract_DistMatchesSelfUpdate(t *testing.T) {
 
 // TestReleaseContract_WorkflowSignsTheBundleSelfUpdateReads verifies that the release workflow
 // writes the signature bundle under signatureBundleName, signing checksums.txt, and checks it with
-// the exact identity self-update requires.
+// the exact identity self-update requires: the release workflow of repoOwner/repoName, written out
+// rather than taken from the repository running the workflow.
 func TestReleaseContract_WorkflowSignsTheBundleSelfUpdateReads(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
 	if err != nil {
@@ -76,7 +77,7 @@ func TestReleaseContract_WorkflowSignsTheBundleSelfUpdateReads(t *testing.T) {
 	for _, want := range []string{
 		"cosign sign-blob --yes --bundle " + signatureBundleName + " checksums.txt",
 		"cosign verify-blob checksums.txt --bundle " + signatureBundleName,
-		`--certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"`,
+		`--certificate-identity "https://github.com/` + repoOwner + "/" + repoName + `/.github/workflows/release.yml@${GITHUB_REF}"`,
 		"--certificate-oidc-issuer https://token.actions.githubusercontent.com",
 	} {
 		if !strings.Contains(workflow, want) {

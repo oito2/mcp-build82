@@ -144,15 +144,16 @@ It is the recommended entry point to start any development session on an existin
 
 Prebuilt prompt template exposed by the MCP server that automatically injects the complete Moodle and installation context before executing a task. Unlike Tools — which execute actions — Prompts guide the AI on **how** to perform a complex task, with examples and Moodle-specific patterns.
 
-`build82` exposes three prompts:
+`build82` exposes four prompts:
 
 | Prompt            | Purpose                                        |
 | ------------------ | ------------------------------------------------- |
 | `scaffold_plugin` | Create the full structure of a new plugin         |
 | `review_plugin`   | Review a plugin's code with configurable focus    |
 | `debug_plugin`    | Debug an error with full plugin context           |
+| `upgrade_plugin`  | Plan a plugin's migration to a newer Moodle       |
 
-In clients that expose MCP prompts as slash commands (e.g. Gemini Code Assist's Agent mode), they're available as `/scaffold_plugin`, `/review_plugin`, `/debug_plugin`.
+In clients that expose MCP prompts as slash commands (e.g. Gemini Code Assist's Agent mode), they're available as `/scaffold_plugin`, `/review_plugin`, `/debug_plugin`, `/upgrade_plugin`.
 
 → See: [Prompt Reference](../reference/prompts.md)
 
@@ -170,17 +171,9 @@ Examples of URIs: `moodle://api-index`, `moodle://plugin/local_myplugin`, `moodl
 
 ## stdio
 
-Default MCP transport mode where the server runs as a subprocess of the AI client, communicating via standard input and output (stdin/stdout). It does not open network ports. This is `build82`'s default mode — running it with no flags starts stdio.
+Default MCP transport mode where the server runs as a subprocess of the AI client, communicating via standard input and output (stdin/stdout). It does not open network ports. It is `build82`'s only transport.
 
-→ See: [Architecture — Transport modes](./architecture.md#transport-modes)
-
----
-
-## Streamable HTTP
-
-Alternative MCP transport mode (`build82 --http`) where the server runs as an independent HTTP service. Used when Moodle is on a different machine than the one running the AI client (e.g., remote server, isolated Docker environment). Authentication via Bearer token (`--token` or the `BUILD82_TOKEN` environment variable) is optional but strongly recommended.
-
-→ See: [Architecture — Transport modes](./architecture.md#transport-modes) · [Docker](../guides/environments/docker.md)
+→ See: [Architecture — Transport](./architecture.md#transport)
 
 ---
 
@@ -188,7 +181,7 @@ Alternative MCP transport mode (`build82 --http`) where the server runs as an in
 
 Executable function exposed by the MCP server that the AI assistant can explicitly call to perform an action. Unlike Resources — which are read passively — Tools are invoked on demand, usually in response to a user request in natural language.
 
-`build82` exposes 13 tools:
+`build82` exposes 15 tools:
 
 | Tool                      | What it does                                              |
 | -------------------------- | -------------------------------------------------------------- |
@@ -205,6 +198,8 @@ Executable function exposed by the MCP server that the AI assistant can explicit
 | `explain_plugin`          | Explains a plugin's architecture by section                   |
 | `release_plugin`          | Packages a plugin directory into a distributable ZIP           |
 | `create_plugin_skeleton`  | Materializes a new plugin's directory structure on disk        |
+| `bump_plugin_version`     | Raises a plugin's version and adds its upgrade step            |
+| `check_coding_style`      | Checks a plugin against the Moodle coding standard (phpcs)     |
 
 → See: [Tools Reference](../reference/tools.md)
 

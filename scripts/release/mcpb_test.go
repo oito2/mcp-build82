@@ -224,8 +224,8 @@ func TestServerTools_ListsEveryRegisteredTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serverTools: %v", err)
 	}
-	if len(tools) != 13 {
-		t.Errorf("expected 13 tools, got %d", len(tools))
+	if len(tools) != 15 {
+		t.Errorf("expected 15 tools, got %d", len(tools))
 	}
 	for _, tl := range tools {
 		if tl.Name == "" || tl.Description == "" || strings.Contains(tl.Description, "\n") {
@@ -409,11 +409,11 @@ func runLauncher(t *testing.T, arch string, args ...string) (stdout, stderr stri
 func TestLinuxLauncher_ExecsBinaryForArchitecture(t *testing.T) {
 	cases := map[string]string{"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 	for arch, want := range cases {
-		stdout, stderr, code := runLauncher(t, arch, "--http", "a b")
+		stdout, stderr, code := runLauncher(t, arch, "--version", "a b")
 		if code != 0 || stderr != "" {
 			t.Errorf("%s: exit %d, stderr %q", arch, code, stderr)
 		}
-		if stdout != want+" --http a b\n" {
+		if stdout != want+" --version a b\n" {
 			t.Errorf("%s: stdout = %q, want the %s binary with arguments passed through", arch, stdout, want)
 		}
 	}

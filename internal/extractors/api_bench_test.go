@@ -17,12 +17,13 @@ package extractors
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 // benchRealLibPHP is the path of a large real moodlelib.php (about 10k lines) in a local Moodle
 // installation. Both benchmarks are skipped when it does not exist.
-const benchRealLibPHP = "/srv/workspace/www/html/mdle/dev-500/lib/moodlelib.php"
+var benchRealLibPHP = filepath.Join(realMoodle("mdle-500"), "lib", "moodlelib.php")
 
 // BenchmarkExtractFunctionsFromPhpFile_Regex measures function extraction from a large real file
 // with the regex backend.

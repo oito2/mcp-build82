@@ -32,10 +32,13 @@ type PhpClass = phptypes.PhpClass
 type RenamedClass = phptypes.RenamedClass
 type ClassesExtraction = phptypes.ClassesExtraction
 
-// Patterns used by the regex class scanner: the declaration keyword and name, the namespace
-// statement, the extends and implements clauses, and one entry of a renamed-classes array.
+// Patterns used by the regex class scanner and the hook definition reader: the declaration (any
+// abstract/final/readonly modifiers, the keyword and the name), a class declaration only (same
+// modifiers, the name captured), the namespace statement, the extends and implements clauses, and
+// one entry of a renamed-classes array.
 var (
-	kindPattern       = regexp.MustCompile(`(?m)^(abstract\s+class|class|interface|trait|enum)\s+([a-zA-Z_][a-zA-Z0-9_]*)`)
+	classDeclPattern  = regexp.MustCompile(`(?m)^(?:(?:abstract|final|readonly)\s+)*class\s+([a-zA-Z_][a-zA-Z0-9_]*)`)
+	kindPattern       = regexp.MustCompile(`(?m)^((?:(?:abstract|final|readonly)\s+)*)(class|interface|trait|enum)\s+([a-zA-Z_][a-zA-Z0-9_]*)`)
 	namespacePattern  = regexp.MustCompile(`(?m)^namespace\s+([a-zA-Z0-9_\\]+)\s*;`)
 	extendsPattern    = regexp.MustCompile(`\bextends\s+([a-zA-Z_\\][a-zA-Z0-9_\\]*)`)
 	implementsPattern = regexp.MustCompile(`(?m)\bimplements\s+([a-zA-Z_\\][a-zA-Z0-9_,\\\s]+?)(?:\{|$)`)
@@ -53,6 +56,13 @@ const maxClassDeclContinuationLines = 8
 // this is a heuristic strip, not a syntax validator.
 var heredocStartPattern = regexp.MustCompile(`^<<<[ \t]*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?[ \t]*\r?\n`)
 
+// BlankCommentsAndHeredocs returns `content` with its PHP comments and heredoc/nowdoc bodies
+// replaced by blank filler of the same length (see stripCommentsAndHeredocs), so a byte offset in
+// the result is the same offset in `content`.
+func BlankCommentsAndHeredocs(content string) string {
+	return stripCommentsAndHeredocs(content)
+}
+
 // stripCommentsAndHeredocs returns `content` with every `/* ... */` block comment, every `//` or
 // `#` line comment (the newline is kept) and every heredoc/nowdoc body replaced by blank filler: non-newline bytes become spaces and every '\n' is
 // kept in place. This stops scanPhpClassFile's line-by-line kindPattern from matching a
@@ -68,10 +78,10 @@ func stripCommentsAndHeredocs(content string) string {
 	out.Grow(len(content))
 
 	var (
-		quote          byte
-		lineComment    bool
-		blockComment   bool
-		heredocClosing *regexp.Regexp // non-nil while inside a heredoc/nowdoc body
+		quote        byte
+		lineComment  bool
+		blockComment bool
+		heredocIdent string // the closing identifier while inside a heredoc/nowdoc body, else ""
 	)
 	atLineStart := true
 	n := len(content)
@@ -80,12 +90,12 @@ func stripCommentsAndHeredocs(content string) string {
 		c := content[i]
 
 		switch {
-		case heredocClosing != nil:
+		case heredocIdent != "":
 			if atLineStart {
-				if m := heredocClosing.FindStringIndex(content[i:]); m != nil && m[0] == 0 {
-					out.WriteString(content[i+m[0] : i+m[1]])
-					i += m[1]
-					heredocClosing = nil
+				if end := heredocCloserEnd(content, i, heredocIdent); end > 0 {
+					out.WriteString(content[i:end])
+					i = end
+					heredocIdent = ""
 					atLineStart = false
 					continue
 				}
@@ -176,7 +186,7 @@ func stripCommentsAndHeredocs(content string) string {
 				ident := content[i+m[2] : i+m[3]]
 				out.WriteString(content[i : i+m[1]])
 				i += m[1]
-				heredocClosing = regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(ident) + `\b`)
+				heredocIdent = ident
 				atLineStart = true
 				continue
 			}
@@ -191,6 +201,30 @@ func stripCommentsAndHeredocs(content string) string {
 		}
 	}
 	return out.String()
+}
+
+// heredocCloserEnd reports whether the line starting at byte `i` of `content` closes a heredoc
+// whose identifier is `ident`: optional spaces or tabs, then `ident` not followed by an identifier
+// character. It returns the offset just past `ident` when it does, and 0 otherwise.
+func heredocCloserEnd(content string, i int, ident string) int {
+	j := i
+	for j < len(content) && (content[j] == ' ' || content[j] == '\t') {
+		j++
+	}
+	if !strings.HasPrefix(content[j:], ident) {
+		return 0
+	}
+	end := j + len(ident)
+	if end < len(content) && isIdentByte(content[end]) {
+		return 0
+	}
+	return end
+}
+
+// isIdentByte reports whether `c` can continue a PHP identifier: an ASCII letter, a digit or an
+// underscore.
+func isIdentByte(c byte) bool {
+	return c == '_' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
 
 // scanPhpClassFile returns the class, interface, trait and enum declarations found in the PHP file
@@ -213,7 +247,10 @@ func scanPhpClassFile(path, relFile string) []PhpClass {
 		if m == nil {
 			continue
 		}
-		kind, name := ClassKind(m[1]), m[2]
+		kind, name := ClassKind(m[2]), m[3]
+		if kind == "class" && strings.Contains(m[1], "abstract") {
+			kind = "abstract class"
+		}
 
 		decl := lines[i]
 		for j := 1; !strings.Contains(decl, "{") && j <= maxClassDeclContinuationLines && i+j < len(lines); j++ {

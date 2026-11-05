@@ -18,6 +18,7 @@ package extractors
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,7 +114,7 @@ func TestExtractPluginHooks_LegacyWarnings(t *testing.T) {
 func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\n"+
-		"function local_test_cron() {}\n"+
+		"function local_test_standard_footer_html() {}\n"+
 		"function local_test_before_footer() {}\n")
 
 	result, err := ExtractPluginHooks(dir, "local_test")
@@ -124,7 +125,7 @@ func TestExtractPluginHooks_MultipleLegacyWarningsAreSorted(t *testing.T) {
 		t.Fatalf("expected 2 legacy warnings, got %d: %+v", len(result.LegacyWarnings), result.LegacyWarnings)
 	}
 	if result.LegacyWarnings[0].LegacyFunction != "local_test_before_footer" ||
-		result.LegacyWarnings[1].LegacyFunction != "local_test_cron" {
+		result.LegacyWarnings[1].LegacyFunction != "local_test_standard_footer_html" {
 		t.Errorf("expected LegacyWarnings sorted by LegacyFunction, got %+v", result.LegacyWarnings)
 	}
 }
@@ -263,7 +264,7 @@ class data_submitted {
 func TestExtractPluginHooks_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}
@@ -404,5 +405,99 @@ func TestPluginUsesHookApi(t *testing.T) {
 	}
 	if !PluginUsesHookApi(HooksExtraction{Definitions: []HookDefinition{{ClassName: "x"}}}) {
 		t.Error("expected a hook definition to count as using the Hook API")
+	}
+}
+
+// TestDetectLegacyCallbacks_GuardedDeclarations verifies, on both backends, that a legacy callback
+// declared inside an `if (!function_exists(...))` guard (braces or colon syntax) is detected,
+// while a commented-out declaration and a class method are not.
+func TestDetectLegacyCallbacks_GuardedDeclarations(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lib.php"), []byte(`<?php
+if (!function_exists('local_demo_before_footer')) {
+    function local_demo_before_footer() {}
+}
+if (!function_exists('local_demo_before_http_headers')):
+    function local_demo_before_http_headers() {}
+endif;
+/*
+function local_demo_before_standard_html_head() {}
+*/
+class helper {
+    public function local_demo_after_config() {}
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, backend := range []string{"", "treesitter"} {
+		t.Run("backend="+backend, func(t *testing.T) {
+			t.Setenv("BUILD82_EXTRACTOR_BACKEND", backend)
+			hooks, _ := ExtractPluginHooks(dir, "local_demo")
+			var got []string
+			for _, w := range hooks.LegacyWarnings {
+				got = append(got, w.LegacyFunction)
+			}
+			want := []string{"local_demo_before_footer", "local_demo_before_http_headers"}
+			if !slices.Equal(got, want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestExtractPluginHooks_ModifiedClassDeclarations verifies that hook classes declared readonly,
+// final readonly or abstract are read, with their docblock summary, by the same class-declaration
+// rule as the class scanner.
+func TestExtractPluginHooks_ModifiedClassDeclarations(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdirAll(t, filepath.Join(dir, "classes", "hook"))
+	for name, modifiers := range map[string]string{"one": "readonly ", "two": "final readonly ", "three": "abstract "} {
+		mustWriteFile(t, filepath.Join(dir, "classes", "hook", name+".php"),
+			"<?php\nnamespace local_test\\hook;\n\n/**\n * Hook "+name+".\n */\n"+modifiers+"class "+name+" {\n}\n")
+	}
+
+	result, err := ExtractPluginHooks(dir, "local_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, d := range result.Definitions {
+		got[d.ClassName] = d.Description
+	}
+	for _, name := range []string{"one", "two", "three"} {
+		if desc, ok := got[`\local_test\hook\`+name]; !ok || desc != "Hook "+name+"." {
+			t.Errorf("hook %s: description %q, found %v (definitions %+v)", name, desc, ok, result.Definitions)
+		}
+	}
+}
+
+// TestExtractPluginHooks_BoolFieldsReadAlikeOnBothBackends verifies that both backends read a
+// boolean field the same way: true/false in any case and 1/0 are values, while another integer
+// leaves the default (defaultenabled defaults to true).
+func TestExtractPluginHooks_BoolFieldsReadAlikeOnBothBackends(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdirAll(t, filepath.Join(dir, "db"))
+	mustWriteFile(t, filepath.Join(dir, "db", "hooks.php"), `<?php
+$callbacks = [
+    ['hook' => \core\hook\a::class, 'callback' => 'a', 'defaultenabled' => FALSE],
+    ['hook' => \core\hook\b::class, 'callback' => 'b', 'defaultenabled' => 0],
+    ['hook' => \core\hook\c::class, 'callback' => 'c', 'defaultenabled' => 2],
+];
+`)
+	want := map[string]bool{"a": false, "b": false, "c": true}
+	for _, backend := range []string{"", "treesitter"} {
+		t.Setenv("BUILD82_EXTRACTOR_BACKEND", backend)
+		result, err := ExtractPluginHooks(dir, "local_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Callbacks) != len(want) {
+			t.Fatalf("backend %q: %d callbacks, want %d", backend, len(result.Callbacks), len(want))
+		}
+		for _, cb := range result.Callbacks {
+			if cb.DefaultEnabled != want[cb.Callback] {
+				t.Errorf("backend %q: callback %s defaultenabled = %v, want %v", backend, cb.Callback, cb.DefaultEnabled, want[cb.Callback])
+			}
+		}
 	}
 }

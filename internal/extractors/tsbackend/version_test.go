@@ -67,10 +67,9 @@ func TestReadVersionPhp_NonexistentFile(t *testing.T) {
 	}
 }
 
-// TestReadVersionPhp_KnownDivergence_CommentedOutComponent verifies that a commented-out
-// `$plugin->component` line is treated as a comment and yields nothing. The regex backend matches
-// such a line.
-func TestReadVersionPhp_KnownDivergence_CommentedOutComponent(t *testing.T) {
+// TestReadVersionPhp_CommentedOutComponentIsIgnored verifies that a commented-out
+// `$plugin->component` line is treated as a comment and yields nothing, as in the regex backend.
+func TestReadVersionPhp_CommentedOutComponentIsIgnored(t *testing.T) {
 	dir := writeVersionPhp(t, "<?php\n// $plugin->component = 'old_name';\n")
 	component, _, _, _ := ReadVersionPhp(dir)
 	if component != "" {
@@ -102,7 +101,7 @@ func realVersionPhpFixtures(t *testing.T, root string, limit int) []string {
 // TestReadVersionPhp_RealFileRegression runs the tree-sitter backend against real version.php
 // files from a real Moodle installation (not just the synthetic fixtures above).
 func TestReadVersionPhp_RealFileRegression(t *testing.T) {
-	paths := realVersionPhpFixtures(t, "/srv/workspace/www/html/mdle/dev-500", 25)
+	paths := realVersionPhpFixtures(t, realMoodle("mdle-500"), 25)
 	if len(paths) == 0 {
 		t.Skip("no version.php files found")
 	}

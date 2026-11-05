@@ -337,7 +337,7 @@ Excluded from the archive:
 Em vez de "analise meu plugin", prefira "carregue o contexto do plugin `local_myplugin` e...". Isso garante que a IA use a tool correta antes de responder.
 
 **Use os prompts para tarefas complexas:**
-Para scaffold, revisão e debugging, os prompts `scaffold_plugin`, `review_plugin` e `debug_plugin` injetam contexto adicional automaticamente. Em clientes que expõem prompts MCP como slash commands (ex: Gemini Code Assist, modo Agent), também estão disponíveis dessa forma.
+Para scaffold, revisão, debugging e migração, os prompts `scaffold_plugin`, `review_plugin`, `debug_plugin` e `upgrade_plugin` injetam contexto adicional automaticamente. Em clientes que expõem prompts MCP como slash commands (ex: Gemini Code Assist, modo Agent), também estão disponíveis dessa forma.
 
 **Regenere o contexto após mudanças significativas:**
 Após adicionar novas tabelas, classes ou callbacks, peça: _"Regenere o contexto do plugin local_myplugin."_ Isso mantém o `PLUGIN_AI_CONTEXT.md` sincronizado com o estado atual do código.
@@ -413,6 +413,6 @@ Adicione uma seção como esta ao seu `CLAUDE.md` / `GEMINI.md` / `AGENTS.md` e 
 ## ➡️ Próximos Passos
 
 - [Referência de Tools](../../reference/tools.md) — parâmetros completos de todas as tools
-- [Referência de Prompts](../../reference/prompts.md) — detalhes de scaffold_plugin, review_plugin e debug_plugin
+- [Referência de Prompts](../../reference/prompts.md) — detalhes de scaffold_plugin, review_plugin, debug_plugin e upgrade_plugin
 - [Problemas Comuns](../../troubleshooting/common-issues.md) — quando algo não funciona como esperado
 - [Voltar ao Índice](../../index.md)

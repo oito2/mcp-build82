@@ -24,7 +24,9 @@ import (
 // ReadVersionPhp reads pluginPath/version.php and extracts the four $plugin->* fields the
 // regex-backend readVersionPhp also extracts, with the same signature and semantics: a field that's
 // absent, or whose value isn't the expected node kind, comes back as an empty string rather than
-// an error, so version.php parsing never fails the whole plugin detection.
+// an error, so version.php parsing never fails the whole plugin detection. When a field is
+// assigned more than once, the last assignment wins, as when PHP runs the file; comments are not
+// part of the tree, so a commented-out assignment is never read.
 func ReadVersionPhp(pluginPath string) (component, version, requires, maturity string) {
 	tree, src, err := ParseFile(filepath.Join(pluginPath, "version.php"))
 	if err != nil {
@@ -33,25 +35,43 @@ func ReadVersionPhp(pluginPath string) (component, version, requires, maturity s
 	defer tree.Release()
 	root := tree.RootNode()
 
-	if v := FindAssignment(root, MatchPluginField(src, "component")); v != nil {
+	if v := findLastAssignment(root, MatchPluginField(src, "component")); v != nil {
 		component, _ = StringValue(v, src)
 	}
-	if v := FindAssignment(root, MatchPluginField(src, "version")); v != nil {
-		version = integerText(v, src)
+	if v := findLastAssignment(root, MatchPluginField(src, "version")); v != nil {
+		version = numberText(v, src)
 	}
-	if v := FindAssignment(root, MatchPluginField(src, "requires")); v != nil {
-		requires = integerText(v, src)
+	if v := findLastAssignment(root, MatchPluginField(src, "requires")); v != nil {
+		requires = numberText(v, src)
 	}
-	if v := FindAssignment(root, MatchPluginField(src, "maturity")); v != nil && v.Type(phpLang) == "name" {
+	if v := findLastAssignment(root, MatchPluginField(src, "maturity")); v != nil && v.Type(phpLang) == "name" {
 		maturity = v.Text(src)
 	}
 	return
 }
 
-// integerText returns an `integer` node's literal text as-is (not round-tripped through strconv),
-// matching the regex backend's own string-typed Version/Requires fields exactly.
-func integerText(node *gotreesitter.Node, src []byte) string {
-	if node.Type(phpLang) != "integer" {
+// findLastAssignment is FindAssignment returning the value node of the last matching assignment
+// in document order instead of the first.
+func findLastAssignment(root *gotreesitter.Node, lhsMatch func(lhs *gotreesitter.Node) bool) *gotreesitter.Node {
+	var found *gotreesitter.Node
+	gotreesitter.Walk(root, func(n *gotreesitter.Node, depth int) gotreesitter.WalkAction {
+		if n.Type(phpLang) != "assignment_expression" {
+			return gotreesitter.WalkContinue
+		}
+		children := namedChildren(n)
+		if len(children) == 2 && lhsMatch(children[0]) {
+			found = children[1]
+		}
+		return gotreesitter.WalkContinue
+	})
+	return found
+}
+
+// numberText returns an `integer` or `float` node's literal text as-is (not round-tripped through
+// strconv), matching the regex backend's own string-typed Version/Requires fields exactly,
+// decimal part included.
+func numberText(node *gotreesitter.Node, src []byte) string {
+	if t := node.Type(phpLang); t != "integer" && t != "float" {
 		return ""
 	}
 	return node.Text(src)

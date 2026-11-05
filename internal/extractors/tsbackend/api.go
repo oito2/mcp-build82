@@ -38,8 +38,7 @@ func ExtractFunctionsFromPhpFile(filePath string) []phptypes.ApiFunction {
 	file := filepath.Base(filePath)
 
 	var results []phptypes.ApiFunction
-	for i := 0; i < root.NamedChildCount(); i++ {
-		fn := root.NamedChild(i)
+	for _, fn := range namedChildren(root) {
 		if fn.Type(phpLang) != "function_definition" {
 			continue
 		}

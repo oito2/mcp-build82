@@ -29,7 +29,6 @@ import (
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/generators"
-	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
 // BatchMode selects which plugins plugin_batch processes.
@@ -73,20 +72,20 @@ type BatchPluginResult struct {
 // BatchOutput is the structured output of plugin_batch: the selection mode and one entry per
 // processed plugin, in processing order.
 type BatchOutput struct {
-	Mode    BatchMode           `json:"mode"`
-	Plugins []BatchPluginOutput `json:"plugins"`
+	Mode    BatchMode           `json:"mode" jsonschema:"Plugin selection used: dev, all or list"`
+	Plugins []BatchPluginOutput `json:"plugins" jsonschema:"One entry per processed plugin, in processing order"`
 }
 
 // BatchPluginOutput is one processed plugin of a BatchOutput: its component, its path relative to
 // the Moodle root, the counts of generated, cached and failed context files, and the error message
 // when processing aborted.
 type BatchPluginOutput struct {
-	Component string `json:"component"`
-	Path      string `json:"path"`
-	Generated int    `json:"generated"`
-	Skipped   int    `json:"skipped"`
-	Failed    int    `json:"failed"`
-	Error     string `json:"error,omitempty"`
+	Component string `json:"component" jsonschema:"Frankenstyle component of the plugin"`
+	Path      string `json:"path" jsonschema:"Plugin directory relative to the Moodle root"`
+	Generated int    `json:"generated" jsonschema:"Number of context files written"`
+	Skipped   int    `json:"skipped" jsonschema:"Number of context files served from the cache"`
+	Failed    int    `json:"failed" jsonschema:"Number of context files that could not be generated"`
+	Error     string `json:"error,omitempty" jsonschema:"Why processing of this plugin aborted, when it did"`
 }
 
 // buildBatchOutput converts the batch `results` into a BatchOutput for `mode`, with plugin paths
@@ -106,11 +105,18 @@ func buildBatchOutput(mode BatchMode, moodlePath string, results []BatchPluginRe
 func RegisterBatchTool(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "plugin_batch",
+		InputSchema: inputSchemaFor[BatchInput](),
 		Annotations: toolAnnotations("Generate Context for Many Plugins", false, false, true, false),
 		Description: "Bulk-generates context for multiple plugins at once: 'dev' mode processes every " +
 			".indevelopment-marked plugin (default), 'all' processes every plugin in the installation, " +
 			"'list' processes an explicit set of plugin identifiers.",
-	}, withRecover(handleBatch))
+	}, withRecover(withResourceNotifications(server, handleBatch, func(_ BatchInput, out BatchOutput) []string {
+		components := make([]string, 0, len(out.Plugins))
+		for _, p := range out.Plugins {
+			components = append(components, p.Component)
+		}
+		return pluginResourceURIs(components...)
+	})))
 }
 
 // handleBatch regenerates context for the plugins selected by `in.Mode` (default "dev"),
@@ -120,12 +126,9 @@ func RegisterBatchTool(server *mcp.Server) {
 // invalid configuration or an unresolvable plugin selection is returned as an error, so that
 // result has no structured output.
 func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (*mcp.CallToolResult, BatchOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, BatchOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, BatchOutput{}, resultError(toolutil.NotInitialized())
+		return nil, BatchOutput{}, err
 	}
 	if in.Mode == "" {
 		in.Mode = BatchModeDev
@@ -143,6 +146,7 @@ func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (
 	shouldMarkAsDev := in.Mode == BatchModeDev || in.MarkAsDev
 
 	cache.Global.EnsureLoaded(cfg.MoodlePath)
+	statsBefore := cache.Global.Stats()
 	var results []BatchPluginResult
 	if in.Parallel > 0 {
 		results = processBatchParallel(pluginPaths, cfg.MoodlePath, in.Force, shouldMarkAsDev, in.Parallel)
@@ -161,7 +165,7 @@ func handleBatch(ctx context.Context, req *mcp.CallToolRequest, in BatchInput) (
 		fmt.Fprintln(os.Stderr, "[build82] warning: failed to update MOODLE_AI_INDEX.md:", r.Error)
 	}
 
-	return structuredResult(in.Format, false, renderBatchReport(in, modeDescription, results), buildBatchOutput(in.Mode, cfg.MoodlePath, results))
+	return structuredResult(in.Format, false, renderBatchReport(in, modeDescription, results, cache.Global.Stats().Since(statsBefore)), buildBatchOutput(in.Mode, cfg.MoodlePath, results))
 }
 
 // processBatchParallel runs processPlugin for every path in `pluginPaths` on a worker pool whose
@@ -207,7 +211,7 @@ func processBatchParallel(pluginPaths []string, moodlePath string, force, markAs
 func resolveBatchPlugins(in BatchInput, moodlePath string) ([]string, string, *mcp.CallToolResult) {
 	switch in.Mode {
 	case BatchModeAll:
-		dirs := findAllPlugins(moodlePath)
+		dirs := generators.FindPluginDirs(moodlePath)
 		if len(dirs) == 0 {
 			return nil, "", textResult(true, "❌ No plugins found in this Moodle installation.")
 		}
@@ -222,6 +226,9 @@ func resolveBatchPlugins(in BatchInput, moodlePath string) ([]string, string, *m
 		}
 		var resolved []string
 		var unresolved []string
+		// Identifiers naming the same plugin (repeated, or a component and its path) are processed
+		// once; processing a plugin twice at the same time would race on its output files.
+		seen := map[string]struct{}{}
 		for _, id := range in.Plugins {
 			// This is the only mode that accepts caller-supplied paths, so each identifier must be
 			// checked to lie within the Moodle root; otherwise an absolute path or one containing
@@ -231,6 +238,10 @@ func resolveBatchPlugins(in BatchInput, moodlePath string) ([]string, string, *m
 				unresolved = append(unresolved, id)
 				continue
 			}
+			if _, dup := seen[path]; dup {
+				continue
+			}
+			seen[path] = struct{}{}
 			resolved = append(resolved, path)
 		}
 		if len(unresolved) > 0 {
@@ -264,8 +275,11 @@ func processPlugin(pluginPath, moodlePath string, force, markAsDev bool) (result
 		}
 	}()
 
-	if info, err := extractors.DetectPlugin(pluginPath); err == nil {
+	// The detected plugin is handed to the generator, which would otherwise detect it again.
+	var detected *extractors.PluginInfo
+	if info, err := detectPlugin(pluginPath); err == nil {
 		result.Component = info.Component
+		detected = &info
 	}
 
 	if force {
@@ -274,7 +288,7 @@ func processPlugin(pluginPath, moodlePath string, force, markAsDev bool) (result
 		}
 	}
 
-	genResult := generators.GenerateAllForPluginCore(pluginPath, moodlePath, markAsDev, nil)
+	genResult := generators.GenerateAllForPluginCore(pluginPath, moodlePath, markAsDev, detected)
 	for _, f := range genResult.Files {
 		switch {
 		case !f.Success:
@@ -290,7 +304,7 @@ func processPlugin(pluginPath, moodlePath string, force, markAsDev bool) (result
 
 // renderBatchReport renders the Markdown report of a batch run described by `in` and
 // `modeDescription`, grouping `results` into regenerated, cached and failed plugins.
-func renderBatchReport(in BatchInput, modeDescription string, results []BatchPluginResult) string {
+func renderBatchReport(in BatchInput, modeDescription string, results []BatchPluginResult, stats cache.CacheStats) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Plugin Batch — %s\n\nTotal: %d, mode: %s, force: %v\n\n", modeDescription, len(results), in.Mode, in.Force)
 
@@ -329,8 +343,7 @@ func renderBatchReport(in BatchInput, modeDescription string, results []BatchPlu
 		b.WriteString("\n")
 	}
 
-	stats := cache.Global.Stats()
-	fmt.Fprintf(&b, "Cache: %d hits, %d misses, %d skips\n", stats.Hits, stats.Misses, stats.Skips)
+	fmt.Fprintf(&b, "Cache (this call): %d hits, %d misses, %d skips\n", stats.Hits, stats.Misses, stats.Skips)
 
 	if (in.Mode == BatchModeAll || in.Mode == BatchModeList) && len(regenerated)+len(cached) > 0 {
 		if in.MarkAsDev {

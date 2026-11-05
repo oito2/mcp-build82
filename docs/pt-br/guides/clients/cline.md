@@ -18,7 +18,7 @@ build82 install cline
 
 O que ele faz, exatamente:
 
-1. Verifica se Cline (VS Code extension / CLI) foi detectado (o diretório globalStorage do Cline no VS Code estável existe, ou o diretório da CLI do Cline existe: `~/.cline`, `$CLINE_DIR` quando essa variável tem um caminho absoluto, ou `$CLINE_DATA_DIR` quando essa variável está definida); caso contrário imprime `Skipped: Cline (VS Code extension / CLI) not detected.` e não altera nada.
+1. Verifica se Cline (VS Code extension / CLI) foi detectado (o diretório globalStorage do Cline no VS Code estável existe, ou o diretório da CLI do Cline existe: `~/.cline`, `$CLINE_DIR` quando essa variável tem um caminho absoluto, ou `$CLINE_DATA_DIR` quando essa variável tem um caminho absoluto); caso contrário imprime `Skipped: Cline (VS Code extension / CLI) not detected.` e não altera nada.
 2. Pergunta a raiz do Moodle (sugere o diretório atual se parecer uma raiz do Moodle).
 3. Mescla uma entrada `build82` em cada arquivo de configurações do Cline cujo local pai existe (veja a tabela abaixo), no objeto `mcpServers` do nível raiz, preservando as demais entradas, a ordem das chaves e cada valor como foi escrito (só a indentação é normalizada para 2 espaços), as permissões do arquivo e um link simbólico nesse caminho (o arquivo apontado é que é gravado). Uma entrada `build82` nova vai para o fim do objeto. Se o arquivo não existir, ele é criado.
 4. Registra o caminho absoluto do binário `build82` em execução como comando (stdio) e define uma única variável de ambiente, `BUILD82_MOODLE_PATH`.
@@ -48,7 +48,7 @@ O instalador escreve em cada local que existir, então uma máquina com a extens
 | Extensão do VS Code, Windows | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` |
 | Cline CLI (todos os sistemas) | `~/.cline/data/settings/cline_mcp_settings.json` |
 | Cline CLI com `CLINE_DIR` definida (caminho absoluto) | `$CLINE_DIR/data/settings/cline_mcp_settings.json` |
-| Cline CLI com `CLINE_DATA_DIR` definida | `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` (tem precedência sobre `CLINE_DIR`) |
+| Cline CLI com `CLINE_DATA_DIR` definida com um caminho absoluto | `$CLINE_DATA_DIR/settings/cline_mcp_settings.json` (tem precedência sobre `CLINE_DIR`) |
 
 Apenas o VS Code estável é detectado (não Insiders, VSCodium nem instalações portáteis).
 

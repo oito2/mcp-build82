@@ -20,8 +20,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/oito2/mcp-build82/internal/phpcs"
 )
 
 // This file tests the rendered content of successful scaffold_plugin, review_plugin and
@@ -284,13 +287,86 @@ func TestHandleScaffoldPrompt_ContentReflectsTypeAndFeatures(t *testing.T) {
 	if !strings.Contains(text, "mod/widget") {
 		t.Errorf("expected the directory, got:\n%s", text)
 	}
-	if !strings.Contains(text, "`{component}_add_instance`") {
-		t.Errorf("expected the mod-specific type note, got:\n%s", text)
+	if !strings.Contains(text, "`{name}_add_instance`") || strings.Contains(text, "{component}_add_instance") {
+		t.Errorf("expected the mod-specific type note naming callbacks after the module, got:\n%s", text)
+	}
+	if !strings.Contains(text, "`lang/en/widget.php`") {
+		t.Errorf("expected the module's language file lang/en/widget.php, got:\n%s", text)
 	}
 	if !strings.Contains(text, "db/install.xml") {
 		t.Errorf("expected db/install.xml listed for the database feature, got:\n%s", text)
 	}
 	if !strings.Contains(text, "db/tasks.php") {
 		t.Errorf("expected db/tasks.php listed for the scheduled-tasks feature, got:\n%s", text)
+	}
+}
+
+// init makes phpcs unavailable for every prompt test, so the rendered prompts do not depend on the
+// tools installed on the machine; tests that need it available override phpcsReady.
+func init() {
+	phpcsReady = func(context.Context) bool { return false }
+}
+
+// TestHandleReviewPrompt_SuggestsCodingStyleCheckWhenPhpcsReady verifies that the review prompt
+// asks for check_coding_style only when phpcs is available and the focus covers standards.
+func TestHandleReviewPrompt_SuggestsCodingStyleCheckWhenPhpcsReady(t *testing.T) {
+	_, pluginPath := setupPromptPlugin(t)
+	for _, c := range []struct {
+		ready bool
+		focus string
+		want  bool
+	}{
+		{true, "", true}, {true, "standards", true}, {true, "security", false},
+		{false, "", false}, {false, "standards", false},
+	} {
+		saved := phpcsReady
+		phpcsReady = func(context.Context) bool { return c.ready }
+		args := map[string]string{"plugin": pluginPath}
+		if c.focus != "" {
+			args["focus"] = c.focus
+		}
+		result, err := handleReviewPrompt(context.Background(), promptReq(args))
+		phpcsReady = saved
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := textContentOf(t, result.Messages[2])
+		if got := strings.Contains(text, "call the `check_coding_style` tool on `local_demo`"); got != c.want {
+			t.Errorf("ready=%v focus=%q: mentions check_coding_style = %v, want %v", c.ready, c.focus, got, c.want)
+		}
+	}
+}
+
+// TestCachedPhpcsReady_ChecksOncePerTTL verifies that the phpcs check runs once per
+// phpcsReadyTTL, again once the answer is older, and that an answer taken with a cancelled context
+// is not reused.
+func TestCachedPhpcsReady_ChecksOncePerTTL(t *testing.T) {
+	checks := 0
+	savedCheck := phpcsCheck
+	phpcsCheck = func(context.Context) phpcs.Status { checks++; return phpcs.Status{State: phpcs.Ready} }
+	t.Cleanup(func() {
+		phpcsCheck = savedCheck
+		phpcsReadyAt = time.Time{}
+	})
+	phpcsReadyAt = time.Time{}
+
+	ctx := context.Background()
+	first, second := cachedPhpcsReady(ctx), cachedPhpcsReady(ctx)
+	if !first || !second || checks != 1 {
+		t.Fatalf("got %d checks for two calls within the TTL, want 1", checks)
+	}
+	phpcsReadyAt = time.Now().Add(-2 * phpcsReadyTTL)
+	cachedPhpcsReady(ctx)
+	if checks != 2 {
+		t.Errorf("got %d checks after the TTL expired, want 2", checks)
+	}
+
+	phpcsReadyAt = time.Time{}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	cachedPhpcsReady(cancelled)
+	cachedPhpcsReady(ctx)
+	if checks != 4 {
+		t.Errorf("an answer taken with a cancelled context was reused (%d checks, want 4)", checks)
 	}
 }

@@ -21,9 +21,8 @@ import (
 	"testing"
 )
 
-// realMoodleRoots lists the entries under /srv/workspace/www/html/mdle/ that are full Moodle
-// installations, used by the parity tests that compare both backends on real files.
-var realMoodleRoots = []string{"dev-401", "dev-402", "dev-500", "dev-uvv"}
+// realMoodleRoots lists the entries of realMoodleDir that are full Moodle installations, used by the parity tests that compare both backends on real files.
+var realMoodleRoots = []string{"mdle-401", "mdle-405", "mdle-500", "mdle-uvv"}
 
 // tasksFixtureWellFormed is a tasks.php with two scheduled tasks.
 const tasksFixtureWellFormed = `<?php
@@ -120,7 +119,7 @@ func TestParseTasksPhp_TreesitterBackendParity(t *testing.T) {
 func TestParseTasksPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

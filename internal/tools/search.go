@@ -23,14 +23,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/generators"
-	"github.com/oito2/mcp-build82/internal/moodletype"
-	"github.com/oito2/mcp-build82/internal/toolutil"
 )
 
 // maxQueryLen is the maximum accepted length of the search_plugins and search_api queries. It
@@ -114,12 +113,18 @@ func fuzzySearchInFile(filePath, query string) []string {
 	}
 	lowerQ := strings.ToLower(query)
 	threshold := maxEditDistance(len(lowerQ))
+	queryRunes := []rune(lowerQ)
 
 	var out []string
 	for _, line := range lines {
 		lowerLine := strings.ToLower(line)
 		for _, word := range wordSplit(lowerLine) {
-			if levenshtein(word, lowerQ) <= threshold {
+			// The edit distance is at least the difference in length, so words whose length is
+			// too far from the query's are rejected without computing it.
+			if diff := utf8.RuneCountInString(word) - len(queryRunes); diff > threshold || -diff > threshold {
+				continue
+			}
+			if levenshteinRunes([]rune(word), queryRunes) <= threshold {
 				out = append(out, line)
 				break
 			}
@@ -148,13 +153,9 @@ func wordSplit(s string) []string {
 	})
 }
 
-// levenshtein returns the edit distance (insertions, deletions, substitutions) between the
-// strings `a` and `b`, measured in runes.
-func levenshtein(a, b string) int {
-	if a == b {
-		return 0
-	}
-	ra, rb := []rune(a), []rune(b)
+// levenshteinRunes returns the edit distance (insertions, deletions, substitutions) between the
+// rune slices `ra` and `rb`.
+func levenshteinRunes(ra, rb []rune) int {
 	prev := make([]int, len(rb)+1)
 	cur := make([]int, len(rb)+1)
 	for j := range prev {
@@ -194,9 +195,9 @@ func min3(a, b, c int) int {
 // SearchPluginsOutput is the structured output of search_plugins: the query, whether the matches
 // come from the fuzzy fallback, and the matching rows of the plugin index (Markdown table rows).
 type SearchPluginsOutput struct {
-	Query   string   `json:"query"`
-	Fuzzy   bool     `json:"fuzzy"`
-	Matches []string `json:"matches"`
+	Query   string   `json:"query" jsonschema:"The query that was searched"`
+	Fuzzy   bool     `json:"fuzzy" jsonschema:"True when no exact match existed and the matches come from fuzzy matching"`
+	Matches []string `json:"matches" jsonschema:"Matching rows of the plugin index, as Markdown table rows (Component | Type | Name | Version | Path)"`
 }
 
 // SearchPluginsInput is the input of the search_plugins tool.
@@ -211,24 +212,28 @@ type SearchPluginsInput struct {
 func RegisterSearchTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_plugins",
+		InputSchema: inputSchemaFor[SearchPluginsInput](),
 		Annotations: toolAnnotations("Search Plugins", true, false, true, false),
 		Description: "Searches the plugin index (component, type, name, version, path) for a query string.",
 	}, withRecover(handleSearchPlugins))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_api",
+		InputSchema: inputSchemaFor[SearchApiInput](),
 		Annotations: toolAnnotations("Search Moodle API", true, false, true, false),
 		Description: "Searches the public Moodle API index (lib/ functions) for a query string, filterable by visibility.",
 	}, withRecover(handleSearchApi))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_plugin_info",
+		InputSchema: inputSchemaFor[GetPluginInfoInput](),
 		Annotations: toolAnnotations("Get Plugin Info", true, false, true, false),
 		Description: "Returns the generated AI context for a plugin (or live-detected metadata if not yet generated).",
 	}, withRecover(handleGetPluginInfo))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_dev_plugins",
+		InputSchema: inputSchemaFor[ListDevPluginsInput](),
 		Annotations: toolAnnotations("List Dev Plugins", true, false, true, false),
 		Description: "Lists every plugin currently marked .indevelopment.",
 	}, withRecover(handleListDevPlugins))
@@ -251,12 +256,9 @@ func normalizeLimit(limit, def int) int {
 // with an empty list. A missing or invalid configuration, a query longer than maxQueryLen, or a
 // missing index is returned as an error, so that result has no structured output.
 func handleSearchPlugins(ctx context.Context, req *mcp.CallToolRequest, in SearchPluginsInput) (*mcp.CallToolResult, SearchPluginsOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, SearchPluginsOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, SearchPluginsOutput{}, resultError(toolutil.NotInitialized())
+		return nil, SearchPluginsOutput{}, err
 	}
 	if len(in.Query) > maxQueryLen {
 		return nil, SearchPluginsOutput{}, toolError(fmt.Sprintf("❌ query too long (max %d characters).", maxQueryLen))
@@ -342,10 +344,10 @@ const (
 // applied, whether the matches come from the fuzzy fallback, and the matching function entries of
 // the API index (Markdown list items).
 type SearchApiOutput struct {
-	Query      string              `json:"query"`
-	Visibility ApiVisibilityFilter `json:"visibility"`
-	Fuzzy      bool                `json:"fuzzy"`
-	Matches    []string            `json:"matches"`
+	Query      string              `json:"query" jsonschema:"The query that was searched"`
+	Visibility ApiVisibilityFilter `json:"visibility" jsonschema:"Visibility filter applied: public, deprecated or all"`
+	Fuzzy      bool                `json:"fuzzy" jsonschema:"True when no exact match existed and the matches come from fuzzy matching"`
+	Matches    []string            `json:"matches" jsonschema:"Matching function entries of the API index, as Markdown list items"`
 }
 
 // SearchApiInput is the input of the search_api tool.
@@ -363,12 +365,9 @@ type SearchApiInput struct {
 // list. A missing or invalid configuration, a query longer than maxQueryLen, or a missing index is
 // returned as an error, so that result has no structured output.
 func handleSearchApi(ctx context.Context, req *mcp.CallToolRequest, in SearchApiInput) (*mcp.CallToolResult, SearchApiOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, SearchApiOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, SearchApiOutput{}, resultError(toolutil.NotInitialized())
+		return nil, SearchApiOutput{}, err
 	}
 	if len(in.Query) > maxQueryLen {
 		return nil, SearchApiOutput{}, toolError(fmt.Sprintf("❌ query too long (max %d characters).", maxQueryLen))
@@ -452,16 +451,16 @@ type GetPluginInfoInput struct {
 // GetPluginInfoOutput is the structured output of get_plugin_info: the plugin's path relative to
 // the Moodle root, its detected metadata, and its generated PLUGIN_AI_CONTEXT.md when it exists.
 type GetPluginInfoOutput struct {
-	Path         string `json:"path"`
-	Component    string `json:"component,omitempty"`
-	Type         string `json:"type,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Requires     string `json:"requires,omitempty"`
-	DisplayName  string `json:"display_name,omitempty"`
-	Maturity     string `json:"maturity,omitempty"`
-	HasAIContext bool   `json:"has_ai_context"`
-	AIContext    string `json:"ai_context,omitempty"`
+	Path         string `json:"path" jsonschema:"Plugin directory relative to the Moodle root"`
+	Component    string `json:"component,omitempty" jsonschema:"Frankenstyle component of the plugin"`
+	Type         string `json:"type,omitempty" jsonschema:"Moodle plugin type"`
+	Name         string `json:"name,omitempty" jsonschema:"Plugin directory name"`
+	Version      string `json:"version,omitempty" jsonschema:"Plugin version from its version.php"`
+	Requires     string `json:"requires,omitempty" jsonschema:"Minimum Moodle version required ($plugin->requires)"`
+	DisplayName  string `json:"display_name,omitempty" jsonschema:"Plugin name from its English language file"`
+	Maturity     string `json:"maturity,omitempty" jsonschema:"Declared maturity constant, such as MATURITY_STABLE"`
+	HasAIContext bool   `json:"has_ai_context" jsonschema:"Whether .build82/PLUGIN_AI_CONTEXT.md has been generated for the plugin"`
+	AIContext    string `json:"ai_context,omitempty" jsonschema:"Full content of .build82/PLUGIN_AI_CONTEXT.md, when it exists"`
 }
 
 // handleGetPluginInfo returns the generated PLUGIN_AI_CONTEXT.md of the plugin named by
@@ -470,23 +469,16 @@ type GetPluginInfoOutput struct {
 // AI context. A plugin that cannot be found is returned as an error — listing the index entries
 // matching the identifier when there are any — so that result has no structured output.
 func handleGetPluginInfo(ctx context.Context, req *mcp.CallToolRequest, in GetPluginInfoInput) (*mcp.CallToolResult, GetPluginInfoOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, GetPluginInfoOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, GetPluginInfoOutput{}, resultError(toolutil.NotInitialized())
+		return nil, GetPluginInfoOutput{}, err
 	}
 
+	// An unresolvable identifier, one resolving outside the Moodle root, the Moodle root itself and
+	// a directory without version.php are treated the same: they fall through to the index lookup
+	// and not-found handling below, because this tool is a forgiving, best-effort lookup.
 	pluginPath, ok := resolvePluginPathWithinMoodle(in.Plugin, cfg.MoodlePath)
 	if !ok {
-		// An unresolvable identifier and one resolving outside the Moodle root are treated the
-		// same: both fall through to the index lookup and not-found handling below, because this
-		// tool is a forgiving, best-effort lookup.
-		pluginPath = filepath.Join(cfg.MoodlePath, in.Plugin)
-	}
-
-	if _, err := os.Stat(pluginPath); err != nil || !moodletype.IsWithinMoodle(pluginPath, cfg.MoodlePath) {
 		indexPath := generators.GlobalOutputPath(cfg.MoodlePath, "MOODLE_PLUGIN_INDEX.md")
 		possible := filterTableRows(searchInFile(indexPath, in.Plugin))
 		if len(possible) > 0 {
@@ -535,16 +527,16 @@ type ListDevPluginsInput struct {
 // ListDevPluginsOutput is the structured output of list_dev_plugins: one entry per plugin marked
 // .indevelopment, sorted by path.
 type ListDevPluginsOutput struct {
-	Plugins []DevPlugin `json:"plugins"`
+	Plugins []DevPlugin `json:"plugins" jsonschema:"Every plugin marked .indevelopment, sorted by path"`
 }
 
 // DevPlugin is one .indevelopment plugin of a ListDevPluginsOutput: its component ("_(unknown)_"
 // when it cannot be detected), its path relative to the Moodle root, and whether its
 // PLUGIN_AI_CONTEXT.md has been generated.
 type DevPlugin struct {
-	Component    string `json:"component"`
-	Path         string `json:"path"`
-	HasAIContext bool   `json:"has_ai_context"`
+	Component    string `json:"component" jsonschema:"Frankenstyle component of the plugin, or _(unknown)_ when it cannot be detected"`
+	Path         string `json:"path" jsonschema:"Plugin directory relative to the Moodle root"`
+	HasAIContext bool   `json:"has_ai_context" jsonschema:"Whether .build82/PLUGIN_AI_CONTEXT.md has been generated for the plugin"`
 }
 
 // handleListDevPlugins lists the plugins marked .indevelopment with their path relative to the
@@ -552,12 +544,9 @@ type DevPlugin struct {
 // ListDevPluginsOutput in either format; no dev plugin is a success with an empty list. A missing
 // or invalid configuration is returned as an error, so that result has no structured output.
 func handleListDevPlugins(ctx context.Context, req *mcp.CallToolRequest, in ListDevPluginsInput) (*mcp.CallToolResult, ListDevPluginsOutput, error) {
-	cfg, err := requireConfig()
+	cfg, err := loadConfig()
 	if err != nil {
-		return nil, ListDevPluginsOutput{}, configError(err)
-	}
-	if cfg == nil {
-		return nil, ListDevPluginsOutput{}, resultError(toolutil.NotInitialized())
+		return nil, ListDevPluginsOutput{}, err
 	}
 
 	dirs := generators.FindDevPlugins(cfg.MoodlePath)

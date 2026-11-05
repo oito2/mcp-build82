@@ -51,9 +51,9 @@ MCP supports two transport mechanisms:
 | Transport                  | How it works                                     | When to use                                                                 |
 | --------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
 | **stdio**                  | The server runs as a subprocess of the AI client | Local use — Moodle on the same machine as your editor/CLI (the default)     |
-| **HTTP (Streamable HTTP)** | The server runs as an independent HTTP service   | Remote use — Moodle on a separate server or isolated production environment |
+| **HTTP (Streamable HTTP)** | The server runs as an independent HTTP service   | Remote servers — not offered by `build82`                                   |
 
-For most developers running Moodle locally, the **stdio** transport is the default (`build82` with no flags) and does not require any additional configuration.
+`build82` uses **stdio** only: it is a local development tool that runs next to your Moodle source and your AI client, so it needs no network configuration.
 
 ---
 

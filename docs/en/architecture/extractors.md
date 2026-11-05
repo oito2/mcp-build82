@@ -81,7 +81,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** `lib/*.php`, top-level functions only (not methods inside classes).
 
-**Parsing strategy (regex):** line-by-line scan pairing a preceding `/** ... */` PHPDoc block (tolerating up to 3 blank lines and, since the tree-sitter parity work, a PHP 8 `#[...]` attribute in between) with the following `function` declaration.
+**Parsing strategy (regex):** line-by-line scan pairing a preceding `/** ... */` PHPDoc block (tolerating up to 3 blank lines and PHP 8 `#[...]` attributes in between, single- or multi-line, and a `**/` closer) with the following `function` declaration.
 
 **Visibility classification** (shared with the tree-sitter backend via `internal/phpdoc`):
 
@@ -93,7 +93,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 | No restrictive tag | `public` |
 | No PHPDoc at all | `unverified` |
 
-`ExtractMoodleApi` scans the `.php` files directly under `lib/` (priority files first, not recursive), counts every visibility class, and returns only `public` and `deprecated` functions.
+`ExtractMoodleApi` scans the `.php` files directly under `lib/` (sorted by name, not recursive), counts every visibility class, and returns only `public` and `deprecated` functions.
 
 **Feeds:** `MOODLE_API_INDEX.md`.
 
@@ -103,7 +103,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** `db/install.xml` of any plugin.
 
-**Parsing strategy:** Go's standard `encoding/xml` to decode XMLDB, tolerating malformed individual tables without aborting the whole file. XMLDB's `NOTNULL`/`SEQUENCE`/`NEXT` string attributes (`"true"`/`"false"`) are normalized to real booleans.
+**Parsing strategy:** Go's standard `encoding/xml` to decode XMLDB; a file that does not decode as a whole gives no schema (there is no per-table recovery). XMLDB's `NOTNULL`/`SEQUENCE`/`NEXT` string attributes (`"true"`/`"false"`) are normalized to real booleans.
 
 **Feeds:** `PLUGIN_DB_TABLES.md` and `MOODLE_DB_TABLES_INDEX.md`.
 
@@ -121,9 +121,9 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 ### `hooks.go` — Hook API (Moodle 4.3+)
 
-**Source file:** `db/hooks.php` (registered callbacks) + `classes/hook/*.php` (hook definitions) + the plugin's `lib.php`/`locallib.php` (legacy callback detection).
+**Source file:** `db/hooks.php` (registered callbacks) + `classes/hook/*.php` (hook definitions) + the plugin's `lib.php` (legacy callback detection — Moodle loads only `lib.php` to call a plugin's callbacks, so a function in `locallib.php` is not one; `DetectLegacyCallbacksInFile` applies the same rules to another file, and `PLUGIN_CALLBACK_INDEX.md` uses it to list `locallib.php` declarations apart, as a warning).
 
-**Parsing strategy:** three sub-scans — the callbacks array in `db/hooks.php`, class-level metadata in `classes/hook/*.php`, and a regex over `lib.php` matching any of the 12 legacy callback suffixes (`before_footer`, `extend_navigation`, `cron`, ...) that have a documented Hook API replacement in `internal/legacyhooks`.
+**Parsing strategy:** three sub-scans — the callbacks array in `db/hooks.php`, class-level metadata in `classes/hook/*.php`, and a regex over `lib.php` matching any of the 11 legacy callback suffixes (`before_footer`, `before_http_headers`, `standard_footer_html`, ...) that Moodle core declares as replaced by a hook (the hook class's `replaces_callbacks` attribute or `get_deprecated_plugin_callbacks()`), listed with their hook in `internal/legacyhooks`; an activity module's callbacks are matched under both `mod_<name>_` and `<name>_`, and names are compared case-insensitively, as PHP does. Both backends build the warnings with `legacyhooks.Warnings`, and the lib.php table of `PLUGIN_CALLBACK_INDEX.md` lists exactly these warnings. A declaration indented inside an `if (!function_exists(...))` guard counts (with braces or the `if (): ... endif;` form); a commented-out one does not. Registrations and event observers may name classes as quoted strings or as `X::class` (alone, `X::class . '::method'`, or `[X::class, 'method']`, giving `X::method`), a hook class may be declared with any `abstract`, `final` and `readonly` modifiers (the same declaration rule as `classes.go`), and hook metadata is read from the `#[\core\attribute\label]`, `#[\core\attribute\tags]` and `#[\core\attribute\hook\replaces_callbacks]` attributes before the `get_hook_description()`/`get_hook_tags()` methods and the class docblock.
 
 **Feeds:** `PLUGIN_CALLBACK_INDEX.md` and `PLUGIN_DEPENDENCIES.md`.
 
@@ -133,7 +133,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** `db/access.php` of any plugin.
 
-**Parsing strategy:** array-literal parsing over the `$capabilities` array, keyed by `component:capabilityname`. `riskbitmask` may be a single named constant (e.g. `RISK_SPAM`) or a composite `|`-expression across several — the tree-sitter backend resolves the full expression; the regex backend only captures the first token (documented as a known divergence, not a bug to fix, since it's the regex approach's inherent limit).
+**Parsing strategy:** array-literal parsing over the `$capabilities` array, keyed by `type/name:capabilityname`. `riskbitmask` may be a single named constant (e.g. `RISK_SPAM`) or a composite `|`-expression across several — the tree-sitter backend resolves the full expression; the regex backend only captures the first token (documented as a known divergence, not a bug to fix, since it's the regex approach's inherent limit).
 
 **Feeds:** `PLUGIN_DEPENDENCIES.md` and `MOODLE_CAPABILITIES_INDEX.md`.
 
@@ -143,7 +143,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** `classes/**/*.php` of any plugin (also `MOODLE_CLASSES_INDEX.md`'s restricted `**/classes/**/*.php` glob across the whole installation) and `db/renamedclasses.php`.
 
-**Parsing strategy:** line-by-line regex for `class`/`interface`/`trait`/`enum` declarations, with a small look-ahead to join a multi-line declaration up to the opening `{`. Skips symlinked files during the directory walk (a real file planted as a symlink pointing outside the scanned tree must not have its target's content parsed).
+**Parsing strategy:** line-by-line regex for `class`/`interface`/`trait`/`enum` declarations (with any `abstract`, `final` and `readonly` modifiers), with a small look-ahead to join a multi-line declaration up to the opening `{`. Skips symlinked files during the directory walk (a real file planted as a symlink pointing outside the scanned tree must not have its target's content parsed).
 
 **Feeds:** `MOODLE_CLASSES_INDEX.md` and `PLUGIN_ARCHITECTURE.md`.
 
@@ -153,7 +153,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** `db/services.php` of any plugin.
 
-**Parsing strategy:** array-literal parsing over the `$functions` array, keyed by function name, extracting `classname`, `methodname`, `description`, `type`, `ajax`, `capabilities`.
+**Parsing strategy:** array-literal parsing over the `$functions` array, keyed by function name, extracting `classname`, `methodname`, `description`, `type`, `ajax`, `capabilities`. A value written as a `.` concatenation of strings (common in core's long descriptions) is read whole by the tree-sitter backend; the regex backend keeps only the first fragment (`tsbackend/KNOWN_DIVERGENCES.md` §3). Boolean fields (`ajax` here, `internal`, `blocking`, `defaultenabled` elsewhere) accept `true`/`false` in any letter case and `1`/`0` on both backends; any other value keeps the field's default.
 
 **Feeds:** `PLUGIN_ENDPOINT_INDEX.md` and `MOODLE_SERVICES_INDEX.md`.
 
@@ -173,7 +173,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** `db/upgrade.php` of any plugin.
 
-**Parsing strategy:** control-flow scan (not just array literals) for `if ($oldversion < NNNNNNNNNN)` blocks (exactly 10 digits), with a three-level description fallback: an inline comment on the same line, then the first `new xmldb_table('literal')` reference whose argument actually resolves to a string literal, then the first loose `//` comment anywhere in the block.
+**Parsing strategy:** control-flow scan (not just array literals) for `if ($oldversion < V)` blocks, where V is a ten-digit version optionally followed by a decimal part (`2024010100` or `2024010100.01`; any other number is not a step), steps sorted numerically, with a three-level description fallback: an inline comment on the same line, then the first `new xmldb_table('literal')` reference whose argument actually resolves to a string literal, then the first loose `//` comment anywhere in the block. The regex backend locates the steps with comments and heredoc bodies blanked out, so a commented-out step is not reported and a quote inside a heredoc cannot hide the steps after it; descriptions are read from the original text. The steps are located by the same function as `ParseUpgradeOperations` (`upgradeops.go`, which feeds `doctor`'s upgrade-consistency check), and the tree-sitter backend applies the same version rule (`moodletype.IsUpgradeVersion`).
 
 **Feeds:** `PLUGIN_DEPENDENCIES.md`.
 
@@ -193,7 +193,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 **Source file:** plugin `version.php` + `lang/en/<component>.php`.
 
-**Parsing strategy:** regex over `$plugin->component`, `$plugin->version`, `$plugin->requires`, `$plugin->maturity`. Uses `internal/moodletype`'s `PluginTypeToDir` map (37 entries) as the single source of truth to resolve a plugin's type from its directory path.
+**Parsing strategy:** regex over `$plugin->component`, `$plugin->version`, `$plugin->requires`, `$plugin->maturity`, with comments blanked out first (a commented-out assignment is ignored). When a field is assigned more than once, the last assignment wins, as when PHP runs the file, and a decimal version (`2024010100.01`) keeps its decimal part; the tree-sitter backend reads the same values. Uses `internal/moodletype`'s `PluginTypeToDir` map (the core plugin types of `lib/components.json` plus the common subplugin types) as the single source of truth to resolve a plugin's type from its directory path.
 
 **Feeds:** `PLUGIN_CONTEXT.md` and `MOODLE_PLUGIN_INDEX.md`.
 
@@ -201,7 +201,7 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 ### `settings.go`, `subplugins.go` — extra plugin metadata
 
-`settings.go` regex-scans `settings.php` for `new admin_setting_*(` declarations (a non-literal name is kept with an empty name). `subplugins.go` reads `db/subplugins.json` (both the `plugintypes` and the newer `subplugintypes` keys) and only falls back to `db/subplugins.php` when the JSON file does not exist. Neither has a tree-sitter counterpart.
+`settings.go` regex-scans `settings.php` for `new admin_setting_*(` declarations (a non-literal name is kept with an empty name). `subplugins.go` reads `db/subplugins.json` (the Moodle-root-relative `plugintypes` paths; a type only under the plugin-relative `subplugintypes` key is joined to the plugin's directory) and only falls back to `db/subplugins.php` when the JSON file does not exist. Neither has a tree-sitter counterpart.
 
 **Feeds:** `PLUGIN_SETTINGS.md` (settings); `PLUGIN_DEPENDENCIES.md` and `PLUGIN_AI_CONTEXT.md` (subplugins; settings also in the AI context).
 
@@ -209,13 +209,13 @@ The extractors that parse structured PHP — `api.go`, `capabilities.go`, `class
 
 ### `deprecated.go`, `capabilityusage.go`, `langstrings.go` — `doctor` diagnostics
 
-Regex-only scans used exclusively by the `doctor` tool, not by any generator: bare calls to functions marked `@deprecated` in the core API index (method and static calls are ignored), capability checks against the plugin's own capability prefix (`mod/name`, `block/name` for those two types, the frankenstyle component otherwise), and `get_string()` calls versus the keys declared in `lang/en/<component>.php`.
+Regex-only scans used exclusively by the `doctor` tool, not by any generator: bare calls to functions marked `@deprecated` in the core API index (method and static calls are ignored), capability checks against the plugin's own capability prefix (`type/name`, the form Moodle requires for every plugin type), and `get_string()` calls naming the plugin (`mod_forum` or `forum` for a module) versus the keys declared in its English language file (`lang/en/<component>.php`, `lang/en/<name>.php` for a module).
 
 ---
 
 ### `shared.go` — safe file access
 
-`readFileCapped` refuses to buffer files larger than 8 MiB and reads only regular files (`fsutil.ReadRegular`: a symbolic link at the file is not followed, and a FIFO or device is refused without blocking), and the shared directory walk skips symlinked files, so scanning untrusted third-party plugin code cannot exhaust memory, read files outside the plugin tree, or hang on a planted FIFO. The tree-sitter backend applies the same size cap and the same regular-file rule.
+`readFileCapped` refuses to buffer files larger than 8 MiB and reads only regular files (`fsutil.ReadRegular`: a symbolic link at the file is not followed, and a FIFO or device is refused without blocking), and the shared directory walk skips symlinked files, so scanning untrusted third-party plugin code cannot exhaust memory, read files outside the plugin tree, or hang on a planted FIFO. A file that grows past the cap while it is read is refused too. The tree-sitter backend applies the same regular-file rule with a lower cap of 2 MiB, since a parse allocates hundreds of bytes per source byte, and stops a parse after 10 seconds; a parse that stops early (timeout or the parser's memory budget) is an error, never a partial tree. Line numbers of regex matches come from a precomputed index of line breaks, so a file with many matches is scanned in linear time.
 
 ---
 

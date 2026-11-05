@@ -18,6 +18,7 @@ package extractors
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -170,13 +171,15 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity(t *testing.T) {
 
 // TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles compares both backends on
 // every top-level lib/*.php file of the available Moodle installations, keyed by (file, name).
-// Differences are logged rather than failed. The test is skipped when no file is found.
+// A function found only by the regex backend fails, since no known divergence goes that way; the
+// documented divergences in the other direction and in visibility are logged. The test is skipped
+// when no file is found.
 func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *testing.T) {
 	type key struct{ file, name string }
 
 	var totalChecked int
 	for _, root := range realMoodleRoots {
-		libDir := filepath.Join("/srv/workspace/www/html/mdle", root, "lib")
+		libDir := filepath.Join(realMoodleDir(), root, "lib")
 		entries, err := os.ReadDir(libDir)
 		if err != nil {
 			continue
@@ -201,14 +204,15 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *tes
 				tsByKey[key{f.File, f.Name}] = f
 			}
 
-			// Disagreements are expected where tree-sitter is more accurate than the regex backend:
-			// reference-return functions, PHP 8 attributes between a docblock and its function,
-			// malformed doc continuation lines and non-standard closing markers.
+			// Disagreements are expected where tree-sitter is more accurate than the regex backend
+			// (tsbackend/KNOWN_DIVERGENCES.md §8–§11): reference-return functions, PHP 8 attributes
+			// between a docblock and its function, malformed doc continuation lines and non-standard
+			// closing markers.
 			for k, rf := range regexByKey {
 				totalChecked++
 				tf, ok := tsByKey[k]
 				if !ok {
-					t.Logf("%s: function %q found by regex but not treesitter (unexpected direction — investigate if seen)", path, k.name)
+					t.Errorf("%s: function %q found by regex but not treesitter (no known divergence goes this way)", path, k.name)
 					continue
 				}
 				if rf.Visibility != tf.Visibility {
@@ -228,30 +232,24 @@ func TestExtractFunctionsFromPhpFile_TreesitterBackendParity_RealLibFiles(t *tes
 	t.Logf("checked %d functions across all real lib/*.php files", totalChecked)
 }
 
-// TestExtractMoodleApi_PriorityFileOrdering verifies that getPhpFiles lists priority files in
-// PriorityFiles order before any other file.
-func TestExtractMoodleApi_PriorityFileOrdering(t *testing.T) {
+// TestGetPhpFiles_ListsTopLevelPhpFilesSorted verifies that getPhpFiles lists every .php file
+// directly inside the directory once, sorted by name, and nothing from subdirectories or with
+// another extension.
+func TestGetPhpFiles_ListsTopLevelPhpFilesSorted(t *testing.T) {
 	dir := t.TempDir()
-	mustMkdirAll(t, filepath.Join(dir, "lib"))
-	// A non-priority file must come after every priority file that is present.
-	mustWriteFile(t, filepath.Join(dir, "lib", "accesslib.php"), "<?php\nfunction acc_fn() {}\n")
-	mustWriteFile(t, filepath.Join(dir, "lib", "moodlelib.php"), "<?php\nfunction moo_fn() {}\n")
-	mustWriteFile(t, filepath.Join(dir, "lib", "zzz_not_priority.php"), "<?php\nfunction zzz_fn() {}\n")
-
-	files := getPhpFiles(filepath.Join(dir, "lib"))
-	// moodlelib.php precedes accesslib.php in PriorityFiles, and both precede the other file.
-	idxMoodle, idxAccess, idxZzz := -1, -1, -1
-	for i, f := range files {
-		switch filepath.Base(f) {
-		case "moodlelib.php":
-			idxMoodle = i
-		case "accesslib.php":
-			idxAccess = i
-		case "zzz_not_priority.php":
-			idxZzz = i
-		}
+	mustMkdirAll(t, filepath.Join(dir, "lib", "grade"))
+	for _, name := range []string{"zzz.php", "accesslib.php", "moodlelib.php", "notes.txt", "grade/gradelib.php"} {
+		mustWriteFile(t, filepath.Join(dir, "lib", filepath.FromSlash(name)), "<?php\n")
 	}
-	if idxMoodle >= idxAccess || idxAccess >= idxZzz {
-		t.Errorf("expected priority-file ordering moodlelib < accesslib < non-priority, got %v", files)
+
+	var got []string
+	for _, f := range getPhpFiles(filepath.Join(dir, "lib")) {
+		got = append(got, filepath.Base(f))
+	}
+	if want := []string{"accesslib.php", "moodlelib.php", "zzz.php"}; !slices.Equal(got, want) {
+		t.Errorf("getPhpFiles = %v, want %v", got, want)
+	}
+	if getPhpFiles(filepath.Join(dir, "missing")) != nil {
+		t.Error("a missing directory must give nil")
 	}
 }

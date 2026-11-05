@@ -161,7 +161,7 @@ func assertCapabilityParity(t *testing.T, path, name string, regex, ts Capabilit
 func TestParseAccessPhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

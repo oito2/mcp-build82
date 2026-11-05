@@ -16,8 +16,10 @@
 package moodletype
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -246,5 +248,90 @@ func TestResolvePluginPath_AbsoluteIdentifierIsCleaned(t *testing.T) {
 	}
 	if IsWithinMoodle(resolved, moodlePath) {
 		t.Errorf("resolved path %q must not be considered within %q", resolved, moodlePath)
+	}
+}
+
+// TestResolvePluginPath_RejectsMalformedComponents verifies that component identifiers whose type
+// or name is not a plain identifier are never joined into a path.
+func TestResolvePluginPath_RejectsMalformedComponents(t *testing.T) {
+	moodle := t.TempDir()
+	mustMkdirAll(t, filepath.Join(moodle, "mod"))
+	for _, id := range []string{"mod_..", "mod_.", "_..", "MOD_x", "mod_x/../.."} {
+		if p, ok := ResolvePluginPath(id, moodle); ok && !strings.Contains(id, "/") {
+			t.Errorf("ResolvePluginPath(%q) = %q, true; want false", id, p)
+		}
+	}
+	if p, ok := ResolvePluginPath("mod_..", moodle); ok {
+		t.Errorf("mod_.. resolved to %s", p)
+	}
+}
+
+// TestIsWithinMoodle_NewPathUnderSymlinkedDirectory verifies that a path that does not exist yet
+// is checked through the symbolic links of its existing ancestors, and that a dangling link
+// ancestor is refused.
+func TestIsWithinMoodle_NewPathUnderSymlinkedDirectory(t *testing.T) {
+	moodle := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(moodle, "local")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if IsWithinMoodle(filepath.Join(moodle, "local", "newplugin"), moodle) {
+		t.Error("a new path under a directory linked outside the root must be outside")
+	}
+	if err := os.Symlink(filepath.Join(outside, "gone"), filepath.Join(moodle, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if IsWithinMoodle(filepath.Join(moodle, "dangling", "x"), moodle) {
+		t.Error("a path under a dangling symbolic link must be outside")
+	}
+	if !IsWithinMoodle(filepath.Join(moodle, "blocks", "new", "deeper"), moodle) {
+		t.Error("a new path under plain directories must be inside")
+	}
+}
+
+// TestIsRoot verifies the Moodle-root comparison, including through a symbolic link.
+func TestIsRoot(t *testing.T) {
+	moodle := t.TempDir()
+	if !IsRoot(moodle, moodle) || !IsRoot(filepath.Join(moodle, "local", ".."), moodle) {
+		t.Error("the root itself must be the root")
+	}
+	if IsRoot(filepath.Join(moodle, "local"), moodle) {
+		t.Error("a subdirectory is not the root")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(moodle, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !IsRoot(link, moodle) {
+		t.Error("a link to the root is the root")
+	}
+}
+
+// TestPluginTypeToDir_MatchesRealComponentsJSON verifies that every core plugin type a real Moodle
+// declares in lib/components.json is mapped to the same directory. The installation is read from
+// BUILD82_REAL_MOODLE_DIR (default /srv/workspace/localhost/html) and the test is skipped when it is
+// absent.
+func TestPluginTypeToDir_MatchesRealComponentsJSON(t *testing.T) {
+	root := os.Getenv("BUILD82_REAL_MOODLE_DIR")
+	if root == "" {
+		root = "/srv/workspace/localhost/html"
+	}
+	for _, install := range []string{"mdle-401", "mdle-500"} {
+		data, err := os.ReadFile(filepath.Join(root, install, "lib", "components.json"))
+		if err != nil {
+			t.Logf("%s: skipped (%v)", install, err)
+			continue
+		}
+		var doc struct {
+			PluginTypes map[string]string `json:"plugintypes"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("%s: %v", install, err)
+		}
+		for typ, dir := range doc.PluginTypes {
+			if got := PluginTypeToDir[typ]; got != dir {
+				t.Errorf("%s: PluginTypeToDir[%q] = %q, want %q", install, typ, got, dir)
+			}
+		}
 	}
 }

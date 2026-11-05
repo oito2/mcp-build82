@@ -13,7 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package prompts implements the scaffold_plugin, review_plugin, and debug_plugin MCP prompts.
+// Package prompts implements the scaffold_plugin, review_plugin, debug_plugin and upgrade_plugin MCP
+// prompts.
 //
 // Each prompt renders a context-rich request for an AI client: a few-shot example followed by the
 // user's request enriched with plugin metadata and generated context files read from disk.

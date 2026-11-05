@@ -18,10 +18,12 @@ package extractors
 import (
 	"encoding/json"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
 
+	"github.com/oito2/mcp-build82/internal/moodletype"
 	"github.com/oito2/mcp-build82/internal/phparray"
 )
 
@@ -33,8 +35,9 @@ type Subplugin struct {
 	Path string
 }
 
-// subpluginsJSON mirrors the shape of db/subplugins.json. The "plugintypes" and "subplugintypes"
-// keys are both read and merged.
+// subpluginsJSON mirrors the shape of db/subplugins.json: "plugintypes" maps each subplugin type to
+// its directory relative to the Moodle root, "subplugintypes" to its directory relative to the
+// plugin.
 type subpluginsJSON struct {
 	PluginTypes    map[string]string `json:"plugintypes"`
 	SubpluginTypes map[string]string `json:"subplugintypes"`
@@ -51,15 +54,18 @@ var legacySubpluginEntryPattern = regexp.MustCompile(`'([a-zA-Z0-9_]+)'\s*=>\s*'
 func ExtractSubplugins(pluginPath string) []Subplugin {
 	jsonPath := filepath.Join(pluginPath, "db", "subplugins.json")
 	if _, err := os.Stat(jsonPath); err == nil {
-		types, _ := parseSubpluginsJSON(jsonPath)
+		types, _ := parseSubpluginsJSON(jsonPath, moodleRelativePluginDir(pluginPath))
 		return sortedSubplugins(types)
 	}
 	return sortedSubplugins(parseLegacySubpluginsPhp(filepath.Join(pluginPath, "db", "subplugins.php")))
 }
 
-// parseSubpluginsJSON reads the type-to-path map from the JSON file at `path`. The boolean is false
-// when the file cannot be read or decoded.
-func parseSubpluginsJSON(path string) (map[string]string, bool) {
+// parseSubpluginsJSON reads the type-to-path map, with paths relative to the Moodle root, from the
+// JSON file at `path`. "plugintypes" entries are taken as they are; a type found only under
+// "subplugintypes" has its plugin-relative directory joined to `pluginDir`, the plugin's own
+// directory relative to the Moodle root, and is left out when `pluginDir` is unknown (""). The
+// boolean is false when the file cannot be read or decoded.
+func parseSubpluginsJSON(path, pluginDir string) (map[string]string, bool) {
 	content, err := readFileCapped(path)
 	if err != nil {
 		return nil, false
@@ -73,9 +79,22 @@ func parseSubpluginsJSON(path string) (map[string]string, bool) {
 		types[k] = v
 	}
 	for k, v := range doc.SubpluginTypes {
-		types[k] = v
+		if _, ok := types[k]; !ok && pluginDir != "" {
+			types[k] = pathpkg.Join(pluginDir, filepath.ToSlash(v))
+		}
 	}
 	return types, true
+}
+
+// moodleRelativePluginDir returns the directory of the plugin at `pluginPath` relative to the Moodle
+// root, slash-separated ("mod/assign"), from its inferred type's directory and its own name, or ""
+// when the type has no known directory.
+func moodleRelativePluginDir(pluginPath string) string {
+	dir, ok := moodletype.PluginTypeToDir[inferTypeFromPath(pluginPath)]
+	if !ok {
+		return ""
+	}
+	return dir + "/" + filepath.Base(pluginPath)
 }
 
 // parseLegacySubpluginsPhp reads the type-to-path map from the $subplugins array of the PHP file at

@@ -18,9 +18,7 @@ package tsbackend
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 // upgradeFixtureWellFormed is a well-formed db/upgrade.php fixture.
@@ -147,7 +145,7 @@ function xmldb_local_test_upgrade($oldversion) {
 func TestParseUpgradePhp_RealFileRegression(t *testing.T) {
 	var found int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}
@@ -164,17 +162,6 @@ func TestParseUpgradePhp_RealFileRegression(t *testing.T) {
 	}
 	if found == 0 {
 		t.Skip("no db/upgrade.php files found across real Moodle installations")
-	}
-}
-
-func TestTruncate120_RuneSafe(t *testing.T) {
-	in := strings.Repeat("a", 119) + "é" + "tail"
-	got := truncate120(in)
-	if !utf8.ValidString(got) || len(got) > 120 {
-		t.Fatalf("truncate120 = %q (len %d), want valid UTF-8 within 120 bytes", got, len(got))
-	}
-	if got != strings.Repeat("a", 119) {
-		t.Errorf("truncate120 = %q, want the 119-byte prefix", got)
 	}
 }
 

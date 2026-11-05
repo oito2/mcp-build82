@@ -32,11 +32,15 @@ type GeneratorResult = genutil.GeneratorResult
 // skipWalkDirNames lists the directory names walkMoodleFiles never descends into.
 var skipWalkDirNames = map[string]bool{"vendor": true, "node_modules": true, ".git": true}
 
-// walkMoodleFiles walks `root` recursively, skipping vendor/, node_modules/, and .git/ at every
+// walkMoodleFiles is the shared walker behind the glob/find helpers (walkMoodleTree). It is a
+// variable so tests can count the walks of a generation run.
+var walkMoodleFiles = walkMoodleTree
+
+// walkMoodleTree walks `root` recursively, skipping vendor/, node_modules/, and .git/ at every
 // depth, and calls `visit` for every non-directory, non-symlink entry with its full path and its
-// root-relative slash-form path. Unreadable entries are silently skipped. It is the shared walker
-// behind the glob/find helpers, which differ only in their match predicate.
-func walkMoodleFiles(root string, visit func(path, relSlash string)) {
+// root-relative slash-form path. Unreadable entries are silently skipped. The glob/find helpers
+// built on it differ only in their match predicate.
+func walkMoodleTree(root string, visit func(path, relSlash string)) {
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -59,6 +63,29 @@ func walkMoodleFiles(root string, visit func(path, relSlash string)) {
 		visit(path, filepath.ToSlash(rel))
 		return nil
 	})
+}
+
+// pluginSourceFiles returns every regular file of the plugin at `pluginPath` that its generated
+// files can be derived from: all files below it except symbolic links and the contents of vendor/,
+// node_modules/, .git/ and ContextDir directories (build82's own outputs) at any depth.
+func pluginSourceFiles(pluginPath string) []string {
+	var files []string
+	_ = filepath.WalkDir(pluginPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path != pluginPath && (skipWalkDirNames[d.Name()] || d.Name() == ContextDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type().IsRegular() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files
 }
 
 // globMoodleSuffix returns the full path of every file under `root` whose root-relative slash-form
@@ -91,10 +118,65 @@ func globMoodleBasename(root, name string) []string {
 func globMoodleClassesPhp(root string) []string {
 	var matches []string
 	walkMoodleFiles(root, func(path, relSlash string) {
-		if !strings.HasSuffix(path, ".php") {
-			return
+		if isClassesPhp(path, relSlash) {
+			matches = append(matches, path)
 		}
-		if strings.Contains(relSlash, "/classes/") || strings.HasPrefix(relSlash, "classes/") {
+	})
+	return matches
+}
+
+// isClassesPhp reports whether the file at `path` (root-relative slash form `relSlash`) is a .php
+// file inside a "classes/" directory at any depth.
+func isClassesPhp(path, relSlash string) bool {
+	return strings.HasSuffix(path, ".php") &&
+		(strings.Contains(relSlash, "/classes/") || strings.HasPrefix(relSlash, "classes/"))
+}
+
+// moodleTreeFiles holds the files of a Moodle tree that the global indexes read, as
+// globMoodleSuffix and globMoodleClassesPhp list them, and the development plugins as
+// FindDevPlugins lists them.
+type moodleTreeFiles struct {
+	events, tasks, services, dbTables, capabilities, classes []string
+	devPlugins                                               []string
+}
+
+// scanMoodleTree lists, in a single walk of `root`, every file that the global indexes read: the
+// db/events.php, db/tasks.php, db/services.php, db/install.xml and db/access.php files, and the .php
+// files inside classes/ directories, and the roots of the plugins marked in development.
+func scanMoodleTree(root string) moodleTreeFiles {
+	var t moodleTreeFiles
+	var markers []string
+	walkMoodleFiles(root, func(path, relSlash string) {
+		if filepath.Base(path) == ".indevelopment" && filepath.Base(filepath.Dir(path)) == ContextDir {
+			markers = append(markers, path)
+		}
+		switch {
+		case strings.HasSuffix(relSlash, "db/events.php"):
+			t.events = append(t.events, path)
+		case strings.HasSuffix(relSlash, "db/tasks.php"):
+			t.tasks = append(t.tasks, path)
+		case strings.HasSuffix(relSlash, "db/services.php"):
+			t.services = append(t.services, path)
+		case strings.HasSuffix(relSlash, "db/install.xml"):
+			t.dbTables = append(t.dbTables, path)
+		case strings.HasSuffix(relSlash, "db/access.php"):
+			t.capabilities = append(t.capabilities, path)
+		}
+		if isClassesPhp(path, relSlash) {
+			t.classes = append(t.classes, path)
+		}
+	})
+	t.devPlugins = devPluginDirs(markers)
+	return t
+}
+
+// FindContextFiles returns the full path of every ContextDir/`name` file under `root`, found with
+// the same walk as the other helpers (vendor/, node_modules/ and .git/ skipped, symbolic links
+// ignored). The result is in walk order.
+func FindContextFiles(root, name string) []string {
+	var matches []string
+	walkMoodleFiles(root, func(path, _ string) {
+		if filepath.Base(path) == name && filepath.Base(filepath.Dir(path)) == ContextDir {
 			matches = append(matches, path)
 		}
 	})
@@ -103,19 +185,18 @@ func globMoodleClassesPhp(root string) []string {
 
 // findMarkerFiles returns the full path of every ContextDir/.indevelopment marker file under `root`.
 func findMarkerFiles(root string) []string {
-	var matches []string
-	walkMoodleFiles(root, func(path, _ string) {
-		if filepath.Base(path) == ".indevelopment" && filepath.Base(filepath.Dir(path)) == ContextDir {
-			matches = append(matches, path)
-		}
-	})
-	return matches
+	return FindContextFiles(root, ".indevelopment")
 }
 
 // FindDevPlugins returns the root directory of every plugin under `moodlePath` that has a
 // ContextDir/.indevelopment marker. The result is unsorted and free of duplicates.
 func FindDevPlugins(moodlePath string) []string {
-	markers := findMarkerFiles(moodlePath)
+	return devPluginDirs(findMarkerFiles(moodlePath))
+}
+
+// devPluginDirs returns the plugin root of each ContextDir/.indevelopment marker in `markers`,
+// in order and free of duplicates.
+func devPluginDirs(markers []string) []string {
 	seen := map[string]struct{}{}
 	var dirs []string
 	for _, m := range markers {

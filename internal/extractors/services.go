@@ -51,7 +51,7 @@ func ParseServicesPhp(filePath string) *ServicesExtraction {
 
 	functions := []WebServiceFunction{}
 	for _, entry := range phparray.SplitKeyedEntries(body, functionKeyPattern) {
-		classname := phparray.ExtractString(entry.Body, "classname")
+		classname := phparray.ExtractStringOrClass(entry.Body, "classname")
 		description := phparray.ExtractString(entry.Body, "description")
 		if classname == "" && description == "" {
 			continue

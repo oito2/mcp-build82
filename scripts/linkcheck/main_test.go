@@ -69,3 +69,35 @@ func TestCheck_ReportsMissingFilesAndAnchors(t *testing.T) {
 		t.Errorf("unexpected problems: %v", problems)
 	}
 }
+
+// TestCheck_ReportsBrokenHTMLLinks verifies that the src and href attributes of HTML tags embedded
+// in Markdown are checked like Markdown links (file and anchor), while external URLs and
+// attributes inside code spans are not.
+func TestCheck_ReportsBrokenHTMLLinks(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"logo.png": "png",
+		"b.md":     "# Usage\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := filepath.Join(dir, "a.md")
+	content := strings.Join([]string{
+		`<p align="center"><img src="logo.png" alt="ok"> <a href="b.md#usage">ok</a></p>`,
+		`<img src="https://example.com/x.png"> ` + "`<img src=\"code.png\">`",
+		`<img src="missing.png" width="64"> <a href="b.md#nope">bad</a>`,
+	}, "\n")
+	if err := os.WriteFile(a, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	problems := check([]string{a})
+	if len(problems) != 2 {
+		t.Fatalf("expected 2 problems, got %d: %v", len(problems), problems)
+	}
+	if !strings.Contains(problems[0], "a.md:3: missing.png: target does not exist") || !strings.Contains(problems[1], `no heading or anchor "nope"`) {
+		t.Errorf("unexpected problems: %v", problems)
+	}
+}

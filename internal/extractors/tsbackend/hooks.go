@@ -16,13 +16,14 @@
 package tsbackend
 
 import (
-	"fmt"
 	"path/filepath"
-	"sort"
+	"strings"
 
 	"github.com/odvcencio/gotreesitter"
 
 	"github.com/oito2/mcp-build82/internal/legacyhooks"
+	"github.com/oito2/mcp-build82/internal/moodletype"
+	"github.com/oito2/mcp-build82/internal/phparray"
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
@@ -85,7 +86,7 @@ func parseHookCallback(inner *gotreesitter.Node, src []byte) phptypes.HookCallba
 		case "hook":
 			legacyHook, _ = StringValue(value, src)
 		case "callback":
-			cb.Callback, _ = StringValue(value, src)
+			cb.Callback, _ = CallbackValue(value, src)
 		case "priority":
 			cb.Priority, _ = IntValue(value, src)
 		case "defaultenabled":
@@ -136,7 +137,11 @@ func parseHookDefinitionFile(root *gotreesitter.Node, src []byte) (phptypes.Hook
 	}
 	classNode := FindDescendant(root, func(n *gotreesitter.Node) bool { return n.Type(phpLang) == "class_declaration" })
 
-	description := methodReturnString(classNode, src, "get_hook_description")
+	label, attrTags, attrReplaces := phparray.HookAttributes(string(src))
+	description := label
+	if description == "" {
+		description = methodReturnString(classNode, src, "get_hook_description")
+	}
 	if description == "" {
 		// Anchored to the class's own immediately-preceding docblock via precedingDocComment,
 		// not a whole-file search, so a file-header docblock (license/@package) that sits
@@ -146,9 +151,15 @@ func parseHookDefinitionFile(root *gotreesitter.Node, src []byte) (phptypes.Hook
 		}
 	}
 
-	tags := methodReturnStringArray(classNode, src, "get_hook_tags")
+	tags := attrTags
+	if tags == nil {
+		tags = methodReturnStringArray(classNode, src, "get_hook_tags")
+	}
 
-	replaces := findKeyedStringAnywhere(root, "replaces", src)
+	replaces := attrReplaces
+	if replaces == "" {
+		replaces = findKeyedStringAnywhere(root, "replaces", src)
+	}
 	if replaces == "" {
 		replaces = classConstString(classNode, src, "DEPRECATED_CALLBACK")
 	}
@@ -280,50 +291,47 @@ func findKeyedStringAnywhere(root *gotreesitter.Node, key string, src []byte) st
 // --- Legacy callback detection (lib.php) ----------------------------------------------------------
 
 // DetectLegacyCallbacks scans pluginPath/lib.php for top-level functions matching
-// {component}_{legacy suffix}, for every suffix in legacyhooks.Map.
+// {name}_{legacy suffix}, for every suffix in legacyhooks.Map and every name in
+// moodletype.ComponentNames(component) (a module is also known by its short name).
 func DetectLegacyCallbacks(pluginPath, component string) []phptypes.LegacyCallbackWarning {
-	tree, src, err := ParseFile(filepath.Join(pluginPath, "lib.php"))
+	return DetectLegacyCallbacksInFile(filepath.Join(pluginPath, "lib.php"), component)
+}
+
+// DetectLegacyCallbacksInFile is DetectLegacyCallbacks over the PHP file at `filePath` instead of
+// the plugin's lib.php. It returns nil when the file cannot be parsed.
+func DetectLegacyCallbacksInFile(filePath, component string) []phptypes.LegacyCallbackWarning {
+	tree, src, err := ParseFile(filePath)
 	if err != nil {
 		return nil
 	}
 	defer tree.Release()
-	root := tree.RootNode()
+	declared := topLevelFunctionNames(tree.RootNode(), src)
 
-	var warnings []phptypes.LegacyCallbackWarning
-	for suffix, replacement := range legacyhooks.Map {
-		legacyFunction := component + "_" + suffix
-		if !hasTopLevelFunction(root, src, legacyFunction) {
-			continue
-		}
-		warnings = append(warnings, phptypes.LegacyCallbackWarning{
-			LegacyFunction: legacyFunction,
-			ReplacedBy:     replacement,
-			Guidance: fmt.Sprintf(
-				"Migrate %s to the Hook API: 1) add a %s entry to db/hooks.php's $callbacks array "+
-					"targeting %s; 2) implement the callback in classes/hook_callbacks.php; "+
-					"3) remove the legacy %s() function from lib.php.",
-				legacyFunction, legacyFunction, replacement, legacyFunction,
-			),
-		})
-	}
-	// legacyhooks.Map is a map, so the order warnings are appended in is non-deterministic across
-	// runs. Sort explicitly so the LegacyWarnings list is stable.
-	sort.Slice(warnings, func(i, j int) bool {
-		return warnings[i].LegacyFunction < warnings[j].LegacyFunction
+	return legacyhooks.Warnings(moodletype.ComponentNames(component), func(fn string) bool {
+		_, ok := declared[fn]
+		return ok
 	})
-	return warnings
 }
 
-// hasTopLevelFunction reports whether the file root declares a top-level function called name.
-func hasTopLevelFunction(root *gotreesitter.Node, src []byte, name string) bool {
-	for i := 0; i < root.NamedChildCount(); i++ {
-		c := root.NamedChild(i)
-		if c.Type(phpLang) != "function_definition" {
-			continue
-		}
-		if nameNode := FirstChildOfType(c, "name"); nameNode != nil && nameNode.Text(src) == name {
-			return true
+// topLevelFunctionNames returns the names of the global functions the file declares: those
+// directly under the file root and those inside top-level if/else blocks, such as the usual
+// `if (!function_exists('x')) { function x() {} }` guard. Function and class bodies are not
+// entered, since what they declare is not a top-level callback.
+func topLevelFunctionNames(root *gotreesitter.Node, src []byte) map[string]struct{} {
+	names := map[string]struct{}{}
+	var collect func(n *gotreesitter.Node)
+	collect = func(n *gotreesitter.Node) {
+		for _, c := range namedChildren(n) {
+			switch c.Type(phpLang) {
+			case "function_definition":
+				if nameNode := FirstChildOfType(c, "name"); nameNode != nil {
+					names[strings.ToLower(nameNode.Text(src))] = struct{}{}
+				}
+			case "if_statement", "compound_statement", "colon_block", "else_clause", "else_if_clause":
+				collect(c)
+			}
 		}
 	}
-	return false
+	collect(root)
+	return names
 }

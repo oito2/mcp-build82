@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -28,25 +27,6 @@ import (
 	"github.com/oito2/mcp-build82/internal/extractors"
 	"github.com/oito2/mcp-build82/internal/legacyhooks"
 )
-
-// TestLegacyCallbackSuffixesForIndex_MatchesLegacyhooksMap verifies that the callback suffix list
-// is derived from legacyhooks.Map: every key present, in sorted order, nothing extra.
-func TestLegacyCallbackSuffixesForIndex_MatchesLegacyhooksMap(t *testing.T) {
-	want := make([]string, 0, len(legacyhooks.Map))
-	for suffix := range legacyhooks.Map {
-		want = append(want, suffix)
-	}
-	sort.Strings(want)
-
-	if len(legacyCallbackSuffixesForIndex) != len(want) {
-		t.Fatalf("got %d suffixes, want %d: %v vs %v", len(legacyCallbackSuffixesForIndex), len(want), legacyCallbackSuffixesForIndex, want)
-	}
-	for i, suffix := range want {
-		if legacyCallbackSuffixesForIndex[i] != suffix {
-			t.Errorf("index %d: got %q, want %q (legacyCallbackSuffixesForIndex: %v)", i, legacyCallbackSuffixesForIndex[i], suffix, legacyCallbackSuffixesForIndex)
-		}
-	}
-}
 
 // TestBuildDirectoryTree_ExcludesDotfilesVendorNodeModules verifies the directory tree omits dot-directories, vendor and node_modules.
 func TestBuildDirectoryTree_ExcludesDotfilesVendorNodeModules(t *testing.T) {
@@ -69,29 +49,10 @@ func TestBuildDirectoryTree_ExcludesDotfilesVendorNodeModules(t *testing.T) {
 	}
 }
 
-// TestFunctionExistsInContent_SpaceBeforeParenAndCaseInsensitive verifies that
-// functionExistsInContent matches a declaration with a space before the parenthesis and a
-// differently-cased function name (PHP function names are case-insensitive).
-func TestFunctionExistsInContent_SpaceBeforeParenAndCaseInsensitive(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "lib.php")
-	mustWriteFile(t, path, "<?php\nfunction local_test_cron ()\n{\n}\n")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !functionExistsInContent(content, "local_test_cron") {
-		t.Error("expected a match despite the space before the parenthesis")
-	}
-
-	mustWriteFile(t, path, "<?php\nfunction Local_Test_Cron() {}\n")
-	content, err = os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !functionExistsInContent(content, "local_test_cron") {
-		t.Error("expected a case-insensitive match (PHP function names are case-insensitive)")
-	}
+// preloadPlugin returns the extracted data of the plugin `info`, as GenerateAllForPluginCore passes
+// it to the per-plugin generators.
+func preloadPlugin(info extractors.PluginInfo) *PreloadedPluginData {
+	return extractPluginData(info.Path, info.Component)
 }
 
 // testPluginInfo returns the PluginInfo detected at `path`, ignoring detection errors.
@@ -108,7 +69,7 @@ func TestGeneratePluginContext(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "db", "events.php"),
 		"<?php\n$observers = [['eventname' => '\\\\core\\\\event\\\\x', 'callback' => 'y::z']];")
 
-	result := GeneratePluginContext(testPluginInfo(dir), nil)
+	result := GeneratePluginContext(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -127,7 +88,7 @@ func TestGeneratePluginDependencies_HookApiConditionalSections(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
 	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\nfunction local_test_before_footer() {}\n")
 
-	result := GeneratePluginDependencies(testPluginInfo(dir), nil)
+	result := GeneratePluginDependencies(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -152,7 +113,7 @@ func TestGeneratePluginDependencies_RegisteredCallbacksSection(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, "db", "hooks.php"), `<?php
 $callbacks = [['hookname' => '\\core\\hook\\output\\before_footer', 'callback' => 'x::y']];`)
 
-	result := GeneratePluginDependencies(testPluginInfo(dir), nil)
+	result := GeneratePluginDependencies(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	content, _ := os.ReadFile(PluginOutputPath(dir, "PLUGIN_DEPENDENCIES.md"))
 	s := string(content)
 	if !result.Success || strings.Contains(s, "does not use the Hook API") {
@@ -176,7 +137,7 @@ func TestGeneratePluginDependencies_SubpluginsFromJson(t *testing.T) {
   }
 }`)
 
-	result := GeneratePluginDependencies(testPluginInfo(dir), nil)
+	result := GeneratePluginDependencies(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -202,7 +163,7 @@ $subplugins = array(
 );
 `)
 
-	result := GeneratePluginDependencies(testPluginInfo(dir), nil)
+	result := GeneratePluginDependencies(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -219,7 +180,7 @@ func TestGeneratePluginDependencies_NoSubpluginsShowsPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
 
-	result := GeneratePluginDependencies(testPluginInfo(dir), nil)
+	result := GeneratePluginDependencies(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -287,7 +248,7 @@ if ($hassiteconfig) {
 }
 `)
 
-	result := GeneratePluginSettings(testPluginInfo(dir), nil)
+	result := GeneratePluginSettings(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -303,7 +264,7 @@ func TestGeneratePluginSettings_NoSettingsShowsPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "version.php"), "<?php\n$plugin->component = 'local_test';\n")
 
-	result := GeneratePluginSettings(testPluginInfo(dir), nil)
+	result := GeneratePluginSettings(testPluginInfo(dir), preloadPlugin(testPluginInfo(dir)))
 	if !result.Success {
 		t.Fatalf("expected success, got %+v", result)
 	}
@@ -448,13 +409,144 @@ func TestGenerateAllForPlugin_MarkAsDevFalse(t *testing.T) {
 	}
 }
 
-// TestFunctionExistsInContent_IgnoresIndentedMethods verifies only top-level declarations match.
-func TestFunctionExistsInContent_IgnoresIndentedMethods(t *testing.T) {
-	src := []byte("<?php\nclass x {\n    public function local_a_cron() {}\n}\nfunction local_b_cron() {}\n")
-	if functionExistsInContent(src, "local_a_cron") {
-		t.Error("indented method must not match")
+// TestGenerateAllForPlugin_NewClassRegeneratesOutputs verifies that adding a class, even with an
+// old mtime, regenerates the plugin outputs that read classes/ instead of skipping them.
+func TestGenerateAllForPlugin_NewClassRegeneratesOutputs(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	pluginPath := filepath.Join(moodlePath, "local", "demo")
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	GenerateAllForPlugin(pluginPath, moodlePath, true, nil)
+	writeOld(t, filepath.Join(pluginPath, "classes", "brand_new_service.php"),
+		"<?php\nnamespace local_demo;\nclass brand_new_service {\n    public function run() {}\n}\n")
+	result := GenerateAllForPlugin(pluginPath, moodlePath, true, nil)
+
+	if resultFor(t, result.Files, "PLUGIN_ARCHITECTURE.md").Skipped {
+		t.Fatal("PLUGIN_ARCHITECTURE.md was skipped after a class was added")
 	}
-	if !functionExistsInContent(src, "local_b_cron") {
-		t.Error("top-level function must match")
+	content, _ := os.ReadFile(PluginOutputPath(pluginPath, "PLUGIN_ARCHITECTURE.md"))
+	if !strings.Contains(string(content), "brand_new_service") {
+		t.Errorf("the new class is missing from PLUGIN_ARCHITECTURE.md:\n%s", content)
+	}
+
+	again := GenerateAllForPlugin(pluginPath, moodlePath, true, nil)
+	for _, f := range again.Files {
+		if !f.Skipped {
+			t.Errorf("expected a cache hit when nothing changed, got %+v", f)
+		}
+	}
+}
+
+// TestGenerateAllForPlugin_FreshPluginIsNotExtracted verifies that the extractors run only when at
+// least one of the plugin's outputs is stale.
+func TestGenerateAllForPlugin_FreshPluginIsNotExtracted(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	pluginPath := filepath.Join(moodlePath, "local", "demo")
+	old := swapGlobalCache(cache.NewMtimeCache())
+	defer swapGlobalCache(old)
+
+	calls := 0
+	realExtract := extractPluginData
+	extractPluginData = func(pluginPath, component string) *PreloadedPluginData {
+		calls++
+		return realExtract(pluginPath, component)
+	}
+	t.Cleanup(func() { extractPluginData = realExtract })
+
+	GenerateAllForPlugin(pluginPath, moodlePath, true, nil)
+	GenerateAllForPlugin(pluginPath, moodlePath, true, nil)
+	if calls != 1 {
+		t.Fatalf("extractors ran %d times for a first run and a fresh rerun, want 1", calls)
+	}
+
+	cache.Global.Invalidate(PluginOutputPath(pluginPath, "PLUGIN_EVENTS.md"))
+	result := GenerateAllForPlugin(pluginPath, moodlePath, true, nil)
+	if calls != 2 {
+		t.Errorf("extractors ran %d times after one output was invalidated, want 2", calls)
+	}
+	if resultFor(t, result.Files, "PLUGIN_EVENTS.md").Skipped || !resultFor(t, result.Files, "PLUGIN_CONTEXT.md").Skipped {
+		t.Errorf("only the invalidated output must be regenerated, got %+v", result.Files)
+	}
+}
+
+// TestGeneratePluginCallbackIndex_OversizedLibPhpIsNotRead verifies that a lib.php larger than
+// extractors.MaxReadableFileSize is not read into memory by the callback index.
+func TestGeneratePluginCallbackIndex_OversizedLibPhpIsNotRead(t *testing.T) {
+	moodlePath := copyFixtureMoodleTree(t)
+	pluginPath := filepath.Join(moodlePath, "local", "demo")
+	padding := strings.Repeat("// padding\n", extractors.MaxReadableFileSize/11+1)
+	mustWriteFile(t, filepath.Join(pluginPath, "lib.php"), "<?php\n"+padding+"function local_demo_before_footer() {}\n")
+
+	info, err := extractors.DetectPlugin(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.MoodlePath = moodlePath
+	if r := GeneratePluginCallbackIndex(info, preloadPlugin(info)); !r.Success {
+		t.Fatalf("generation failed: %+v", r)
+	}
+	content, _ := os.ReadFile(PluginOutputPath(pluginPath, "PLUGIN_CALLBACK_INDEX.md"))
+	if strings.Contains(string(content), "local_demo_before_footer") {
+		t.Errorf("a function from an oversized lib.php was reported, so the file was read:\n%s", content)
+	}
+}
+
+// TestGeneratePluginCallbackIndex_NamesTheReplacementOfEveryLegacyCallback verifies that a legacy
+// callback declared in lib.php, under a module's short name, inside a function_exists guard and
+// with different letter case, is listed with its Hook API replacement; one declared in
+// locallib.php (which Moodle never loads for callbacks) is listed only in the separate "never
+// called" section; and a declaration inside a block comment is not listed at all.
+func TestGeneratePluginCallbackIndex_NamesTheReplacementOfEveryLegacyCallback(t *testing.T) {
+	moodlePath := t.TempDir()
+	pluginPath := filepath.Join(moodlePath, "mod", "demo")
+	mustMkdirAll(t, pluginPath)
+	mustWriteFile(t, filepath.Join(pluginPath, "version.php"), "<?php\n$plugin->component = 'mod_demo';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(pluginPath, "lib.php"), "<?php\nif (!function_exists('demo_before_footer')) {\n    function Demo_Before_Footer() {}\n}\n/*\nfunction demo_before_http_headers() {}\n*/\n")
+	mustWriteFile(t, filepath.Join(pluginPath, "locallib.php"), "<?php\nfunction demo_before_standard_top_of_body_html() {}\n")
+
+	info, err := extractors.DetectPlugin(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := GeneratePluginCallbackIndex(info, preloadPlugin(info)); !r.Success {
+		t.Fatalf("generation failed: %+v", r)
+	}
+	content, _ := os.ReadFile(PluginOutputPath(pluginPath, "PLUGIN_CALLBACK_INDEX.md"))
+	libSection, localSection, found := strings.Cut(string(content), "### Legacy Callbacks in locallib.php (never called)")
+	if !found {
+		t.Fatalf("missing locallib.php section in:\n%s", content)
+	}
+	want := "| `demo_before_footer` | ⚠ `" + legacyhooks.Map["before_footer"] + "` |"
+	if !strings.Contains(libSection, want) {
+		t.Errorf("missing lib.php row %q in:\n%s", want, content)
+	}
+	misplaced := "| `demo_before_standard_top_of_body_html` | ⚠ `" + legacyhooks.Map["before_standard_top_of_body_html"] + "` |"
+	if strings.Contains(libSection, "demo_before_standard_top_of_body_html") || !strings.Contains(localSection, misplaced) {
+		t.Errorf("the locallib.php callback must be listed only in its own section:\n%s", content)
+	}
+	if strings.Contains(string(content), "demo_before_http_headers") {
+		t.Errorf("a commented-out declaration is listed:\n%s", content)
+	}
+}
+
+// TestGeneratePluginCallbackIndex_NoLocallibSectionWithoutMisplacedCallbacks verifies that the
+// locallib.php section is omitted when locallib.php declares no legacy callback.
+func TestGeneratePluginCallbackIndex_NoLocallibSectionWithoutMisplacedCallbacks(t *testing.T) {
+	pluginPath := filepath.Join(t.TempDir(), "local", "demo")
+	mustMkdirAll(t, pluginPath)
+	mustWriteFile(t, filepath.Join(pluginPath, "version.php"), "<?php\n$plugin->component = 'local_demo';\n$plugin->version = 2024010100;\n")
+	mustWriteFile(t, filepath.Join(pluginPath, "locallib.php"), "<?php\nfunction local_demo_helper() {}\n")
+
+	info, err := extractors.DetectPlugin(pluginPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := GeneratePluginCallbackIndex(info, preloadPlugin(info)); !r.Success {
+		t.Fatalf("generation failed: %+v", r)
+	}
+	content, _ := os.ReadFile(PluginOutputPath(pluginPath, "PLUGIN_CALLBACK_INDEX.md"))
+	if strings.Contains(string(content), "locallib.php (never called)") {
+		t.Errorf("unexpected locallib.php section:\n%s", content)
 	}
 }

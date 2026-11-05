@@ -11,6 +11,11 @@
     "properties": {
       "format": {
         "description": "'text' (default) for Markdown, 'json' for a structured response",
+        "enum": [
+          "",
+          "text",
+          "json"
+        ],
         "type": "string"
       },
       "limit": {
@@ -23,6 +28,12 @@
       },
       "visibility": {
         "description": "'public' (default), 'deprecated', or 'all'",
+        "enum": [
+          "",
+          "public",
+          "deprecated",
+          "all"
+        ],
         "type": "string"
       }
     },
@@ -36,9 +47,11 @@
     "additionalProperties": false,
     "properties": {
       "fuzzy": {
+        "description": "True when no exact match existed and the matches come from fuzzy matching",
         "type": "boolean"
       },
       "matches": {
+        "description": "Matching function entries of the API index, as Markdown list items",
         "items": {
           "type": "string"
         },
@@ -48,9 +61,11 @@
         ]
       },
       "query": {
+        "description": "The query that was searched",
         "type": "string"
       },
       "visibility": {
+        "description": "Visibility filter applied: public, deprecated or all",
         "type": "string"
       }
     },

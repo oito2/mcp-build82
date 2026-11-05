@@ -16,13 +16,13 @@
 package tsbackend
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/odvcencio/gotreesitter"
 
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/phptypes"
 )
 
@@ -38,16 +38,10 @@ func ExtractClasses(dirPath, rootPath, globPattern string) phptypes.ClassesExtra
 		rootPath = dirPath
 	}
 
+	// fsutil.WalkFiles skips symbolic links, the same walk as the regex backend's.
 	var files []string
-	_ = filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
-		// Skip symlinked files — os.ReadFile (in ParseFile) follows a symlink to wherever it
-		// points, so a symlinked "foo.php" planted inside a scanned plugin directory would
-		// otherwise get its target's content parsed into the generated classes index.
-		if err != nil || d.IsDir() || d.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(d.Name(), ".php") {
-			return nil
-		}
+	fsutil.WalkFiles(dirPath, ".php", func(path, _ string) {
 		files = append(files, path)
-		return nil
 	})
 	return ExtractClassesFromFiles(files, rootPath)
 }
@@ -165,8 +159,8 @@ func classImplements(decl *gotreesitter.Node, src []byte) []string {
 		return nil
 	}
 	var implements []string
-	for i := 0; i < clause.NamedChildCount(); i++ {
-		implements = append(implements, clause.NamedChild(i).Text(src))
+	for _, c := range namedChildren(clause) {
+		implements = append(implements, c.Text(src))
 	}
 	return implements
 }

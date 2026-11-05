@@ -19,17 +19,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/extractors"
-	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/genutil"
-	"github.com/oito2/mcp-build82/internal/legacyhooks"
-	"github.com/oito2/mcp-build82/internal/phparray"
 )
 
 // PreloadedPluginData holds the results of every extractor the per-plugin generators need, so
@@ -104,7 +101,7 @@ func buildDirectoryTree(root string, dir string, depth int, prefix string, b *st
 		if e.isDir {
 			name += "/"
 		}
-		fmt.Fprintf(b, "%s%s%s\n", prefix, branch, name)
+		fmt.Fprintf(b, "%s%s%s\n", prefix, branch, genutil.SafeText(name))
 		if e.isDir && depth < maxTreeDepth {
 			buildDirectoryTree(root, filepath.Join(dir, e.name), depth+1, nextPrefix, b)
 		}
@@ -126,7 +123,7 @@ func GeneratePluginStructure(info extractors.PluginInfo) GeneratorResult {
 		b.WriteString(genutil.Header("Plugin Structure", fmt.Sprintf("Directory tree and key files for %s.", genutil.EscapeMdCell(info.Component))))
 
 		b.WriteString("## Directory Tree\n\n```\n")
-		fmt.Fprintf(&b, "%s/\n", info.Name)
+		fmt.Fprintf(&b, "%s/\n", genutil.SafeText(info.Name))
 		buildDirectoryTree(info.Path, info.Path, 0, "", &b)
 		b.WriteString("```\n\n")
 
@@ -146,12 +143,12 @@ func GeneratePluginStructure(info extractors.PluginInfo) GeneratorResult {
 // --- 1. GeneratePluginContext -------------------------------------------------
 
 // GeneratePluginContext writes PLUGIN_CONTEXT.md for `info`: plugin metadata and counts of tables,
-// observers, tasks, services and capabilities. `preloaded` supplies already-extracted data; when
-// nil, the data is extracted from the plugin. Failures and panics are reported in the result.
+// observers, tasks, services and capabilities. `preloaded` is the plugin's extracted data
+// (extractPluginData), which must not be nil. Failures and panics are reported in the result.
 func GeneratePluginContext(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_CONTEXT.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		schema, events, tasks, services, caps := preloadOrExtractCore(info.Path, preloaded)
+		schema, events, tasks, services, caps := preloaded.Schema, preloaded.Events, preloaded.Tasks, preloaded.Services, preloaded.Capabilities
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Context", fmt.Sprintf("Metadata and feature summary for %s.", genutil.EscapeMdCell(info.Component))))
@@ -182,35 +179,15 @@ func tableCount(schema *extractors.DbSchema) int {
 	return len(schema.Tables)
 }
 
-// preloadOrExtractCore returns the schema, events, tasks, services and capabilities data of the
-// plugin at `pluginPath`, taken from `preloaded` when it is non-nil and extracted otherwise.
-func preloadOrExtractCore(pluginPath string, preloaded *PreloadedPluginData) (
-	*extractors.DbSchema, *extractors.EventsExtraction, *extractors.TasksExtraction,
-	*extractors.ServicesExtraction, *extractors.CapabilitiesExtraction,
-) {
-	schema := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.DbSchema { return p.Schema },
-		func() *extractors.DbSchema { return extractors.ExtractPluginSchema(pluginPath) })
-	events := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.EventsExtraction { return p.Events },
-		func() *extractors.EventsExtraction { return extractors.ExtractPluginEvents(pluginPath) })
-	tasks := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.TasksExtraction { return p.Tasks },
-		func() *extractors.TasksExtraction { return extractors.ExtractPluginTasks(pluginPath) })
-	services := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.ServicesExtraction { return p.Services },
-		func() *extractors.ServicesExtraction { return extractors.ExtractPluginServices(pluginPath) })
-	caps := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.CapabilitiesExtraction { return p.Capabilities },
-		func() *extractors.CapabilitiesExtraction { return extractors.ExtractPluginCapabilities(pluginPath) })
-	return schema, events, tasks, services, caps
-}
-
 // --- 3. GeneratePluginDbTables -------------------------------------------------
 
 // GeneratePluginDbTables writes PLUGIN_DB_TABLES.md for `info`, one Markdown block per table of
-// the plugin schema (or a placeholder). `preloaded` may be nil. Failures and panics are reported
+// the plugin schema (or a placeholder). `preloaded` (extractPluginData) must not be nil. Failures and panics are reported
 // in the result.
 func GeneratePluginDbTables(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_DB_TABLES.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		schema := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.DbSchema { return p.Schema },
-			func() *extractors.DbSchema { return extractors.ExtractPluginSchema(info.Path) })
+		schema := preloaded.Schema
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Database Tables", fmt.Sprintf("Database schema for %s.", genutil.EscapeMdCell(info.Component))))
@@ -230,12 +207,11 @@ func GeneratePluginDbTables(info extractors.PluginInfo, preloaded *PreloadedPlug
 // --- 4. GeneratePluginEvents ---------------------------------------------------
 
 // GeneratePluginEvents writes PLUGIN_EVENTS.md for `info`, a table of its event observers (or a
-// placeholder). `preloaded` may be nil. Failures and panics are reported in the result.
+// placeholder). `preloaded` (extractPluginData) must not be nil. Failures and panics are reported in the result.
 func GeneratePluginEvents(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_EVENTS.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		events := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.EventsExtraction { return p.Events },
-			func() *extractors.EventsExtraction { return extractors.ExtractPluginEvents(info.Path) })
+		events := preloaded.Events
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Events", fmt.Sprintf("Event observers registered by %s.", genutil.EscapeMdCell(info.Component))))
@@ -252,26 +228,17 @@ func GeneratePluginEvents(info extractors.PluginInfo, preloaded *PreloadedPlugin
 // --- 5. GeneratePluginDependencies --------------------------------------------
 
 // GeneratePluginDependencies writes PLUGIN_DEPENDENCIES.md for `info`: tasks, services,
-// capabilities, the Hook API, upgrade history and subplugins. `preloaded` may be nil. Failures and
+// capabilities, the Hook API, upgrade history and subplugins. `preloaded` (extractPluginData) must not be nil. Failures and
 // panics are reported in the result.
 func GeneratePluginDependencies(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_DEPENDENCIES.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		tasks := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.TasksExtraction { return p.Tasks },
-			func() *extractors.TasksExtraction { return extractors.ExtractPluginTasks(info.Path) })
-		services := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.ServicesExtraction { return p.Services },
-			func() *extractors.ServicesExtraction { return extractors.ExtractPluginServices(info.Path) })
-		caps := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.CapabilitiesExtraction { return p.Capabilities },
-			func() *extractors.CapabilitiesExtraction { return extractors.ExtractPluginCapabilities(info.Path) })
-		upgrade := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.UpgradeExtraction { return p.Upgrade },
-			func() *extractors.UpgradeExtraction { return extractors.ExtractPluginUpgrade(info.Path) })
-		hooks := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) extractors.HooksExtraction { return p.Hooks },
-			func() extractors.HooksExtraction {
-				h, _ := extractors.ExtractPluginHooks(info.Path, info.Component)
-				return h
-			})
-		subplugins := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) []extractors.Subplugin { return p.Subplugins },
-			func() []extractors.Subplugin { return extractors.ExtractSubplugins(info.Path) })
+		tasks := preloaded.Tasks
+		services := preloaded.Services
+		caps := preloaded.Capabilities
+		upgrade := preloaded.Upgrade
+		hooks := preloaded.Hooks
+		subplugins := preloaded.Subplugins
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Dependencies", fmt.Sprintf("Tasks, services, capabilities, hooks, and upgrade history for %s.", genutil.EscapeMdCell(info.Component))))
@@ -319,7 +286,7 @@ func GeneratePluginDependencies(info extractors.PluginInfo, preloaded *Preloaded
 		} else {
 			b.WriteString("| Type | Path |\n|---|---|\n")
 			for _, s := range subplugins {
-				fmt.Fprintf(&b, "| `%s` | %s |\n", genutil.EscapeMdCell(s.Type), s.Path)
+				fmt.Fprintf(&b, "| `%s` | %s |\n", genutil.EscapeMdCell(s.Type), genutil.SafeInline(s.Path))
 			}
 		}
 
@@ -380,7 +347,7 @@ func GeneratePluginFunctionIndex(info extractors.PluginInfo) GeneratorResult {
 				continue
 			}
 			rel, _ := filepath.Rel(info.Path, f)
-			fmt.Fprintf(&b, "## %s\n\n", filepath.ToSlash(rel))
+			fmt.Fprintf(&b, "## %s\n\n", genutil.SafeInline(filepath.ToSlash(rel)))
 			for _, fn := range fns {
 				fmt.Fprintf(&b, "- `%s()` (line %d)\n", genutil.EscapeMdCell(fn.Name), fn.Line)
 			}
@@ -393,52 +360,35 @@ func GeneratePluginFunctionIndex(info extractors.PluginInfo) GeneratorResult {
 
 // --- 7. GeneratePluginCallbackIndex --------------------------------------------
 
-// legacyCallbackSuffixesForIndex holds the sorted keys of legacyhooks.Map, giving the callback
-// index a deterministic row order.
-var legacyCallbackSuffixesForIndex = sortedLegacyHookSuffixes()
-
-// sortedLegacyHookSuffixes returns the keys of legacyhooks.Map in ascending order.
-func sortedLegacyHookSuffixes() []string {
-	suffixes := make([]string, 0, len(legacyhooks.Map))
-	for suffix := range legacyhooks.Map {
-		suffixes = append(suffixes, suffix)
-	}
-	sort.Strings(suffixes)
-	return suffixes
-}
-
 // GeneratePluginCallbackIndex writes PLUGIN_CALLBACK_INDEX.md for `info`: the legacy callbacks
-// declared in lib.php or locallib.php (flagging those with a hook replacement) and the Hook API
-// section. `preloaded` may be nil. Failures and panics are reported in the result.
+// declared in lib.php (the plugin hook extraction's LegacyWarnings, each with the Hook API callback
+// that replaces it), the legacy callbacks declared in locallib.php in a separate warning section
+// (Moodle never calls them), and the Hook API section. `preloaded` (extractPluginData) must not be nil. Failures and panics are reported in the result.
 func GeneratePluginCallbackIndex(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_CALLBACK_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		hooks := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) extractors.HooksExtraction { return p.Hooks },
-			func() extractors.HooksExtraction {
-				h, _ := extractors.ExtractPluginHooks(info.Path, info.Component)
-				return h
-			})
-
-		legacyWithReplacement := map[string]bool{}
-		for _, w := range hooks.LegacyWarnings {
-			legacyWithReplacement[w.LegacyFunction] = true
-		}
+		hooks := preloaded.Hooks
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Callback Index", fmt.Sprintf("Legacy and Hook API callbacks for %s.", genutil.EscapeMdCell(info.Component))))
 
-		libContent, _ := fsutil.ReadRegular(filepath.Join(info.Path, "lib.php"), 0)
-		locallibContent, _ := fsutil.ReadRegular(filepath.Join(info.Path, "locallib.php"), 0)
-
 		b.WriteString("### Legacy lib.php Callbacks\n\n| Function | Hook Replacement Available |\n|---|---|\n")
-		for _, suffix := range legacyCallbackSuffixesForIndex {
-			fn := info.Component + "_" + suffix
-			if functionExistsInContent(libContent, fn) || functionExistsInContent(locallibContent, fn) {
-				mark := ""
-				if legacyWithReplacement[fn] {
-					mark = "⚠"
-				}
-				fmt.Fprintf(&b, "| `%s` | %s |\n", genutil.EscapeMdCell(fn), mark)
+		// The rows are the legacy warnings of the plugin's hook extraction, so the index lists the
+		// same callbacks as the other context files: every one has a Hook API replacement, named in
+		// the row.
+		for _, w := range hooks.LegacyWarnings {
+			fmt.Fprintf(&b, "| `%s` | ⚠ `%s` |\n", genutil.EscapeMdCell(w.LegacyFunction), genutil.EscapeMdCell(w.ReplacedBy))
+		}
+
+		// A legacy callback declared in locallib.php is never called: Moodle loads lib.php to call
+		// a plugin's callbacks. It is listed apart, as a function to move or migrate.
+		if misplaced := extractors.DetectLegacyCallbacksInFile(filepath.Join(info.Path, "locallib.php"), info.Component); len(misplaced) > 0 {
+			b.WriteString("\n### Legacy Callbacks in locallib.php (never called)\n\n" +
+				"Moodle only loads lib.php to call a plugin's callbacks, so these functions never run as callbacks. " +
+				"Migrate each one to its Hook API replacement, or move it to lib.php if it must still run on older Moodle releases.\n\n" +
+				"| Function | Hook Replacement Available |\n|---|---|\n")
+			for _, w := range misplaced {
+				fmt.Fprintf(&b, "| `%s` | ⚠ `%s` |\n", genutil.EscapeMdCell(w.LegacyFunction), genutil.EscapeMdCell(w.ReplacedBy))
 			}
 		}
 		b.WriteString("\n")
@@ -449,30 +399,15 @@ func GeneratePluginCallbackIndex(info extractors.PluginInfo, preloaded *Preloade
 	})
 }
 
-// functionExistsInContent reports whether `content` declares a PHP function called `name`. The
-// match is a case-insensitive regex anchored at column 0, so it accepts a space before the
-// parenthesis and any letter case but ignores indented declarations such as class methods. A nil
-// `content` returns false.
-//
-// The pattern is compiled once per `name` through phparray.CachedPattern. Safe for concurrent use.
-func functionExistsInContent(content []byte, name string) bool {
-	if content == nil {
-		return false
-	}
-	re := phparray.CachedPattern(`(?im)^function\s+` + regexp.QuoteMeta(name) + `\s*\(`)
-	return re.Match(content)
-}
-
 // --- 8. GeneratePluginEndpointIndex --------------------------------------------
 
 // GeneratePluginEndpointIndex writes PLUGIN_ENDPOINT_INDEX.md for `info`: its web service
-// functions, ajax.php files and AMD source modules. `preloaded` may be nil. Failures and panics
+// functions, ajax.php files and AMD source modules. `preloaded` (extractPluginData) must not be nil. Failures and panics
 // are reported in the result.
 func GeneratePluginEndpointIndex(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_ENDPOINT_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		services := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.ServicesExtraction { return p.Services },
-			func() *extractors.ServicesExtraction { return extractors.ExtractPluginServices(info.Path) })
+		services := preloaded.Services
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Endpoint Index", fmt.Sprintf("Web services, AJAX endpoints, and AMD modules in %s.", genutil.EscapeMdCell(info.Component))))
@@ -495,7 +430,7 @@ func GeneratePluginEndpointIndex(info extractors.PluginInfo, preloaded *Preloade
 			sort.Strings(ajaxFiles)
 			for _, f := range ajaxFiles {
 				rel, _ := filepath.Rel(info.Path, f)
-				fmt.Fprintf(&b, "- %s\n", filepath.ToSlash(rel))
+				fmt.Fprintf(&b, "- %s\n", genutil.SafeInline(filepath.ToSlash(rel)))
 			}
 		}
 
@@ -507,7 +442,7 @@ func GeneratePluginEndpointIndex(info extractors.PluginInfo, preloaded *Preloade
 			sort.Strings(amdFiles)
 			for _, f := range amdFiles {
 				rel, _ := filepath.Rel(info.Path, f)
-				fmt.Fprintf(&b, "- %s\n", filepath.ToSlash(rel))
+				fmt.Fprintf(&b, "- %s\n", genutil.SafeInline(filepath.ToSlash(rel)))
 			}
 		}
 
@@ -528,21 +463,17 @@ var runtimeFlowCoreLogicFiles = []string{
 }
 
 // GeneratePluginRuntimeFlow writes PLUGIN_RUNTIME_FLOW.md for `info`: entry-point and core-logic
-// file checklists plus the plugin's classes, events, tasks and services. `preloaded` may be nil.
+// file checklists plus the plugin's classes, events, tasks and services. `preloaded` (extractPluginData) must not be nil.
 // Failures and panics are reported in the result.
 func GeneratePluginRuntimeFlow(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_RUNTIME_FLOW.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		// Only the data this file renders is extracted, to avoid parsing the schema and
 		// capabilities when no preloaded data is supplied.
-		events := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.EventsExtraction { return p.Events },
-			func() *extractors.EventsExtraction { return extractors.ExtractPluginEvents(info.Path) })
-		tasks := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.TasksExtraction { return p.Tasks },
-			func() *extractors.TasksExtraction { return extractors.ExtractPluginTasks(info.Path) })
-		services := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.ServicesExtraction { return p.Services },
-			func() *extractors.ServicesExtraction { return extractors.ExtractPluginServices(info.Path) })
-		classes := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) extractors.ClassesExtraction { return p.Classes },
-			func() extractors.ClassesExtraction { return extractors.ExtractPluginClasses(info.Path) })
+		events := preloaded.Events
+		tasks := preloaded.Tasks
+		services := preloaded.Services
+		classes := preloaded.Classes
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Runtime Flow", fmt.Sprintf("Entry points and core logic for %s.", genutil.EscapeMdCell(info.Component))))
@@ -594,13 +525,12 @@ func writeFileChecklistRow(b *strings.Builder, pluginPath, file string) {
 // --- 10. GeneratePluginArchitecture ---------------------------------------------
 
 // GeneratePluginArchitecture writes PLUGIN_ARCHITECTURE.md for `info`, listing the plugin's
-// classes grouped by directory. `preloaded` may be nil. Failures and panics are reported in the
+// classes grouped by directory. `preloaded` (extractPluginData) must not be nil. Failures and panics are reported in the
 // result.
 func GeneratePluginArchitecture(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_ARCHITECTURE.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		classes := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) extractors.ClassesExtraction { return p.Classes },
-			func() extractors.ClassesExtraction { return extractors.ExtractPluginClasses(info.Path) })
+		classes := preloaded.Classes
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Architecture", fmt.Sprintf("Class structure for %s.", genutil.EscapeMdCell(info.Component))))
@@ -618,7 +548,7 @@ func GeneratePluginArchitecture(info extractors.PluginInfo, preloaded *Preloaded
 		}
 		sort.Strings(dirs)
 		for _, dir := range dirs {
-			fmt.Fprintf(&b, "### %s\n\n", dir)
+			fmt.Fprintf(&b, "### %s\n\n", genutil.SafeInline(dir))
 			for _, c := range byDir[dir] {
 				fmt.Fprintf(&b, "- `%s` (%s)\n", genutil.EscapeMdCell(c.Name), genutil.EscapeMdCell(string(c.Kind)))
 			}
@@ -632,13 +562,12 @@ func GeneratePluginArchitecture(info extractors.PluginInfo, preloaded *Preloaded
 // --- 11. GeneratePluginSettings --------------------------------------------------
 
 // GeneratePluginSettings writes PLUGIN_SETTINGS.md for `info`, a table of the admin settings
-// declared in settings.php (or a note when there are none). `preloaded` may be nil. Failures and
+// declared in settings.php (or a note when there are none). `preloaded` (extractPluginData) must not be nil. Failures and
 // panics are reported in the result.
 func GeneratePluginSettings(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_SETTINGS.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		settings := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.SettingsExtraction { return p.Settings },
-			func() *extractors.SettingsExtraction { return extractors.ExtractPluginSettings(info.Path) })
+		settings := preloaded.Settings
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin Settings", fmt.Sprintf("Admin settings declared by %s's settings.php.", genutil.EscapeMdCell(info.Component))))
@@ -666,22 +595,15 @@ func GeneratePluginSettings(info extractors.PluginInfo, preloaded *PreloadedPlug
 
 // GeneratePluginAiContext writes PLUGIN_AI_CONTEXT.md for `info`: links to the other plugin context
 // files and a count summary of its tables, events, tasks, services, capabilities, hooks, classes,
-// subplugins and settings. `preloaded` may be nil. Failures and panics are reported in the result.
+// subplugins and settings. `preloaded` (extractPluginData) must not be nil. Failures and panics are reported in the result.
 func GeneratePluginAiContext(info extractors.PluginInfo, preloaded *PreloadedPluginData) GeneratorResult {
 	output := PluginOutputPath(info.Path, "PLUGIN_AI_CONTEXT.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		schema, events, tasks, services, caps := preloadOrExtractCore(info.Path, preloaded)
-		classes := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) extractors.ClassesExtraction { return p.Classes },
-			func() extractors.ClassesExtraction { return extractors.ExtractPluginClasses(info.Path) })
-		hooks := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) extractors.HooksExtraction { return p.Hooks },
-			func() extractors.HooksExtraction {
-				h, _ := extractors.ExtractPluginHooks(info.Path, info.Component)
-				return h
-			})
-		subplugins := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) []extractors.Subplugin { return p.Subplugins },
-			func() []extractors.Subplugin { return extractors.ExtractSubplugins(info.Path) })
-		settings := genutil.PreloadOr(preloaded, func(p *PreloadedPluginData) *extractors.SettingsExtraction { return p.Settings },
-			func() *extractors.SettingsExtraction { return extractors.ExtractPluginSettings(info.Path) })
+		schema, events, tasks, services, caps := preloaded.Schema, preloaded.Events, preloaded.Tasks, preloaded.Services, preloaded.Capabilities
+		classes := preloaded.Classes
+		hooks := preloaded.Hooks
+		subplugins := preloaded.Subplugins
+		settings := preloaded.Settings
 
 		var b strings.Builder
 		b.WriteString(genutil.Header("Plugin AI Context", fmt.Sprintf("Combined quick-reference context for %s.", genutil.EscapeMdCell(info.Component))))
@@ -739,11 +661,32 @@ func GenerateAllForPlugin(pluginPath, moodlePath string, markAsDev bool, existin
 	return GenerateAllForPluginCore(pluginPath, moodlePath, markAsDev, existingInfo)
 }
 
+// extractPluginData runs the 10 plugin extractors concurrently for the plugin at `pluginPath`
+// (component `component`) and returns their results. It is a variable so tests can count calls.
+var extractPluginData = func(pluginPath, component string) *PreloadedPluginData {
+	var p PreloadedPluginData
+	var wg sync.WaitGroup
+	wg.Add(10)
+	go func() { defer wg.Done(); p.Classes = extractors.ExtractPluginClasses(pluginPath) }()
+	go func() { defer wg.Done(); p.Hooks, _ = extractors.ExtractPluginHooks(pluginPath, component) }()
+	go func() { defer wg.Done(); p.Schema = extractors.ExtractPluginSchema(pluginPath) }()
+	go func() { defer wg.Done(); p.Events = extractors.ExtractPluginEvents(pluginPath) }()
+	go func() { defer wg.Done(); p.Tasks = extractors.ExtractPluginTasks(pluginPath) }()
+	go func() { defer wg.Done(); p.Services = extractors.ExtractPluginServices(pluginPath) }()
+	go func() { defer wg.Done(); p.Capabilities = extractors.ExtractPluginCapabilities(pluginPath) }()
+	go func() { defer wg.Done(); p.Upgrade = extractors.ExtractPluginUpgrade(pluginPath) }()
+	go func() { defer wg.Done(); p.Subplugins = extractors.ExtractSubplugins(pluginPath) }()
+	go func() { defer wg.Done(); p.Settings = extractors.ExtractPluginSettings(pluginPath) }()
+	wg.Wait()
+	return &p
+}
+
 // GenerateAllForPluginCore performs GenerateAllForPlugin's work without loading or saving the
 // cache, so a caller processing many plugins can bracket the whole loop with a single
-// EnsureLoaded/Save pair. Parameters and results are as for GenerateAllForPlugin. It runs the
-// extractors concurrently, then the cache-aware generators concurrently, and, when `markAsDev` is
-// true, writes the .indevelopment marker (write failures are logged to stderr).
+// EnsureLoaded/Save pair. Parameters and results are as for GenerateAllForPlugin. It checks the
+// staleness of the 12 outputs first; when at least one is stale it runs the extractors
+// concurrently, then the generators of the stale outputs concurrently. When `markAsDev` is true it
+// writes the .indevelopment marker (write failures are logged to stderr).
 func GenerateAllForPluginCore(pluginPath, moodlePath string, markAsDev bool, existingInfo *extractors.PluginInfo) PluginGeneratorResult {
 	var info extractors.PluginInfo
 	if existingInfo != nil {
@@ -756,71 +699,59 @@ func GenerateAllForPluginCore(pluginPath, moodlePath string, markAsDev bool, exi
 
 	logMigrationFailures(MigrateLegacyPluginFiles(pluginPath))
 
-	sources := cache.GetPluginSourceFiles(pluginPath)
+	// Every output is marked with the time its sources were listed and read, so a source saved
+	// while the plugin is being generated makes the outputs stale again on the next run. The
+	// outputs read classes, AMD modules and every PHP file, not only the fixed source files, so
+	// each one depends on the whole plugin; listing every file also lets the cache see a file
+	// that was added, removed or renamed.
+	readAt := time.Now()
+	sources := pluginSourceFiles(pluginPath)
 
-	var (
-		classes    extractors.ClassesExtraction
-		hooks      extractors.HooksExtraction
-		schema     *extractors.DbSchema
-		events     *extractors.EventsExtraction
-		tasks      *extractors.TasksExtraction
-		services   *extractors.ServicesExtraction
-		caps       *extractors.CapabilitiesExtraction
-		upgrade    *extractors.UpgradeExtraction
-		subplugins []extractors.Subplugin
-		settings   *extractors.SettingsExtraction
-	)
-	var wg sync.WaitGroup
-	wg.Add(10)
-	go func() { defer wg.Done(); classes = extractors.ExtractPluginClasses(pluginPath) }()
-	go func() { defer wg.Done(); hooks, _ = extractors.ExtractPluginHooks(pluginPath, info.Component) }()
-	go func() { defer wg.Done(); schema = extractors.ExtractPluginSchema(pluginPath) }()
-	go func() { defer wg.Done(); events = extractors.ExtractPluginEvents(pluginPath) }()
-	go func() { defer wg.Done(); tasks = extractors.ExtractPluginTasks(pluginPath) }()
-	go func() { defer wg.Done(); services = extractors.ExtractPluginServices(pluginPath) }()
-	go func() { defer wg.Done(); caps = extractors.ExtractPluginCapabilities(pluginPath) }()
-	go func() { defer wg.Done(); upgrade = extractors.ExtractPluginUpgrade(pluginPath) }()
-	go func() { defer wg.Done(); subplugins = extractors.ExtractSubplugins(pluginPath) }()
-	go func() { defer wg.Done(); settings = extractors.ExtractPluginSettings(pluginPath) }()
-	wg.Wait()
+	// The staleness of every output is decided before any extraction, so a plugin whose outputs
+	// are all fresh is not parsed at all. Each output is checked exactly once: IsStale drops the
+	// mark of a stale output, so asking again could report it fresh.
+	type pluginJob struct {
+		output string
+		gen    func(*PreloadedPluginData) GeneratorResult
+	}
+	jobs := []pluginJob{
+		{"PLUGIN_CONTEXT.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginContext(info, p) }},
+		{"PLUGIN_STRUCTURE.md", func(*PreloadedPluginData) GeneratorResult { return GeneratePluginStructure(info) }},
+		{"PLUGIN_DB_TABLES.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginDbTables(info, p) }},
+		{"PLUGIN_EVENTS.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginEvents(info, p) }},
+		{"PLUGIN_DEPENDENCIES.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginDependencies(info, p) }},
+		{"PLUGIN_CALLBACK_INDEX.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginCallbackIndex(info, p) }},
+		{"PLUGIN_FUNCTION_INDEX.md", func(*PreloadedPluginData) GeneratorResult { return GeneratePluginFunctionIndex(info) }},
+		{"PLUGIN_ENDPOINT_INDEX.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginEndpointIndex(info, p) }},
+		{"PLUGIN_RUNTIME_FLOW.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginRuntimeFlow(info, p) }},
+		{"PLUGIN_ARCHITECTURE.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginArchitecture(info, p) }},
+		{"PLUGIN_SETTINGS.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginSettings(info, p) }},
+		{"PLUGIN_AI_CONTEXT.md", func(p *PreloadedPluginData) GeneratorResult { return GeneratePluginAiContext(info, p) }},
+	}
+	stale := make([]bool, len(jobs))
+	anyStale := false
+	for i, j := range jobs {
+		stale[i] = cache.Global.IsStale(PluginOutputPath(pluginPath, j.output), sources)
+		anyStale = anyStale || stale[i]
+	}
 
-	preloaded := &PreloadedPluginData{
-		Schema:       schema,
-		Events:       events,
-		Tasks:        tasks,
-		Services:     services,
-		Capabilities: caps,
-		Upgrade:      upgrade,
-		Classes:      classes,
-		Hooks:        hooks,
-		Subplugins:   subplugins,
-		Settings:     settings,
+	var preloaded *PreloadedPluginData
+	if anyStale {
+		preloaded = extractPluginData(pluginPath, info.Component)
 	}
 
 	var (
 		results []GeneratorResult
 		mu      sync.Mutex
 	)
-
-	jobs := []func(){
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_CONTEXT.md"), sources, func() GeneratorResult { return GeneratePluginContext(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_STRUCTURE.md"), sources, func() GeneratorResult { return GeneratePluginStructure(info) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_DB_TABLES.md"), sources, func() GeneratorResult { return GeneratePluginDbTables(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_EVENTS.md"), sources, func() GeneratorResult { return GeneratePluginEvents(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_DEPENDENCIES.md"), sources, func() GeneratorResult { return GeneratePluginDependencies(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_CALLBACK_INDEX.md"), sources, func() GeneratorResult { return GeneratePluginCallbackIndex(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_FUNCTION_INDEX.md"), sources, func() GeneratorResult { return GeneratePluginFunctionIndex(info) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_ENDPOINT_INDEX.md"), sources, func() GeneratorResult { return GeneratePluginEndpointIndex(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_RUNTIME_FLOW.md"), sources, func() GeneratorResult { return GeneratePluginRuntimeFlow(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_ARCHITECTURE.md"), sources, func() GeneratorResult { return GeneratePluginArchitecture(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_SETTINGS.md"), sources, func() GeneratorResult { return GeneratePluginSettings(info, preloaded) }),
-		genutil.RunCached(&results, &mu, PluginOutputPath(pluginPath, "PLUGIN_AI_CONTEXT.md"), sources, func() GeneratorResult { return GeneratePluginAiContext(info, preloaded) }),
-	}
 	var jobsWg sync.WaitGroup
 	jobsWg.Add(len(jobs))
-	for _, j := range jobs {
-		j := j
-		go func() { defer jobsWg.Done(); j() }()
+	for i, j := range jobs {
+		go func() {
+			defer jobsWg.Done()
+			genutil.RunDecided(&results, &mu, PluginOutputPath(pluginPath, j.output), sources, readAt, stale[i],
+				func() GeneratorResult { return j.gen(preloaded) })
+		}()
 	}
 	jobsWg.Wait()
 
@@ -829,9 +760,7 @@ func GenerateAllForPluginCore(pluginPath, moodlePath string, markAsDev bool, exi
 		// .indevelopment, so tools that depend on that marker (plugin_batch mode=dev,
 		// list_dev_plugins, doctor, the watcher) would not see it; the failure is logged to stderr.
 		markerPath := PluginOutputPath(pluginPath, ".indevelopment")
-		if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "[build82] warning: failed to create %s: %s\n", filepath.Dir(markerPath), err)
-		} else if err := os.WriteFile(markerPath, []byte(genutil.Timestamp()), 0o644); err != nil {
+		if err := genutil.WriteFile(markerPath, []byte(genutil.Timestamp())); err != nil {
 			fmt.Fprintf(os.Stderr, "[build82] warning: failed to write %s: %s\n", markerPath, err)
 		}
 	}

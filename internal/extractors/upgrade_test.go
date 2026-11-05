@@ -18,10 +18,9 @@ package extractors
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
-	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
 // upgradeFixtureWellFormed is an upgrade.php with steps out of order, covering each description
@@ -141,7 +140,7 @@ func TestParseUpgradePhp_TreesitterBackendParity(t *testing.T) {
 func TestParseUpgradePhp_TreesitterBackendParity_RealFiles(t *testing.T) {
 	var checked int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}
@@ -190,18 +189,6 @@ func TestGetUpgradeVersions_NoReSort(t *testing.T) {
 	}
 }
 
-// TestTruncate120_RuneSafe verifies that truncation never splits a multi-byte rune.
-func TestTruncate120_RuneSafe(t *testing.T) {
-	in := strings.Repeat("a", 119) + "é" + "tail"
-	got := truncate120(in)
-	if !utf8.ValidString(got) || len(got) > 120 {
-		t.Errorf("invalid or too long result: len=%d valid=%v", len(got), utf8.ValidString(got))
-	}
-	if got != strings.Repeat("a", 119) {
-		t.Errorf("unexpected result %q", got)
-	}
-}
-
 // TestParseUpgradePhp_EqualVersionsKeepSourceOrder verifies that steps with the same version keep
 // their source order after sorting.
 func TestParseUpgradePhp_EqualVersionsKeepSourceOrder(t *testing.T) {
@@ -235,5 +222,74 @@ func TestParseUpgradePhp_EqualVersionsKeepSourceOrder(t *testing.T) {
 		if got.Steps[i].Description != w {
 			t.Errorf("step %d: got %q, want %q", i, got.Steps[i].Description, w)
 		}
+	}
+}
+
+// TestParseUpgradePhp_IgnoresCommentsAndHeredocs verifies, on both backends, that a step inside a
+// comment is not reported and that a quote inside a heredoc does not hide the steps after it.
+func TestParseUpgradePhp_IgnoresCommentsAndHeredocs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade.php")
+	if err := os.WriteFile(path, []byte(`<?php
+function xmldb_local_demo_upgrade($oldversion) {
+    // if ($oldversion < 2023010100) { old step }
+    /*
+    if ($oldversion < 2023020200) {
+    }
+    */
+    $note = <<<EOT
+Contact O'Brien before upgrading.
+EOT;
+    if ($oldversion < 2024010100) { // Add the logs table.
+        upgrade_plugin_savepoint(true, 2024010100, 'local', 'demo');
+    }
+    return true;
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, backend := range []string{"", "treesitter"} {
+		t.Run("backend="+backend, func(t *testing.T) {
+			t.Setenv("BUILD82_EXTRACTOR_BACKEND", backend)
+			got := ParseUpgradePhp(path)
+			if got == nil || len(got.Steps) != 1 || got.Steps[0].Version != "2024010100" {
+				t.Fatalf("got %+v, want only step 2024010100", got)
+			}
+			if got.Steps[0].Description != "Add the logs table." {
+				t.Errorf("description = %q, want the inline comment", got.Steps[0].Description)
+			}
+		})
+	}
+}
+
+// TestParseUpgradePhp_VersionRuleSharedByBothBackendsAndOperations verifies that both backends and
+// ParseUpgradeOperations accept the same step versions — ten digits, optionally with a decimal
+// part — ignore a step comparing with any other number, and order decimal versions numerically.
+func TestParseUpgradePhp_VersionRuleSharedByBothBackendsAndOperations(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdirAll(t, filepath.Join(dir, "db"))
+	mustWriteFile(t, filepath.Join(dir, "db", "upgrade.php"), `<?php
+function xmldb_local_test_upgrade($oldversion) {
+    if ($oldversion < 2024010100.01) { // second
+    }
+    if ($oldversion < 2024010100) { // first
+    }
+    if ($oldversion < 5) { // not a version
+    }
+    return true;
+}
+`)
+	want := []string{"2024010100", "2024010100.01"}
+	for _, backend := range []string{"", "treesitter"} {
+		t.Setenv("BUILD82_EXTRACTOR_BACKEND", backend)
+		if got := GetUpgradeVersions(ExtractPluginUpgrade(dir)); !slices.Equal(got, want) {
+			t.Errorf("backend %q: versions %v, want %v", backend, got, want)
+		}
+	}
+	var ops []string
+	for _, b := range ParseUpgradeOperations(dir).Blocks {
+		ops = append(ops, b.Version)
+	}
+	if want := []string{"2024010100.01", "2024010100"}; !slices.Equal(ops, want) {
+		t.Errorf("operations blocks %v, want %v (file order)", ops, want)
 	}
 }

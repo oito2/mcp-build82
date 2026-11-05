@@ -51,9 +51,9 @@ O MCP suporta dois mecanismos de transporte:
 | Transporte                  | Como funciona                                       | Quando usar                                                             |
 | ----------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | **stdio**                    | O servidor roda como subprocesso do cliente de IA      | Uso local — Moodle na mesma máquina que seu editor/CLI (o padrão)            |
-| **HTTP (Streamable HTTP)**   | O servidor roda como serviço HTTP independente         | Uso remoto — Moodle em servidor separado ou ambiente de produção isolado     |
+| **HTTP (Streamable HTTP)**   | O servidor roda como serviço HTTP independente         | Servidores remotos — não oferecido pelo `build82`                            |
 
-Para a maioria dos desenvolvedores rodando Moodle localmente, o transporte **stdio** é o padrão (`build82` sem flags) e não requer nenhuma configuração adicional.
+O `build82` usa somente **stdio**: é uma ferramenta local de desenvolvimento que roda ao lado do código do Moodle e do seu cliente de IA, então não precisa de configuração de rede.
 
 ---
 

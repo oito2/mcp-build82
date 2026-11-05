@@ -103,16 +103,15 @@ func TestParseTasksPhp_MissingFile(t *testing.T) {
 	}
 }
 
-// realMoodleRoots are the entries under /srv/workspace/www/html/mdle/ that are full
-// Moodle installations (have a root-level version.php).
-var realMoodleRoots = []string{"dev-401", "dev-402", "dev-500", "dev-uvv"}
+// realMoodleRoots are the entries of realMoodleDir that are full Moodle installations.
+var realMoodleRoots = []string{"mdle-401", "mdle-405", "mdle-500", "mdle-uvv"}
 
 // TestParseTasksPhp_RealFileRegression runs the tree-sitter backend against every real
 // db/tasks.php across all 4 real Moodle installations.
 func TestParseTasksPhp_RealFileRegression(t *testing.T) {
 	var found int
 	for _, name := range realMoodleRoots {
-		root := filepath.Join("/srv/workspace/www/html/mdle", name)
+		root := filepath.Join(realMoodleDir(), name)
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}

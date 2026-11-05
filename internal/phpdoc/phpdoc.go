@@ -13,8 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Package phpdoc holds the PHPDoc-block parsing and visibility-classification logic shared by
-// both extraction backends (internal/extractors' regex backend and
+// Package phpdoc holds the PHPDoc-block parsing, visibility-classification and comment-text logic
+// shared by both extraction backends (internal/extractors' regex backend and
 // internal/extractors/tsbackend's tree-sitter backend). Neither backend imports the other, so the
 // shared logic lives in this package. The tree-sitter backend only replaces the file-scanning step
 // (finding function declarations and their preceding doc-comment); parsing and classification of
@@ -24,7 +24,26 @@ package phpdoc
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
+
+// maxCommentSummary is the byte length CommentSummary cuts a comment to.
+const maxCommentSummary = 120
+
+// CommentSummary returns the comment text `s` (an upgrade step's description, for instance) with
+// surrounding whitespace trimmed and cut to at most 120 bytes, backing up to a UTF-8 rune
+// boundary so no multi-byte character is split.
+func CommentSummary(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxCommentSummary {
+		cut := maxCommentSummary
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		return s[:cut]
+	}
+	return s
+}
 
 // Visibility is the API visibility classification of a documented function; internal/extractors
 // aliases it as ApiVisibility.

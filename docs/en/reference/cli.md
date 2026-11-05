@@ -4,7 +4,7 @@
 
 # CLI Reference
 
-Binary: `build82`. Source of truth: `cmd/build82/main.go` and `internal/transport/http.go`.
+Binary: `build82`. Source of truth: `cmd/build82/main.go`.
 
 ## Commands
 
@@ -13,7 +13,6 @@ The subcommand is read from the first argument only.
 | Invocation | Description |
 | :--- | :--- |
 | `build82` | Runs the MCP server over stdio. |
-| `build82 --http [flags]` | Runs the MCP server over Streamable HTTP and SSE. |
 | `build82 install [target]` | Registers build82 in an AI tool. |
 | `build82 uninstall [target] [--purge]` | Removes the registration. See [Uninstallation](../getting-started/uninstallation.md). |
 | `build82 self-update [flags]` | Updates the binary to the latest release. |
@@ -26,8 +25,8 @@ Argument resolution for the first argument:
 | First argument | Behaviour |
 | :--- | :--- |
 | None | stdio server. |
-| `--http`, `install`, `uninstall`, `self-update`, `--help`, `-h`, `--version` | As listed above. |
-| Any other value starting with `-` | Treated as server flags (see below). An unknown flag, or a server-only flag without `--http` among the arguments, is a usage error (exit code 2). |
+| `install`, `uninstall`, `self-update`, `--help`, `-h`, `--version` | As listed above. |
+| Any other value starting with `-` | Checked as a server argument (see [Server](#server)): the server takes none, so it is a usage error (exit code 2). |
 | Any other value | `Error: unknown command "<value>"`, followed by the help text, on stderr. Exit code 1. |
 
 ### Subcommand help, `--` and interrupts
@@ -36,35 +35,16 @@ Argument resolution for the first argument:
 | :--- | :--- |
 | Subcommand help | `-h` or `--help` anywhere among the arguments of `install`, `uninstall` or `self-update` — before a `--` — prints the subcommand's help and exits 0; nothing else is parsed or run (`build82 self-update --check --help` only prints help). |
 | `--` | Ends the options. For `install` and `uninstall`, every argument after it is the target, even one starting with `-` (`build82 uninstall -- --help` looks up a target named `--help`). `self-update` and the server take no positional argument, so anything after `--` is a usage error; a trailing `--` alone is accepted. |
-| Usage-error pointer | A usage error of `install`, `uninstall` or `self-update` ends with `Run 'build82 <subcommand> --help' for usage.`; a server-flag error with `Run 'build82 --help' for usage.` |
+| Usage-error pointer | A usage error of `install`, `uninstall` or `self-update` ends with `Run 'build82 <subcommand> --help' for usage.`; an unknown top-level flag with `Run 'build82 --help' for usage.` |
 | Ctrl-C at a prompt | The first SIGINT or SIGTERM while `install`, `uninstall` (including the `--purge` confirmation) or `self-update` waits for an answer prints `Interrupted; nothing was changed.` on stderr and exits with code 1. During `self-update` it also aborts a download in progress (before the binary is replaced). Between two targets of `install`/`uninstall` without a target, the remaining targets are skipped and the command exits with code 1. A second Ctrl-C ends the process at once. |
 
-## Server flags
+## Server
 
-Parsed by a manual walk of the arguments, in any order (`build82 --port 8080 --http` works). A `--` ends the flags (nothing may follow it). An unrecognised argument, a flag missing its value, or a server-only flag (`--port`, `--host`, `--token`, `--allowed-host`) without `--http` is a usage error: `Error: <message>` and `Run 'build82 --help' for usage.` on stderr, exit code 2. `--help`, `-h` and `--version` are also honoured inside this walk (print and exit 0).
+`build82` with no argument runs the MCP server over **stdio**: the AI client starts the binary and exchanges JSON-RPC messages over its stdin and stdout. It logs `build82 server running on stdio` to stderr and runs until the client disconnects. One inbound message may be up to 64 MiB.
 
-| Flag | Type | Default | Applies to | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `--http` | bool | off | — | Selects the HTTP transport. Required by every other server flag. |
-| `--port <n>` | integer 1–65535 | `3000` | `--http` | TCP port. An invalid value prints `warning: invalid --port value "<v>", keeping <n>` to stderr and keeps the previous value. A missing value is a usage error. The next argument is always consumed as the value. |
-| `--host <host>` | string | `127.0.0.1` | `--http` | Bind address. Also added to the Host allow-list. Missing value: usage error. |
-| `--token <token>` | string | none (auth disabled) | `--http` | Bearer token required on `/mcp` and `/sse`. Last occurrence wins. Missing value: usage error. |
-| `--allowed-host <host>` | string, repeatable | none | `--http` | Extra value accepted in the `Host` header. Missing value: usage error. |
+The server takes no flags besides `--help`, `-h` and `--version` (print and exit 0) and a trailing `--`. Any other argument is a usage error: `Error: unknown argument "<arg>"` and `Run 'build82 --help' for usage.` on stderr, exit code 2.
 
-### Token resolution
-
-Applies with `--http`, evaluated in this order:
-
-| # | Condition | Result |
-| :--- | :--- | :--- |
-| 1 | `--token <value>` passed, value not empty | Use the value. `BUILD82_TOKEN` is ignored. |
-| 2 | `--token ""` passed | Error: `--token was passed with an empty value; omit --token entirely to run --http without authentication`. Exit code 1. |
-| 3 | `--token` passed without a following argument | Usage error: `--token requires a value`. Exit code 2. |
-| 4 | `BUILD82_TOKEN` set, not empty | Use the value. |
-| 5 | `BUILD82_TOKEN` set but empty | Error: `BUILD82_TOKEN is set but empty; unset it entirely to run --http without authentication`. Exit code 1. |
-| 6 | Neither present (variable unset) | Authentication disabled. |
-
-Details: [Configuration Reference](./configuration.md#environment-variables).
+The HTTP mode (`--http`, with `--port`, `--host`, `--token`, `--allowed-host` and the `BUILD82_TOKEN` variable) was removed in v1.2.0. Those flags are usage errors that add `the HTTP mode was removed in v1.2.0; build82 runs over stdio only`.
 
 ## `install`
 
@@ -77,7 +57,7 @@ build82 install [target]
 | Flags | None. At most one positional target; any flag or second argument is a usage error (exit 2). |
 | `target` | `claude` (Claude Code), `claude-desktop`, `antigravity`, `codex`, `opencode`, `cursor`, `zed`, `cline`. Omitted: all detected tools. |
 | Prompts | Moodle root path (offers the current directory when it is a Moodle root; validated as a Moodle root), and `Install build82 into all N detected tool(s)? [y/N]` when no target is given. |
-| Writes | The `build82` entry in each tool's configuration, with `BUILD82_MOODLE_PATH` in its environment and the resolved absolute path of the running binary as the command. `claude` runs `claude mcp add --scope user build82 -e BUILD82_MOODLE_PATH=<path> -- <binary>`; `codex` runs `codex mcp add build82 --env BUILD82_MOODLE_PATH=<path> -- <binary>`. For both, an existing registration reported by `<tool> mcp get build82` is removed first (for `claude`: every `user` and `local` registration; a `project` registration in `.mcp.json` is left unchanged and reported with a warning, see [Claude Code](../guides/clients/claude-code.md)). The other targets merge the entry into their JSON file (see [client guides](../guides/clients/claude-code.md)); `claude-desktop` writes every Claude Desktop configuration directory that exists (on Windows, also those of the MSIX package); `cline` writes every Cline settings file that exists (the CLI one under `CLINE_DATA_DIR` or `CLINE_DIR` when set). Every other key, the key order and each value are kept as written, as are the file's mode and a symbolic link at its path. A file with comments or trailing commas is never rewritten: when it already holds the same entry the tool counts as installed, otherwise the command prints the snippet to paste by hand. Close the client while `install` runs, since it edits a file the client also writes. |
+| Writes | The `build82` entry in each tool's configuration, with `BUILD82_MOODLE_PATH` in its environment and the resolved absolute path of the running binary as the command. `claude` runs `claude mcp add --scope user build82 -e BUILD82_MOODLE_PATH=<path> -- <binary>`; `codex` runs `codex mcp add build82 --env BUILD82_MOODLE_PATH=<path> -- <binary>`. For both, an existing registration reported by `<tool> mcp get build82` is removed first (for `claude`: every `user` and `local` registration; a `project` registration in `.mcp.json` is left unchanged and reported with a warning, see [Claude Code](../guides/clients/claude-code.md)). The other targets merge the entry into their JSON file (see [client guides](../guides/clients/claude-code.md)); `claude-desktop` writes every Claude Desktop configuration directory that exists (on Windows, also those of the MSIX package); `cline` writes every Cline settings file that exists (the CLI one under `CLINE_DATA_DIR` or `CLINE_DIR` when set). Every other key, the key order and each value are kept as written, as are the file's mode and a symbolic link at its path. When a `build82` entry already exists, only `command`, `args` and `BUILD82_MOODLE_PATH` are replaced: other keys of the entry and other environment variables in it are kept, and an entry that already holds those values leaves the file untouched. Each `claude`/`codex` command is given 60 s to finish. On Windows, when that CLI is a `.cmd`/`.bat` script, a Moodle path or binary path containing `& | < > ^ % ! "` or a line break is refused before anything runs. If the new registration fails after the old one was removed, the error says so and tells you to run `install` again. A file with comments or trailing commas is never rewritten: when it already holds the same entry the tool counts as installed, otherwise the command prints the snippet to paste by hand. Close the client while `install` runs, since it edits a file the client also writes. |
 | Output | `<tool>... configured.` for a new registration, `<tool>... updated.` when an existing one was replaced (or already matched), `<tool>... manual step needed: <instructions>` for a commented (JSONC) file, `<tool>... failed: <error>` on any other error (including a config file that cannot be read or parsed); each warning follows on its own line as `  Warning: <text>`. |
 | Exit code | 0 when finished, including "No supported AI tools detected", `Skipped: <tool> not detected.` and `Skipped: <tool> (<reason>).` for a tool unavailable on the current OS; 1 on an unknown target, when any tool failed or needs a manual step (with or without an explicit target; without one, every other detected tool is still configured), or when stdin ends before a valid Moodle root is given (`no Moodle path provided (stdin closed)`). |
 
@@ -93,6 +73,7 @@ build82 uninstall [target] [--purge]
 | `--purge` | bool, default off. Deletes generated files and `~/.build82` after a separate confirmation. |
 | Candidates | Without a target: every tool with a registration, including file-based tools that are no longer detected but whose config file still holds the entry, and config files that cannot be read (reported as failed). Declining the confirmation prints `Nothing removed.` (with `--purge`: `Nothing removed; --purge was skipped too.`). |
 | Output | `<tool>... removed.`, `<tool>... not registered.`, `<tool>... nothing removed.` (only a Claude Code `project` registration was found), `<tool>... manual step needed: <instructions>` (commented JSONC file) or `<tool>... failed: <error>`; each warning follows as `  Warning: <text>`. |
+| Errors | When `<tool> mcp get build82` fails with anything other than a "not registered" answer, the tool is reported as failed instead of not registered. If the `--purge` confirmation is interrupted after registrations were removed, the command fails with `purge interrupted; the build82 registrations reported above were already removed (<n> failed): <cause>`. |
 | Exit code | 0 on success, cancellation, or nothing found (including a Claude Code `project` registration that was left in place); 1 on an unknown target or when any tool failed or needs a manual step, with or without an explicit target. |
 
 Full behaviour: [Uninstallation](../getting-started/uninstallation.md).
@@ -110,7 +91,7 @@ build82 self-update --rollback
 | `--channel <name>` | string | `stable` | Only `stable` is accepted; any other value fails with `unsupported channel "<name>": only "stable" is currently supported` (exit 1). A missing value is a usage error (exit 2). |
 | `--yes`, `-y` | bool | off | Skips the `Replace the running binary with <tag>? [y/N]` prompt. Only `y` (any case) confirms. |
 | `--require-signature` | bool | off | Refuses to update, before downloading anything, when no usable cosign (v3 or later on `PATH`) can verify the release signature. Cannot be combined with `--check` (exit 2). |
-| `--rollback` | bool | off | Swaps the binary with `<binary>.bak`: the backup must pass `<backup> --version` first (otherwise nothing changes), then the current binary is renamed to `<binary>.bak` and the backup takes its place, so running `--rollback` again swaps them back. Renaming instead of replacing works on Windows, where a running binary cannot be overwritten. Cannot be combined with any other self-update flag (exit 2). Fails with `no backup found at <path> — nothing to roll back` if the backup is missing. On success prints `Rolled back to <version> at <path> (the replaced version is kept at <path>.bak; run --rollback again to undo).` |
+| `--rollback` | bool | off | Swaps the binary with `<binary>.bak`: the backup must pass `<backup> --version` first (otherwise nothing changes), then the current binary is renamed to `<binary>.bak` and the backup takes its place, so running `--rollback` again swaps them back. Renaming instead of replacing works on Windows, where a running binary cannot be overwritten. Cannot be combined with any other self-update flag (exit 2). Fails with `no backup found at <path> — nothing to roll back` if the backup is missing. On success prints `Rolled back to <version> at <path> (the replaced version is kept at <path>.bak; run --rollback again to undo).` If putting the backup in place fails and the current binary cannot be restored either, the error ends with `(the backup is now at <path> — rename it back to <path>: <cause>)`. |
 
 Update sequence:
 
@@ -137,54 +118,17 @@ Releases published before v1.1.0 carry no `checksums.txt.sigstore.json`. Updatin
 
 | Code | Situation |
 | :--- | :--- |
-| 0 | Normal completion, `--help`, `--version`, cancelled prompts, graceful HTTP shutdown (also when the 10 s shutdown timeout is exceeded). |
+| 0 | Normal completion, `--help`, `--version`, cancelled prompts. |
 | 10 | `self-update --check` found a newer release. |
-| 2 | Usage error: unknown flag or argument, flag missing its value, server-only flag without `--http`, an extra argument to `install`, `uninstall` or `self-update`, or an invalid self-update flag combination (`--rollback` with another flag, `--require-signature` with `--check`). Reported as `Error: <message>` followed by `Run 'build82 <subcommand> --help' for usage.` (or `Run 'build82 --help' for usage.` for server flags) on stderr. |
-| 1 | Unknown command; a Ctrl-C at a subcommand prompt (`Interrupted; nothing was changed.`); any error printed as `Error: <message>` by `install`, `uninstall`, `self-update`; token configuration errors; `Fatal error: <message>` from the stdio server, or from the HTTP server failing to bind (`listen on <host>:<port>: <cause>`). |
-
-## Transports
-
-| Transport | Selected by | Endpoints | Authentication | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| stdio | no `--http` | — | none | Logs `build82 server running on stdio` to stderr. Runs until the client disconnects. stdout carries the protocol. |
-| Streamable HTTP | `--http` | `/mcp` (handled by the Go SDK's Streamable HTTP handler) | Bearer, if a token is set | One MCP server instance per session. |
-| SSE | `--http` | `/sse` (message endpoint handled by the same handler) | Bearer, if a token is set | Legacy HTTP+SSE transport. |
-| Health | `--http` | `GET /health` | none, exempt from Host check | Returns `200 {"status":"ok"}`. |
-
-Other paths return `404` with `{"error":"Not Found","endpoints":["/mcp","/sse","/health"]}`.
-
-### HTTP server behaviour
-
-| Aspect | Value |
-| :--- | :--- |
-| Listen address | `<host>:<port>`; defaults `127.0.0.1:3000`. Bind happens before startup messages; failure exits 1. |
-| Startup messages (stderr) | `[build82] HTTP server listening on http://<host>:<port>`, `MCP endpoint: http://<host>:<port>/mcp`, `SSE endpoint: http://<host>:<port>/sse`. |
-| TLS | None. Plain HTTP only. Use a reverse proxy for HTTPS. |
-| Bearer auth | Header `Authorization: Bearer <token>` (prefix is case-sensitive); constant-time comparison. Applies to `/mcp` and `/sse` only. Failure: `401` `{"error":"Unauthorized","message":"Valid Bearer token required. Set Authorization: Bearer <token> header."}`. |
-| Host allow-list | `Host` header, port stripped, compared case-insensitively against: `localhost`, `127.0.0.1`, `::1`, the `--host` value, every `--allowed-host`. Not listed: `403` `{"error":"Forbidden","message":"Host \"<host>\" is not allowed. Pass --allowed-host to permit it."}`. `/health` is exempt. Evaluated before auth. |
-| No-token warning | `[build82] WARNING: no token set — /mcp and /sse are UNAUTHENTICATED` on every start without a token. |
-| Non-loopback warning | Additionally, when there is no token and `--host` is not `127.0.0.1`, `localhost` or `::1` (case-insensitive): `[build82] WARNING: host "<host>" is not loopback — the MCP server is exposed to the network with no authentication`. |
-| `ReadHeaderTimeout` | 10 s |
-| `IdleTimeout` | 120 s |
-| `WriteTimeout` | Not set (long-lived streams). |
-| Shutdown | On `SIGINT` or `SIGTERM`: prints `[build82] shutting down...`, waits up to 10 s for connections to end, then closes them. |
-
-Example:
-
-```bash
-export BUILD82_TOKEN="$(openssl rand -hex 32)"
-build82 --http --port 3000
-curl http://127.0.0.1:3000/health
-curl -H "Authorization: Bearer $BUILD82_TOKEN" http://127.0.0.1:3000/mcp
-```
+| 2 | Usage error: unknown flag or argument (including the flags of the removed HTTP mode), flag missing its value, an extra argument to `install`, `uninstall` or `self-update`, or an invalid self-update flag combination (`--rollback` with another flag, `--require-signature` with `--check`). Reported as `Error: <message>` followed by `Run 'build82 <subcommand> --help' for usage.` (or `Run 'build82 --help' for usage.` for a top-level flag) on stderr. |
+| 1 | Unknown command; a Ctrl-C at a subcommand prompt (`Interrupted; nothing was changed.`); any error printed as `Error: <message>` by `install`, `uninstall`, `self-update`; `Fatal error: <message>` from the stdio server. |
 
 ## Environment variables read
 
 | Variable | Read by | Reference |
 | :--- | :--- | :--- |
-| `BUILD82_TOKEN` | `--http` | [Configuration Reference](./configuration.md#environment-variables) |
-| `BUILD82_MOODLE_PATH`, `BUILD82_MOODLE_VERSION`, `BUILD82_MOODLE_FULLVERSION` | Server (all transports) | [Configuration Reference](./configuration.md#environment-variables) |
-| `BUILD82_EXTRACTOR_BACKEND` | Server (all transports) | [Configuration Reference](./configuration.md#environment-variables) |
+| `BUILD82_MOODLE_PATH`, `BUILD82_MOODLE_VERSION`, `BUILD82_MOODLE_FULLVERSION` | Server | [Configuration Reference](./configuration.md#environment-variables) |
+| `BUILD82_EXTRACTOR_BACKEND` | Server | [Configuration Reference](./configuration.md#environment-variables) |
 | `HOME` / `USERPROFILE` | Locating `~/.build82` and client configuration files | [Configuration Reference](./configuration.md#the-configuration-file) |
 | `APPDATA` | Windows only, configuration paths of Claude Desktop, Zed and the Cline VS Code extension | [Uninstallation](../getting-started/uninstallation.md#build82-uninstall) |
 | `LOCALAPPDATA` | Windows only, Claude Desktop's MSIX package directories | [Configuration Reference](./configuration.md#environment-variables) |

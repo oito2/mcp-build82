@@ -44,8 +44,10 @@ func RegisterScaffoldPrompt(server *mcp.Server) {
 // typeNotes holds the plugin-type-specific implementation notes included in the scaffold prompt,
 // keyed by plugin type.
 var typeNotes = map[string]string{
-	"mod": "Must implement `{component}_add_instance`, `{component}_update_instance`, and " +
-		"`{component}_delete_instance` in `lib.php`. Standard entry points are `index.php` (list all " +
+	"mod": "Must implement `{name}_add_instance`, `{name}_update_instance`, and " +
+		"`{name}_delete_instance` in `lib.php`, prefixed with the module name without `mod_` (Moodle " +
+		"calls `<modulename>_add_instance`); the module name has no underscores, and its language " +
+		"file is `lang/en/{name}.php`. Standard entry points are `index.php` (list all " +
 		"instances in a course) and `view.php` (view one instance). The course-module object `$cm` is " +
 		"central to almost every operation.",
 	"local": "The most flexible plugin type — no mandatory entry points or interfaces. Common uses: " +
@@ -170,7 +172,7 @@ func handleScaffoldPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.
 		b.WriteString("\n")
 	}
 
-	b.WriteString("### Files to Generate\n\n- `version.php`\n- `lang/en/" + component + ".php`\n")
+	b.WriteString("### Files to Generate\n\n- `version.php`\n- `lang/en/" + moodletype.LangFileName(component) + ".php`\n")
 	switch pluginType {
 	case "block":
 		fmt.Fprintf(&b, "- `block_%s.php`\n", name)

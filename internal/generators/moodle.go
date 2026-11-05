@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/oito2/mcp-build82/internal/cache"
 	"github.com/oito2/mcp-build82/internal/extractors"
+	"github.com/oito2/mcp-build82/internal/fsutil"
 	"github.com/oito2/mcp-build82/internal/genutil"
 )
 
@@ -181,11 +183,17 @@ func GenerateApiIndex(moodlePath string) GeneratorResult {
 // GenerateEventsIndex writes MOODLE_EVENTS_INDEX.md, a table of every event observer declared in
 // a db/events.php under `moodlePath`, sorted by event name, then source file and callback. Failures are reported in the result.
 func GenerateEventsIndex(moodlePath string) GeneratorResult {
+	return generateEventsIndex(moodlePath, globMoodleSuffix(moodlePath, "db/events.php"))
+}
+
+// generateEventsIndex is GenerateEventsIndex over `files`, the already-listed db/events.php files under
+// `moodlePath`.
+func generateEventsIndex(moodlePath string, files []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_EVENTS_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		type row struct{ event, callback, source string }
 		var rows []row
-		for _, f := range globMoodleSuffix(moodlePath, "db/events.php") {
+		for _, f := range files {
 			extraction := extractors.ParseEventsPhp(f)
 			if extraction == nil {
 				continue
@@ -209,7 +217,7 @@ func GenerateEventsIndex(moodlePath string) GeneratorResult {
 		b.WriteString(genutil.Header("Moodle Events Index", "Every event observer registered across all plugins."))
 		b.WriteString("| Event | Callback | Source |\n|---|---|---|\n")
 		for _, r := range rows {
-			fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", genutil.EscapeMdCell(r.event), genutil.EscapeMdCell(r.callback), r.source)
+			fmt.Fprintf(&b, "| `%s` | `%s` | %s |\n", genutil.EscapeMdCell(r.event), genutil.EscapeMdCell(r.callback), genutil.SafeInline(r.source))
 		}
 
 		return genutil.Write(output, b.String()), nil
@@ -221,6 +229,12 @@ func GenerateEventsIndex(moodlePath string) GeneratorResult {
 // GenerateTasksIndex writes MOODLE_TASKS_INDEX.md, a table of every scheduled task declared in a
 // db/tasks.php under `moodlePath`, in file-walk order. Failures are reported in the result.
 func GenerateTasksIndex(moodlePath string) GeneratorResult {
+	return generateTasksIndex(moodlePath, globMoodleSuffix(moodlePath, "db/tasks.php"))
+}
+
+// generateTasksIndex is GenerateTasksIndex over `files`, the already-listed db/tasks.php files under
+// `moodlePath`.
+func generateTasksIndex(moodlePath string, files []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_TASKS_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		var b strings.Builder
@@ -228,7 +242,7 @@ func GenerateTasksIndex(moodlePath string) GeneratorResult {
 		b.WriteString("| Class | Schedule | Blocking | Source |\n|---|---|---|---|\n")
 
 		// Rows keep file-walk order rather than being sorted.
-		for _, f := range globMoodleSuffix(moodlePath, "db/tasks.php") {
+		for _, f := range files {
 			extraction := extractors.ParseTasksPhp(f)
 			if extraction == nil {
 				continue
@@ -236,7 +250,7 @@ func GenerateTasksIndex(moodlePath string) GeneratorResult {
 			rel, _ := filepath.Rel(moodlePath, f)
 			for _, task := range extraction.Tasks {
 				fmt.Fprintf(&b, "| `%s` | `%s` | %v | %s |\n",
-					genutil.EscapeMdCell(task.ClassName), genutil.EscapeMdCell(extractors.FormatCronSchedule(task)), task.Blocking, filepath.ToSlash(rel))
+					genutil.EscapeMdCell(task.ClassName), genutil.EscapeMdCell(extractors.FormatCronSchedule(task)), task.Blocking, genutil.SafeInline(filepath.ToSlash(rel)))
 			}
 		}
 
@@ -249,13 +263,19 @@ func GenerateTasksIndex(moodlePath string) GeneratorResult {
 // GenerateServicesIndex writes MOODLE_SERVICES_INDEX.md, a table of every web service function
 // declared in a db/services.php under `moodlePath`. Failures are reported in the result.
 func GenerateServicesIndex(moodlePath string) GeneratorResult {
+	return generateServicesIndex(moodlePath, globMoodleSuffix(moodlePath, "db/services.php"))
+}
+
+// generateServicesIndex is GenerateServicesIndex over `files`, the already-listed db/services.php files under
+// `moodlePath`.
+func generateServicesIndex(moodlePath string, files []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_SERVICES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		var b strings.Builder
 		b.WriteString(genutil.Header("Moodle Services Index", "Every web service function registered across all plugins."))
 		b.WriteString("| Function | Type | AJAX | Class | Source |\n|---|---|---|---|---|\n")
 
-		for _, f := range globMoodleSuffix(moodlePath, "db/services.php") {
+		for _, f := range files {
 			extraction := extractors.ParseServicesPhp(f)
 			if extraction == nil {
 				continue
@@ -263,7 +283,7 @@ func GenerateServicesIndex(moodlePath string) GeneratorResult {
 			rel, _ := filepath.Rel(moodlePath, f)
 			for _, fn := range extraction.Functions {
 				fmt.Fprintf(&b, "| `%s` | %s | %v | `%s` | %s |\n",
-					genutil.EscapeMdCell(fn.Name), genutil.EscapeMdCell(fn.Type), fn.Ajax, genutil.EscapeMdCell(fn.ClassName), filepath.ToSlash(rel))
+					genutil.EscapeMdCell(fn.Name), genutil.EscapeMdCell(fn.Type), fn.Ajax, genutil.EscapeMdCell(fn.ClassName), genutil.SafeInline(filepath.ToSlash(rel)))
 			}
 		}
 
@@ -276,20 +296,26 @@ func GenerateServicesIndex(moodlePath string) GeneratorResult {
 // GenerateDbTablesIndex writes MOODLE_DB_TABLES_INDEX.md, a table of every table (with field
 // count) declared in a db/install.xml under `moodlePath`. Failures are reported in the result.
 func GenerateDbTablesIndex(moodlePath string) GeneratorResult {
+	return generateDbTablesIndex(moodlePath, globMoodleSuffix(moodlePath, "db/install.xml"))
+}
+
+// generateDbTablesIndex is GenerateDbTablesIndex over `files`, the already-listed db/install.xml files under
+// `moodlePath`.
+func generateDbTablesIndex(moodlePath string, files []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_DB_TABLES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		var b strings.Builder
 		b.WriteString(genutil.Header("Moodle DB Tables Index", "Every database table declared across all plugins."))
 		b.WriteString("| Table | Fields | Source |\n|---|---|---|\n")
 
-		for _, f := range globMoodleSuffix(moodlePath, "db/install.xml") {
+		for _, f := range files {
 			schema := extractors.ParseInstallXml(f)
 			if schema == nil {
 				continue
 			}
 			rel, _ := filepath.Rel(moodlePath, f)
 			for _, t := range schema.Tables {
-				fmt.Fprintf(&b, "| `%s` | %d | %s |\n", genutil.EscapeMdCell(t.Name), len(t.Fields), filepath.ToSlash(rel))
+				fmt.Fprintf(&b, "| `%s` | %d | %s |\n", genutil.EscapeMdCell(t.Name), len(t.Fields), genutil.SafeInline(filepath.ToSlash(rel)))
 			}
 		}
 
@@ -302,14 +328,18 @@ func GenerateDbTablesIndex(moodlePath string) GeneratorResult {
 // GenerateClassesIndex writes MOODLE_CLASSES_INDEX.md, a table of every class, interface, trait
 // and enum found in classes/ directories under `moodlePath`. Failures are reported in the result.
 func GenerateClassesIndex(moodlePath string) GeneratorResult {
+	return generateClassesIndex(moodlePath, globMoodleClassesPhp(moodlePath))
+}
+
+// generateClassesIndex is GenerateClassesIndex over `files`, the already-listed classes/**/*.php files under
+// `moodlePath`.
+func generateClassesIndex(moodlePath string, files []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_CLASSES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		var b strings.Builder
 		b.WriteString(genutil.Header("Moodle Classes Index", "Every class/interface/trait/enum found under a classes/ directory."))
 		b.WriteString("| FQN | Kind | File |\n|---|---|---|\n")
 
-		// Only files under classes/ directories are scanned, not the whole installation.
-		files := globMoodleClassesPhp(moodlePath)
 		extraction := extractors.ExtractClassesFromFiles(files, moodlePath)
 		for _, c := range extraction.Classes {
 			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", genutil.EscapeMdCell(c.FQN), genutil.EscapeMdCell(string(c.Kind)), c.File)
@@ -324,13 +354,19 @@ func GenerateClassesIndex(moodlePath string) GeneratorResult {
 // GenerateCapabilitiesIndex writes MOODLE_CAPABILITIES_INDEX.md, a table of every capability
 // declared in a db/access.php under `moodlePath`. Failures are reported in the result.
 func GenerateCapabilitiesIndex(moodlePath string) GeneratorResult {
+	return generateCapabilitiesIndex(moodlePath, globMoodleSuffix(moodlePath, "db/access.php"))
+}
+
+// generateCapabilitiesIndex is GenerateCapabilitiesIndex over `files`, the already-listed db/access.php files under
+// `moodlePath`.
+func generateCapabilitiesIndex(moodlePath string, files []string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_CAPABILITIES_INDEX.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
 		var b strings.Builder
 		b.WriteString(genutil.Header("Moodle Capabilities Index", "Every capability declared across all plugins."))
 		b.WriteString("| Capability | Type | Context | Source |\n|---|---|---|---|\n")
 
-		for _, f := range globMoodleSuffix(moodlePath, "db/access.php") {
+		for _, f := range files {
 			extraction := extractors.ParseAccessPhp(f)
 			if extraction == nil {
 				continue
@@ -338,7 +374,7 @@ func GenerateCapabilitiesIndex(moodlePath string) GeneratorResult {
 			rel, _ := filepath.Rel(moodlePath, f)
 			for _, c := range extraction.Capabilities {
 				fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n",
-					genutil.EscapeMdCell(c.Name), genutil.EscapeMdCell(c.CapType), genutil.EscapeMdCell(c.ContextLevel), filepath.ToSlash(rel))
+					genutil.EscapeMdCell(c.Name), genutil.EscapeMdCell(c.CapType), genutil.EscapeMdCell(c.ContextLevel), genutil.SafeInline(filepath.ToSlash(rel)))
 			}
 		}
 
@@ -453,8 +489,11 @@ var pluginGuideComponentNaming = [][2]string{
 	{"tool_*", "Admin tools (admin/tool/{name})"},
 }
 
-// GeneratePluginGuide writes MOODLE_PLUGIN_GUIDE.md, a guide to scaffolding a plugin that embeds
-// `moodleVersion` in its version.php template. Failures are reported in the result.
+// GeneratePluginGuide writes MOODLE_PLUGIN_GUIDE.md, a guide to scaffolding a plugin for Moodle
+// `moodleVersion`. Its version.php template sets $plugin->version to today's YYYYMMDD00 (a plugin
+// version is its own date-based number) and $plugin->requires to the build number of the
+// installation at `moodlePath` (extractors.DetectMoodleInstall), or to a placeholder when that
+// cannot be read. Failures are reported in the result.
 func GeneratePluginGuide(moodlePath, moodleVersion string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_GUIDE.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
@@ -470,12 +509,17 @@ func GeneratePluginGuide(moodlePath, moodleVersion string) GeneratorResult {
 			"| `version.php` | Plugin identity, version, dependencies |\n" +
 			"| `lib.php` | Legacy callback hooks |\n" +
 			"| `db/install.xml` | Database schema |\n" +
-			"| `lang/en/{component}.php` | English language strings |\n\n")
+			"| `lang/en/{component}.php` | English language strings (`lang/en/{name}.php` for an activity module) |\n\n")
 
+		requires := "2022112800; // TODO: build number ($version) of the oldest Moodle supported"
+		if install := extractors.DetectMoodleInstall(moodlePath); install != nil && install.Build != "" {
+			requires = install.Build + "; // Moodle " + moodleVersion + " build number"
+		}
 		fmt.Fprintf(&b, "## version.php Template\n\n```php\n<?php\ndefined('MOODLE_INTERNAL') || die();\n\n"+
-			"$plugin->component = 'local_yourname';\n$plugin->version   = %s;\n$plugin->requires  = %s;\n"+
+			"$plugin->component = 'local_yourname';\n$plugin->version   = %s00; // YYYYMMDDXX: the plugin's own date + increment\n"+
+			"$plugin->requires  = %s\n"+
 			"$plugin->maturity  = MATURITY_STABLE;\n$plugin->release   = '1.0.0';\n```\n\n",
-			moodleVersion, moodleVersion)
+			time.Now().Format("20060102"), requires)
 
 		b.WriteString("## Autoloaded Class Paths\n\n" +
 			"- `classes/task/my_task.php` → `\\local_yourname\\task\\my_task`\n" +
@@ -488,13 +532,13 @@ func GeneratePluginGuide(moodlePath, moodleVersion string) GeneratorResult {
 
 // --- 12. GenerateAiWorkspace --------------------------------------------------
 
-// GenerateAiWorkspace writes MOODLE_AI_WORKSPACE.md, summarizing the plugins in `pluginDirs`:
-// those marked in development and those that already have a PLUGIN_AI_CONTEXT.md. Plugin identity
-// comes from `infoCache`. Failures are reported in the result.
-func GenerateAiWorkspace(moodlePath string, pluginDirs []string, infoCache *pluginInfoCache) GeneratorResult {
+// GenerateAiWorkspace writes MOODLE_AI_WORKSPACE.md, summarizing the plugins marked in development
+// (`devDirs`, the FindDevPlugins list) and the plugins in `pluginDirs` that already have a
+// PLUGIN_AI_CONTEXT.md. Plugin identity comes from `infoCache`. Failures are reported in the result.
+func GenerateAiWorkspace(moodlePath string, pluginDirs, devDirs []string, infoCache *pluginInfoCache) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "MOODLE_AI_WORKSPACE.md")
 	return genutil.Safely(output, func() (GeneratorResult, error) {
-		devDirs := FindDevPlugins(moodlePath)
+		devDirs := slices.Clone(devDirs)
 		sort.Strings(devDirs)
 
 		var withContext []string
@@ -577,8 +621,10 @@ func generateAiIndex(moodlePath, moodleVersion string, pluginDirs []string, info
 				continue
 			}
 			info := infoCache.get(d)
-			rel, _ := filepath.Rel(moodlePath, contextFile)
-			fmt.Fprintf(&b, "- [%s](./%s)\n", genutil.EscapeMdCell(info.Component), filepath.ToSlash(rel))
+			// The link is relative to the index's own directory (<moodle>/.build82), so it starts
+			// with "../" to reach the plugin's own .build82.
+			rel, _ := filepath.Rel(filepath.Dir(output), contextFile)
+			fmt.Fprintf(&b, "- [%s](%s)\n", genutil.EscapeMdCell(info.Component), genutil.SafeInline(filepath.ToSlash(rel)))
 		}
 
 		return genutil.Write(output, b.String()), nil
@@ -604,25 +650,55 @@ func CtagsStatus() (found, universal bool) {
 	return true, err == nil && strings.Contains(string(out), "Universal Ctags")
 }
 
+// ctagsTimeout bounds one ctags run over a Moodle tree. It is a variable so tests can shorten it.
+var ctagsTimeout = 10 * time.Minute
+
 // GenerateCtags runs ctags over `moodlePath` to produce the tags file under ContextDir. When
 // ctags is not on PATH, or is not Universal Ctags (see CtagsStatus), it returns a successful,
-// skipped result. Directory creation or ctags
-// failures are reported in the result's Error field.
+// skipped result. ctags does not follow symbolic links, skips vendor, node_modules and ContextDir
+// directories, and records paths relative to the tags file, so the file holds no absolute host
+// path and no file outside the tree. It writes into a temp file that is then renamed onto the tags
+// file, so a symbolic link at the tags path is replaced instead of followed; a symlinked
+// ContextDir is refused. Directory creation, ctags (including a run longer than ctagsTimeout) or
+// rename failures are reported in the result's Error field.
 func GenerateCtags(moodlePath string) GeneratorResult {
 	output := GlobalOutputPath(moodlePath, "tags")
 	if found, universal := CtagsStatus(); !found || !universal {
 		return GeneratorResult{File: output, Success: true, Skipped: true}
 	}
-	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
+	dir := filepath.Dir(output)
+	if err := fsutil.RefuseSymlinkedDir(dir); err != nil {
 		return GeneratorResult{File: output, Error: err.Error()}
 	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return GeneratorResult{File: output, Error: err.Error()}
+	}
+	tmp, err := os.CreateTemp(dir, ".tmp-tags-*")
+	if err != nil {
+		return GeneratorResult{File: output, Error: err.Error()}
+	}
+	tmpName := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpName) // no-op once the rename below succeeds
 	// "--" stops a `moodlePath` starting with "-" from being parsed as a ctags flag; no shell is
 	// involved, so this only guards the argument boundary.
-	cmd := exec.Command("ctags", "-R", "--languages=PHP", "--exclude=vendor", "--exclude=node_modules", "-f", output, "--", moodlePath)
+	ctx, cancel := context.WithTimeout(context.Background(), ctagsTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ctags", "-R", "--links=no", "--tag-relative=yes", "--languages=PHP",
+		"--exclude=vendor", "--exclude=node_modules", "--exclude="+ContextDir, "-f", tmpName, "--", moodlePath)
+	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return GeneratorResult{File: output, Error: fmt.Sprintf("ctags did not finish within %s", ctagsTimeout)}
+		}
 		return GeneratorResult{File: output, Error: err.Error()}
 	}
-	cache.Global.Mark(output)
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return GeneratorResult{File: output, Error: err.Error()}
+	}
+	if err := fsutil.Rename(tmpName, output); err != nil {
+		return GeneratorResult{File: output, Error: err.Error()}
+	}
 	return GeneratorResult{File: output, Success: true}
 }
 
@@ -638,6 +714,10 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 		mu      sync.Mutex
 	)
 
+	// Every output is marked with the time its sources were listed and read, so a source saved
+	// while the generators run makes the output stale again on the next run.
+	readAt := time.Now()
+
 	cache.Global.EnsureLoaded(moodlePath)
 	defer func() {
 		if err := cache.Global.Save(); err != nil {
@@ -651,15 +731,9 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 	pluginDirs := FindPluginDirs(moodlePath)
 	infoCache := newPluginInfoCache()
 
-	var eventsSrc, tasksSrc, servicesSrc, dbTablesSrc, capsSrc []string
-	var wg sync.WaitGroup
-	wg.Add(5)
-	go func() { defer wg.Done(); eventsSrc = globMoodleSuffix(moodlePath, "db/events.php") }()
-	go func() { defer wg.Done(); tasksSrc = globMoodleSuffix(moodlePath, "db/tasks.php") }()
-	go func() { defer wg.Done(); servicesSrc = globMoodleSuffix(moodlePath, "db/services.php") }()
-	go func() { defer wg.Done(); dbTablesSrc = globMoodleSuffix(moodlePath, "db/install.xml") }()
-	go func() { defer wg.Done(); capsSrc = globMoodleSuffix(moodlePath, "db/access.php") }()
-	wg.Wait()
+	// One walk lists the files of every index; each list is both the index's cache sources and
+	// the files its generator reads.
+	tree := scanMoodleTree(moodlePath)
 
 	pluginVersionFiles := make([]string, len(pluginDirs))
 	for i, d := range pluginDirs {
@@ -677,30 +751,30 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 	}
 
 	tasks := []func(){
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "AI_CONTEXT.md"), pluginVersionFiles,
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "AI_CONTEXT.md"), pluginVersionFiles, readAt,
 			func() GeneratorResult { return GenerateAiContext(moodlePath, moodleVersion, pluginDirs) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_API_INDEX.md"), globalSources,
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_API_INDEX.md"), globalSources, readAt,
 			func() GeneratorResult { return GenerateApiIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_EVENTS_INDEX.md"), eventsSrc,
-			func() GeneratorResult { return GenerateEventsIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_TASKS_INDEX.md"), tasksSrc,
-			func() GeneratorResult { return GenerateTasksIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_SERVICES_INDEX.md"), servicesSrc,
-			func() GeneratorResult { return GenerateServicesIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_DB_TABLES_INDEX.md"), dbTablesSrc,
-			func() GeneratorResult { return GenerateDbTablesIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_CLASSES_INDEX.md"), globalSources,
-			func() GeneratorResult { return GenerateClassesIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_CAPABILITIES_INDEX.md"), capsSrc,
-			func() GeneratorResult { return GenerateCapabilitiesIndex(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_INDEX.md"), pluginVersionFiles,
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_EVENTS_INDEX.md"), tree.events, readAt,
+			func() GeneratorResult { return generateEventsIndex(moodlePath, tree.events) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_TASKS_INDEX.md"), tree.tasks, readAt,
+			func() GeneratorResult { return generateTasksIndex(moodlePath, tree.tasks) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_SERVICES_INDEX.md"), tree.services, readAt,
+			func() GeneratorResult { return generateServicesIndex(moodlePath, tree.services) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_DB_TABLES_INDEX.md"), tree.dbTables, readAt,
+			func() GeneratorResult { return generateDbTablesIndex(moodlePath, tree.dbTables) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_CLASSES_INDEX.md"), append(slices.Clone(globalSources), tree.classes...), readAt,
+			func() GeneratorResult { return generateClassesIndex(moodlePath, tree.classes) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_CAPABILITIES_INDEX.md"), tree.capabilities, readAt,
+			func() GeneratorResult { return generateCapabilitiesIndex(moodlePath, tree.capabilities) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_INDEX.md"), pluginVersionFiles, readAt,
 			func() GeneratorResult { return GeneratePluginIndex(moodlePath, pluginDirs, infoCache) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_DEV_RULES.md"), globalSources,
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_DEV_RULES.md"), globalSources, readAt,
 			func() GeneratorResult { return GenerateDevRules(moodlePath) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_GUIDE.md"), globalSources,
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_PLUGIN_GUIDE.md"), globalSources, readAt,
 			func() GeneratorResult { return GeneratePluginGuide(moodlePath, moodleVersion) }),
-		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_WORKSPACE.md"), contextInputs,
-			func() GeneratorResult { return GenerateAiWorkspace(moodlePath, pluginDirs, infoCache) }),
+		genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_WORKSPACE.md"), contextInputs, readAt,
+			func() GeneratorResult { return GenerateAiWorkspace(moodlePath, pluginDirs, tree.devPlugins, infoCache) }),
 	}
 
 	var wave1 sync.WaitGroup
@@ -713,10 +787,10 @@ func GenerateAll(moodlePath, moodleVersion string) []GeneratorResult {
 
 	// The AI index runs after the concurrent generators because it links only files that exist
 	// on disk.
-	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md"), contextInputs,
+	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "MOODLE_AI_INDEX.md"), contextInputs, readAt,
 		func() GeneratorResult { return generateAiIndex(moodlePath, moodleVersion, pluginDirs, infoCache) })()
 
-	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "tags"), globalSources,
+	genutil.RunCached(&results, &mu, GlobalOutputPath(moodlePath, "tags"), globalSources, readAt,
 		func() GeneratorResult { return GenerateCtags(moodlePath) })()
 
 	return results

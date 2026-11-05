@@ -16,6 +16,13 @@ O **build82** é distribuído como um único binário estático — sem runtime,
 | Moodle                             | 4.1                     | Hook API requer Moodle 4.3+              |
 | Sistema operacional                | Linux, macOS, Windows   | Binários prontos: Linux e macOS em amd64/arm64, Windows somente em amd64 |
 
+**Ferramentas opcionais** — o build82 funciona sem elas; o `doctor` informa se cada uma pode ser usada:
+
+| Ferramenta | Usada para | Como instalar |
+| :--- | :--- | :--- |
+| [Universal Ctags](https://github.com/universal-ctags/ctags) | O arquivo `.build82/tags` para navegação no editor | Seu gerenciador de pacotes (`universal-ctags`) |
+| [`phpcs`](https://github.com/PHPCSStandards/PHP_CodeSniffer) com o [padrão `moodle`](https://github.com/moodlehq/moodle-cs) | A tool `check_coding_style` | `composer global require moodlehq/moodle-cs` (requer PHP e Composer), depois coloque o `vendor/bin` global do Composer no `PATH`; confira com `phpcs -i`, que deve listar `moodle` |
+
 Você também precisará de um **cliente MCP compatível** para interagir com o servidor. O comando `install` do build82 pode configurar automaticamente qualquer um destes que encontrar:
 
 - [Claude Code](../guides/clients/claude-code.md)
@@ -238,7 +245,7 @@ Veja [Contribuindo](../contribuindo.md) para o fluxo de desenvolvimento completo
 
 ## ⚙️ Configurando o Caminho do Moodle
 
-O build82 persiste sua configuração num arquivo pequeno em `~/.build82` assim que você roda `init_moodle_context` — você não precisa definir nada manualmente no dia a dia. Variáveis de ambiente continuam disponíveis e têm precedência, o que é útil em CI ou para sobrepor a configuração pontualmente. As três variáveis abaixo cobrem a localização do Moodle; a lista completa (incluindo `BUILD82_EXTRACTOR_BACKEND` e `BUILD82_TOKEN`) está na [Referência de Configuração](../reference/configuration.md):
+O build82 persiste sua configuração num arquivo pequeno em `~/.build82` assim que você roda `init_moodle_context` — você não precisa definir nada manualmente no dia a dia. Variáveis de ambiente continuam disponíveis e têm precedência, o que é útil em CI ou para sobrepor a configuração pontualmente. As três variáveis abaixo cobrem a localização do Moodle; a lista completa (incluindo `BUILD82_EXTRACTOR_BACKEND`) está na [Referência de Configuração](../reference/configuration.md):
 
 | Variável                       | Obrigatória | Descrição                                                                          |
 | :------------------------------ | :---------: | :----------------------------------------------------------------------------------- |

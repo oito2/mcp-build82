@@ -19,7 +19,7 @@ In your AI client chat, run:
 /mcp
 ```
 
-If `build82` appears as connected with 13 tools, the server is working. The problem is in the context configuration, not the connection.
+If `build82` appears as connected with 15 tools, the server is working. The problem is in the context configuration, not the connection.
 
 If it does not appear, the problem is in the server configuration — see the [Connection Errors](#-connection-and-path-errors) section below.
 
@@ -43,13 +43,13 @@ The AI will call the `doctor` tool and return a report with: config file locatio
 | `command not found: build82` | [command not found after building from source](#command-not-found-build82-after-building-from-source) |
 | macOS or Windows refuses to run the downloaded binary | [The operating system blocks the downloaded binary](#the-operating-system-blocks-the-downloaded-binary) |
 | Permission errors when generating `.md` files | [Permission denied when creating `.md` files](#permission-denied-when-creating-md-files) |
+| `check_coding_style` cannot find phpcs or the moodle standard | [`check_coding_style` says phpcs or the moodle standard is missing](#check_coding_style-says-phpcs-or-the-moodle-standard-is-missing) |
 | `build82 self-update` fails or the new version is broken | [self-update fails](#build82-self-update-fails) |
 | The AI uses outdated fields or functions | [The AI suggests code from an older version of the plugin](#the-ai-suggests-code-from-an-older-version-of-the-plugin) |
 | Old Moodle version reported after an upgrade | [Stale context after a Moodle upgrade](#stale-context-after-a-moodle-upgrade) |
 | Automatic monitoring stopped | [Watch mode stops after restarting the server](#watch-mode-stops-after-restarting-the-server) |
 | `.build82/` shows up in `git status` | [`.build82/` appearing in `git status`](#build82-appearing-in-git-status) |
 | Server empty or missing when Moodle runs in Docker | [build82 on the host cannot see Moodle in Docker](#build82-on-the-host-cannot-see-moodle-in-docker) |
-| HTTP `401 Unauthorized`, `403 Forbidden`, or a startup error about the token | [HTTP transport errors](#-http-transport-errors) |
 | `scaffold_plugin` is missing from the tool list | [`scaffold_plugin` does not appear as a tool in `/mcp`](#scaffold_plugin-does-not-appear-as-a-tool-in-mcp) |
 | The AI does not know `build82` | [The AI says it doesn't know `build82`](#the-ai-says-it-doesnt-know-build82) |
 
@@ -229,6 +229,21 @@ volumes:
   - ./www/html/moodle:/var/www/moodle  # without :ro
 ```
 
+### `check_coding_style` says phpcs or the moodle standard is missing
+
+**Symptom:** `check_coding_style` fails with `❌ phpcs was not found on PATH ...`, `❌ phpcs was found, but the moodle coding standard is not installed ...` or `❌ phpcs was found but does not work: ...`; `doctor` shows a warning on the `phpcs` line.
+
+**Cause:** the tool needs `phpcs` on the `PATH` of the process that runs build82 (the MCP client's environment, not only your shell) with the `moodle` standard registered. `phpcs -i` must list `moodle`.
+
+**Solution:**
+
+1. Install both with Composer: `composer global require moodlehq/moodle-cs`.
+2. Add Composer's global bin directory to `PATH` (`composer global config bin-dir --absolute` prints it), and restart the MCP client so it inherits the new `PATH` — or set `PATH` in the client's `env` block.
+3. If you already have a phpcs and only lack the standard, register it: `phpcs --config-set installed_paths <path to moodle-cs>`.
+4. Check with `phpcs -i` and run `doctor` again.
+
+If `phpcs` is a wrapper that runs it inside a container, the container must see the plugin files: mount the Moodle tree so the plugin keeps its Moodle-relative path (`…/local/myplugin/…`), and make sure the container is running — a stopped container shows as "does not work".
+
 ---
 
 ## 🔄 Context and Cache Issues
@@ -312,38 +327,6 @@ Since every generated file lives under this single directory, that's the whole e
 ```
 
 build82 running on the host reads directly from the mounted volume's files on disk — it never needs to reach into the container.
-
----
-
-## 🌐 HTTP Transport Errors
-
-Only relevant when running `build82 --http` (see [Docker](../guides/environments/docker.md) and the [CLI Reference](../reference/cli.md)).
-
-### `401 Unauthorized`
-
-**Symptom:** requests to `/mcp` or `/sse` return `Valid Bearer token required. Set Authorization: Bearer <token> header.`
-
-**Solution:** send `Authorization: Bearer <token>` with exactly the token the server was started with (`--token` or `BUILD82_TOKEN`). `/health` never needs a token.
-
-### `403 Forbidden`: Host not allowed
-
-**Symptom:** the response says `Host "<name>" is not allowed. Pass --allowed-host to permit it.`
-
-**Cause:** the server only accepts `localhost`, `127.0.0.1`, `::1`, the `--host` value, and values given with `--allowed-host`.
-
-**Solution:** restart with `--allowed-host <name>` for every hostname or IP clients use to reach it.
-
-### Startup fails with a token error
-
-**Symptom:** exit code 1 with `--token was passed with an empty value; ...` or `BUILD82_TOKEN is set but empty; ...`.
-
-**Solution:** unset the variable entirely (or pass a non-empty value) to choose between no authentication and a real token. See [Configuration Reference](../reference/configuration.md#build82_token-semantics).
-
-### `listen on <host>:<port>` error
-
-**Symptom:** the server exits with `Fatal error: listen on 127.0.0.1:3000: ...`.
-
-**Solution:** the port is already in use or not allowed; pick another one with `--port <n>`.
 
 ---
 

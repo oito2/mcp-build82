@@ -178,7 +178,7 @@ func TestExtractFunctionsFromPhpFile_CommentGapToleranceAndBlockCommentOnly(t *t
 func TestExtractFunctionsFromPhpFile_RealFileRegression(t *testing.T) {
 	var found int
 	for _, name := range realMoodleRoots {
-		libDir := filepath.Join("/srv/workspace/www/html/mdle", name, "lib")
+		libDir := filepath.Join(realMoodleDir(), name, "lib")
 		entries, err := os.ReadDir(libDir)
 		if err != nil {
 			continue

@@ -33,9 +33,9 @@ PHP/XML file (source)          .md file (output)
 
 | Result | Condition | Counted as |
 | --- | --- | --- |
-| **Hit** | Output was marked fresh this session/persisted, and no source changed since | `Hits` |
+| **Hit** | Output was marked fresh this session/persisted, the set of sources is the same, and no source changed since | `Hits` |
 | **Skip** | Output exists and every source is older than it (mtime comparison, no prior mark) | `Skips` |
-| **Miss** | Output was explicitly invalidated, doesn't exist, or some source is newer | `Misses` |
+| **Miss** | Output was explicitly invalidated, doesn't exist, its set of sources changed, or some source is newer | `Misses` |
 
 ---
 
@@ -45,21 +45,29 @@ The cache is implemented as `MtimeCache` in `internal/cache/cache.go`. A single 
 
 ```go
 type MtimeCache struct {
-	mu     sync.Mutex
-	marked map[string]time.Time // outputPath -> when it was marked fresh
-	stats  CacheStats           // in-memory only, always resets on restart
+	mu    sync.Mutex
+	roots map[string]*rootMarks // bound Moodle root -> its marks ("" = unpersisted)
+	stats CacheStats            // in-memory only, always resets on restart
 
 	// Outputs explicitly invalidated (force: true, watcher events): reported stale
-	// unconditionally until regenerated and Mark'd again. In memory only, keyed by absolute
+	// unconditionally until regenerated and marked again. In memory only, keyed by absolute
 	// output path, and left untouched by EnsureLoaded.
 	forced map[string]struct{}
 
 	loadedRoot string // moodlePath this cache is currently bound to
-	dirty      bool   // true if marked/loadedRoot changed since the last Save
+}
+
+type mark struct {
+	At  time.Time // when the sources were read for the generation
+	Set string    // SHA-256 of the sorted source paths ("" for Mark without a set)
 }
 ```
 
-On disk the file is JSON with a `version` field (currently `1`) and an `entries` map of output path → mark time. Generators call `IsStale` through `genutil.RunCached` and `genutil.Write` calls `Mark` after a successful write.
+Marks are kept **per Moodle root**: every root bound with `EnsureLoaded` keeps its own marks, and a mark goes to the bound root that contains the output path. A run still in flight on one root therefore never writes its marks into another root's cache file when a second session switches the cache to a different installation.
+
+On disk the file is JSON with a `version` field (currently `2`) and an `entries` map of output path → `{"at": <time>, "set": <hash>}`. A version-1 file is ignored, so the first run after upgrading regenerates every output once.
+
+Generators call `IsStale` through `genutil.RunCached`. After a successful generation, `RunCached` calls `MarkAt(output, readAt, sources)`: `readAt` is taken by the orchestrator **before** it lists and reads the sources, so a source saved while the generators run is newer than the mark and the output is regenerated on the next run. `genutil.Write` only writes the file.
 
 ### `IsStale()` logic
 
@@ -71,25 +79,32 @@ The regeneration decision follows this exact sequence:
    YES → miss (regenerate), whatever the mtimes say
    NO  → continue
 
-1. Does the output .md file exist?
+1. Does the output .md file exist as a regular file (not a symbolic link planted in its place)?
    NO  → miss (regenerate)
    YES → continue
 
 2. Was the output marked fresh (this session, or loaded from the persisted
-   .cache.json)?
+   .cache.json) with a different set of sources than the current one
+   (a source added, removed or renamed, whatever its mtime)?
+   YES → delete the mark, miss (regenerate)
+   NO  → continue
+
+3. Was the output marked fresh?
    YES → compare every source file's mtime against the mark's timestamp.
          Nothing changed since the mark → hit (skip).
-         Something did change → delete the mark, fall through to step 3.
-   NO  → continue to step 3
+         Something did change → delete the mark, miss (regenerate).
+   NO  → continue to step 4
 
-3. Is any source file newer than the output file's own mtime?
+4. Is any source file newer than the output file's own mtime?
    YES → miss (regenerate)
    NO  → skip (skip)
 ```
 
+Without a mark (step 4) only mtimes are compared, so a change to the set of sources is not detected; every output generated through `RunCached` has a mark.
+
 ### Monitored source files
 
-**For global files** (`cache.GetMoodleSourceFiles`, used by the API/classes/dev-rules/plugin-guide/ctags outputs; the other global outputs are gated by globs of `db/events.php`, `db/tasks.php`, `db/services.php`, `db/install.xml`, `db/access.php` or by every plugin's `version.php`):
+**For global files** (`cache.GetMoodleSourceFiles`, used by the API/dev-rules/plugin-guide/ctags outputs; the other global outputs are gated by globs of `db/events.php`, `db/tasks.php`, `db/services.php`, `db/install.xml`, `db/access.php`, by every plugin's `version.php`, or — for `MOODLE_CLASSES_INDEX.md` — by these three files plus every `.php` file under a `classes/` directory):
 
 ```
 {moodlePath}/version.php
@@ -97,7 +112,9 @@ The regeneration decision follows this exact sequence:
 {moodlePath}/lib/accesslib.php
 ```
 
-**For plugin files** (`cache.GetPluginSourceFiles`):
+**For plugin files:** every regular file of the plugin directory, skipping symbolic links and the `vendor/`, `node_modules/`, `.git/` and `.build82/` directories at any depth. The plugin outputs read classes, AMD modules and every PHP file, so each one depends on the whole plugin.
+
+The file watcher monitors a fixed list instead (`cache.PluginSourceFileNames`):
 
 ```
 version.php
@@ -115,16 +132,14 @@ db/subplugins.json
 db/subplugins.php
 ```
 
-The same list (`cache.PluginSourceFileNames`) is what the file watcher monitors.
-
 A source file that doesn't exist is simply ignored in the comparison — it never causes an error.
 
 ---
 
 ## Persistence: `EnsureLoaded` / `Save`
 
-- **`EnsureLoaded(moodlePath)`** binds the cache to a Moodle root and loads `.build82/.cache.json`, but only the first time it's called for that exact path in the process — a no-op on every subsequent call. Binding to a different root first saves any unsaved marks for the previous one, and resets the in-memory statistics. A missing, corrupt, or version-mismatched cache file degrades to an empty cache; this is never a fatal error.
-- **`Save()`** persists the current state via an atomic write (`fsutil.WriteAtomic` — write to a temp file, then rename), but only if something actually changed since the last load or save (`dirty`). A crash mid-write can never leave a half-written cache file behind.
+- **`EnsureLoaded(moodlePath)`** binds the cache to a Moodle root and loads `.build82/.cache.json`, but only the first time that root is bound in the process — a no-op while it stays bound. Roots bound earlier keep their marks in memory. Binding to a different root first saves any unsaved marks for the previous one (or drops them when that root no longer exists), and resets the in-memory statistics. A missing, corrupt, or version-mismatched cache file degrades to an empty cache; this is never a fatal error.
+- **`Save()`** persists the marks of every bound root via an atomic write (`fsutil.WriteAtomic` — write to a temp file, flush it to disk, rename, sync the directory; a `.build82` that is a symbolic link is refused), but only if something actually changed since the last load or save (`dirty`). A crash mid-write can never leave a half-written cache file behind.
 
 **Batch operations load and save once per batch, not once per plugin.** `plugin_batch` and `update_indexes`'s `include_plugins` path call `EnsureLoaded` before their loop and `Save` once after it, delegating to `GenerateAllForPluginCore` (the cache-bracket-free half of `GenerateAllForPlugin`) inside the loop itself. Calling the full `Save()` — which re-serializes the *entire* marked-files map — once per plugin in a large batch would otherwise serialize the I/O across a `parallel` worker pool and erase most of its benefit.
 
@@ -134,7 +149,7 @@ A source file that doesn't exist is simply ignored in the comparison — it neve
 
 ### Forced invalidation
 
-`Invalidate(outputFile)` drops the file's mark **and** adds it to the in-memory `forced` set. While an output is in that set, `IsStale` reports it stale (step 0 above) regardless of any mtime comparison, so the next generator run rewrites it. `Mark`, called after the regeneration writes the file, removes it from the set. The set is never persisted and `EnsureLoaded` does not clear it, so an invalidation issued before the cache is bound (or re-bound) to a Moodle root still applies once it loads. `InvalidateAll()` does the same for every output currently recorded in the cache (call `EnsureLoaded` first).
+`Invalidate(outputFile)` drops the file's mark **and** adds it to the in-memory `forced` set. While an output is in that set, `IsStale` reports it stale (step 0 above) regardless of any mtime comparison, so the next generator run rewrites it. `MarkAt`, called after the regeneration writes the file, removes it from the set. The set is never persisted and `EnsureLoaded` does not clear it, so an invalidation issued before the cache is bound (or re-bound) to a Moodle root still applies once it loads. `InvalidateAll()` does the same for every output currently recorded in any bound root (call `EnsureLoaded` first).
 
 ### By `force=true`
 
@@ -174,7 +189,7 @@ The result is a real regeneration: forced outputs are rewritten even when every 
 
 The watcher registers the parent directories of those files with `fsnotify` and filters events to the tracked files, so editors that save through a temporary file and a rename keep being observed. A change that arrives while the same plugin is being regenerated triggers one more regeneration afterwards.
 
-When a matching file is saved:
+When a matching file is saved, created, renamed or removed:
 
 1. The watcher's 500 ms debounce timer fires after the change settles
 2. It calls `cache.Global.Invalidate(...)` for each of the plugin's 12 output files, which forces their regeneration regardless of modification times

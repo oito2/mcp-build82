@@ -19,7 +19,7 @@ No chat do seu cliente de IA, execute:
 /mcp
 ```
 
-Se `build82` aparecer como conectado com 13 tools, o servidor está funcionando. O problema está na configuração do contexto, não na conexão.
+Se `build82` aparecer como conectado com 15 tools, o servidor está funcionando. O problema está na configuração do contexto, não na conexão.
 
 Se não aparecer, o problema está na configuração do servidor — veja a seção de [Erros de Conexão](#-erros-de-conexão-e-path) abaixo.
 
@@ -43,13 +43,13 @@ A IA chamará a tool `doctor` e retornará um relatório com: localização do a
 | `command not found: build82` | [command not found após compilar do código-fonte](#command-not-found-build82-após-compilar-do-código-fonte) |
 | O macOS ou o Windows se recusa a executar o binário baixado | [O sistema operacional bloqueia o binário baixado](#o-sistema-operacional-bloqueia-o-binário-baixado) |
 | Erros de permissão ao gerar arquivos `.md` | [Permissão negada ao criar arquivos `.md`](#permissão-negada-ao-criar-arquivos-md) |
+| O `check_coding_style` não encontra o phpcs ou o padrão moodle | [`check_coding_style` diz que falta o phpcs ou o padrão moodle](#check_coding_style-diz-que-falta-o-phpcs-ou-o-padrão-moodle) |
 | `build82 self-update` falha ou a nova versão está quebrada | [self-update falha](#build82-self-update-falha) |
 | A IA usa campos ou funções desatualizados | [A IA sugere código de uma versão antiga do plugin](#a-ia-sugere-código-de-uma-versão-antiga-do-plugin) |
 | Versão antiga do Moodle reportada após um upgrade | [Contexto desatualizado após um upgrade do Moodle](#contexto-desatualizado-após-um-upgrade-do-moodle) |
 | O monitoramento automático parou | [O modo watch para após reiniciar o servidor](#o-modo-watch-para-após-reiniciar-o-servidor) |
 | `.build82/` aparece no `git status` | [`.build82/` aparecendo no `git status`](#build82-aparecendo-no-git-status) |
 | Diretório vazio ou inexistente quando o Moodle roda no Docker | [build82 no host não enxerga o Moodle no Docker](#build82-no-host-não-enxerga-o-moodle-no-docker) |
-| HTTP `401 Unauthorized`, `403 Forbidden` ou erro de inicialização sobre o token | [Erros do transporte HTTP](#-erros-do-transporte-http) |
 | `scaffold_plugin` não está na lista de tools | [`scaffold_plugin` não aparece como tool no `/mcp`](#scaffold_plugin-não-aparece-como-tool-no-mcp) |
 | A IA não conhece o `build82` | [A IA diz que não conhece o build82](#a-ia-diz-que-não-conhece-o-build82) |
 
@@ -229,6 +229,21 @@ volumes:
   - ./www/html/moodle:/var/www/moodle  # sem :ro
 ```
 
+### `check_coding_style` diz que falta o phpcs ou o padrão moodle
+
+**Sintoma:** o `check_coding_style` falha com `❌ phpcs was not found on PATH ...`, `❌ phpcs was found, but the moodle coding standard is not installed ...` ou `❌ phpcs was found but does not work: ...`; o `doctor` mostra um aviso na linha `phpcs`.
+
+**Causa:** a tool precisa do `phpcs` no `PATH` do processo que executa o build82 (o ambiente do cliente MCP, não só o seu shell) com o padrão `moodle` registrado. O `phpcs -i` deve listar `moodle`.
+
+**Solução:**
+
+1. Instale os dois com o Composer: `composer global require moodlehq/moodle-cs`.
+2. Adicione o diretório bin global do Composer ao `PATH` (`composer global config bin-dir --absolute` o mostra) e reinicie o cliente MCP para que ele herde o novo `PATH` — ou defina o `PATH` no bloco `env` do cliente.
+3. Se você já tem um phpcs e só falta o padrão, registre-o: `phpcs --config-set installed_paths <caminho do moodle-cs>`.
+4. Confira com `phpcs -i` e execute o `doctor` de novo.
+
+Se o `phpcs` é um wrapper que o executa dentro de um container, o container precisa enxergar os arquivos do plugin: monte a árvore do Moodle de forma que o plugin mantenha seu caminho relativo ao Moodle (`…/local/myplugin/…`) e confira se o container está em execução — um container parado aparece como "does not work".
+
 ---
 
 ## 🔄 Problemas de Contexto e Cache
@@ -312,38 +327,6 @@ Como todo arquivo gerado vive sob esse único diretório, essa é a lista de exc
 ```
 
 O build82 rodando no host lê diretamente dos arquivos do volume montado no disco — nunca precisa acessar o container.
-
----
-
-## 🌐 Erros do Transporte HTTP
-
-Relevante apenas ao rodar `build82 --http` (veja [Docker](../guides/environments/docker.md) e a [Referência da CLI](../reference/cli.md)).
-
-### `401 Unauthorized`
-
-**Sintoma:** requisições a `/mcp` ou `/sse` retornam `Valid Bearer token required. Set Authorization: Bearer <token> header.`
-
-**Solução:** envie `Authorization: Bearer <token>` com exatamente o token com o qual o servidor foi iniciado (`--token` ou `BUILD82_TOKEN`). O `/health` nunca exige token.
-
-### `403 Forbidden`: Host não permitido
-
-**Sintoma:** a resposta diz `Host "<nome>" is not allowed. Pass --allowed-host to permit it.`
-
-**Causa:** o servidor só aceita `localhost`, `127.0.0.1`, `::1`, o valor de `--host` e valores passados com `--allowed-host`.
-
-**Solução:** reinicie com `--allowed-host <nome>` para cada hostname ou IP que os clientes usam para alcançá-lo.
-
-### A inicialização falha com erro de token
-
-**Sintoma:** código de saída 1 com `--token was passed with an empty value; ...` ou `BUILD82_TOKEN is set but empty; ...`.
-
-**Solução:** remova a variável por completo (ou passe um valor não vazio) para escolher entre nenhuma autenticação e um token de verdade. Veja a [Referência de Configuração](../reference/configuration.md#semântica-de-build82_token).
-
-### Erro `listen on <host>:<port>`
-
-**Sintoma:** o servidor termina com `Fatal error: listen on 127.0.0.1:3000: ...`.
-
-**Solução:** a porta já está em uso ou não é permitida; escolha outra com `--port <n>`.
 
 ---
 
