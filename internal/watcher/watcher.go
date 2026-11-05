@@ -64,6 +64,7 @@ type MoodleWatcher struct {
 	regenerating map[string]bool
 	pending      map[string]string // plugin dir -> last changed file that arrived during an in-flight regeneration
 	callbacks    []WatchCallback
+	inflight     sync.WaitGroup // counts regeneratePlugin calls that are regenerating a plugin
 	running      bool
 	watchedCount int // file count returned by the Start call in effect; reused when Start is called again while running
 }
@@ -316,7 +317,9 @@ func (w *MoodleWatcher) regeneratePlugin(pluginDir, changedFile string) {
 		return
 	}
 	w.regenerating[pluginDir] = true
+	w.inflight.Add(1)
 	w.mu.Unlock()
+	defer w.inflight.Done()
 
 	for {
 		w.runRegeneration(pluginDir, changedFile)

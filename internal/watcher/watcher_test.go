@@ -65,6 +65,16 @@ func freshCache(t *testing.T) {
 	t.Cleanup(func() { cache.Global = old })
 }
 
+// stopOnCleanup registers a cleanup that stops `w` and waits for any regeneration still in flight,
+// so none outlives the test. Registered after freshCache and t.TempDir, it runs before them.
+func stopOnCleanup(t *testing.T, w *MoodleWatcher) {
+	t.Helper()
+	t.Cleanup(func() {
+		w.Stop()
+		w.inflight.Wait()
+	})
+}
+
 // TestStart_NoMarkers verifies that Start returns 0 and does not run when no plugin is dev-marked.
 func TestStart_NoMarkers(t *testing.T) {
 	freshCache(t)
@@ -145,7 +155,7 @@ func TestStart_WatchesExistingFiles(t *testing.T) {
 	mustWriteFile(t, filepath.Join(pluginDir, "db", "events.php"), "<?php\n")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 
 	// The watchable files present are version.php, lib.php and db/events.php.
 	if count := w.Start(); count != 3 {
@@ -165,7 +175,7 @@ func TestStart_SecondCallWithoutStopIsNoop(t *testing.T) {
 	mustWriteFile(t, filepath.Join(pluginDir, "lib.php"), "<?php\n")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 
 	firstCount := w.Start()
 	if firstCount == 0 {
@@ -205,7 +215,7 @@ func TestStart_DoesNotBlockRunningDuringWalk(t *testing.T) {
 	t.Cleanup(func() { findMarkersDelayHook = nil })
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 
 	startDone := make(chan int, 1)
 	go func() { startDone <- w.Start() }()
@@ -237,7 +247,7 @@ func TestStart_MaxWatchedPluginsCap(t *testing.T) {
 	}
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 
 	count := w.Start()
 	// Each plugin has only version.php, so one watched file per plugin.
@@ -268,7 +278,7 @@ func TestDebounce_CoalescesRapidTouches(t *testing.T) {
 	// A window much longer than the gaps between the writes below, so a scheduling stall on a
 	// loaded machine cannot split them into two quiet periods.
 	w.debounce = 2 * time.Second
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
 	}
@@ -311,7 +321,7 @@ func TestDebounce_SecondPluginUnaffectedByFirst(t *testing.T) {
 	pluginB := markPluginDev(t, moodlePath, filepath.Join("local", "b"), "local_b")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected watched files")
 	}
@@ -406,7 +416,7 @@ func TestWatch_SurvivesAtomicRenameSaves(t *testing.T) {
 	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
 	}
@@ -434,7 +444,7 @@ func TestRegeneratePlugin_ChangeDuringRunIsReplayed(t *testing.T) {
 	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
 	}
@@ -484,7 +494,7 @@ func TestWatch_DeletionTriggersRegeneration(t *testing.T) {
 	mustWriteFile(t, libPhp, "<?php\nfunction local_demo_extend_navigation() {}\n")
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
 	}
@@ -539,7 +549,7 @@ func TestWatch_AnyPluginFileTriggersRegeneration(t *testing.T) {
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
 	w.debounce = 200 * time.Millisecond
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count < 2 {
 		t.Fatalf("expected version.php and the class to be watched, got %d file(s)", count)
 	}
@@ -564,7 +574,7 @@ func TestWatch_DirectoryCreatedAfterStartIsWatched(t *testing.T) {
 	// Long enough that the directory creation and the file write below fall in one quiet period,
 	// so the single regeneration names the last changed path.
 	w.debounce = time.Second
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
 	}
@@ -592,7 +602,7 @@ func TestWatch_OwnOutputsDoNotRetrigger(t *testing.T) {
 
 	w := NewMoodleWatcher(moodlePath, "4.3")
 	w.debounce = 200 * time.Millisecond
-	defer w.Stop()
+	stopOnCleanup(t, w)
 	if count := w.Start(); count == 0 {
 		t.Fatal("expected at least one watched file")
 	}
@@ -603,5 +613,50 @@ func TestWatch_OwnOutputsDoNotRetrigger(t *testing.T) {
 	mustWriteFile(t, filepath.Join(pluginDir, "PLUGIN_CONTEXT.md"), "# legacy\n")
 	if evt := waitForCallback(t, events, w.debounce+time.Second); evt != nil {
 		t.Errorf("expected no regeneration for build82's own outputs, got %+v", evt)
+	}
+}
+
+// TestInflight_CoversRunningRegeneration verifies that the in-flight counter used by stopOnCleanup
+// covers a regeneration still running after Stop: waiting on it returns only once that
+// regeneration has finished.
+func TestInflight_CoversRunningRegeneration(t *testing.T) {
+	freshCache(t)
+	moodlePath := t.TempDir()
+	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
+
+	w := NewMoodleWatcher(moodlePath, "4.3")
+	stopOnCleanup(t, w)
+	if count := w.Start(); count == 0 {
+		t.Fatal("expected at least one watched file")
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	w.OnChange(func(WatchEvent) {
+		close(entered)
+		<-release
+	})
+	go w.regeneratePlugin(pluginDir, "change")
+	select {
+	case <-entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("regeneration did not reach its callback")
+	}
+
+	w.Stop()
+	waited := make(chan struct{})
+	go func() {
+		w.inflight.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+		t.Fatal("waiting returned while a regeneration was still running")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-waited:
+	case <-time.After(30 * time.Second):
+		t.Fatal("waiting did not return after the regeneration finished")
 	}
 }
