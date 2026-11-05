@@ -46,11 +46,16 @@ func writeLargeLibPhp(tb testing.TB) string {
 
 // TestLargeLibPhp_ScansInLinearTime verifies that a lib.php with tens of thousands of top-level
 // functions is fully extracted and scanned for legacy callbacks within a bound that a scan
-// quadratic in the number of root children (tens of seconds) cannot meet.
+// quadratic in the number of root children (tens of seconds) cannot meet. The parse timeout is
+// scaled by raceSlowdown like the bound: under the race detector one parse of this file can exceed
+// the production timeout on a slow machine, which would stop it early and report no functions.
 func TestLargeLibPhp_ScansInLinearTime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("parses a 1.1 MB file")
 	}
+	old := parseTimeout
+	parseTimeout = old * raceSlowdown
+	t.Cleanup(func() { parseTimeout = old })
 	dir := writeLargeLibPhp(t)
 	start := time.Now()
 	fns := ExtractFunctionsFromPhpFile(filepath.Join(dir, "lib.php"))
