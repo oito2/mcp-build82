@@ -264,3 +264,24 @@ func TestExtractPluginHooks_RealFileRegression(t *testing.T) {
 		t.Skip("no db/hooks.php files found across real Moodle installations")
 	}
 }
+
+// TestExtractPluginHooks_ReportsUnparsableSourcesOnly verifies that ExtractPluginHooks reports an
+// error for a hook source that exists but cannot be parsed (here, a lib.php over the size cap),
+// while a plugin whose hook sources are simply missing gives no error.
+func TestExtractPluginHooks_ReportsUnparsableSourcesOnly(t *testing.T) {
+	if _, err := ExtractPluginHooks(t.TempDir(), "local_demo"); err != nil {
+		t.Errorf("missing hook sources must not be an error, got %v", err)
+	}
+
+	dir := t.TempDir()
+	big := make([]byte, maxParseFileSize+1)
+	for i := range big {
+		big[i] = '\n'
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lib.php"), append([]byte("<?php\n"), big...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExtractPluginHooks(dir, "local_demo"); err == nil || !strings.Contains(err.Error(), "lib.php") {
+		t.Errorf("expected an error naming lib.php, got %v", err)
+	}
+}

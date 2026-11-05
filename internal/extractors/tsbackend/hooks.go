@@ -16,6 +16,9 @@
 package tsbackend
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,13 +32,31 @@ import (
 
 // ExtractPluginHooks combines the three hook scans for the plugin at `pluginPath`: db/hooks.php
 // callbacks, classes/hook/*.php definitions and legacy lib.php callbacks (matched using
-// `component`, the plugin's frankenstyle name). The returned error is always nil.
+// `component`, the plugin's frankenstyle name). A missing source file is not an error; the error
+// joins the failures to read or parse a source file that exists (too large, parse timeout), and
+// the scans of the other files still run.
 func ExtractPluginHooks(pluginPath, component string) (phptypes.HooksExtraction, error) {
+	callbacks, errCallbacks := parseHookCallbacks(pluginPath)
+	definitions, errDefinitions := parseHookDefinitions(pluginPath)
+	warnings, errWarnings := DetectLegacyCallbacksInFile(filepath.Join(pluginPath, "lib.php"), component)
 	return phptypes.HooksExtraction{
-		Callbacks:      ParseHookCallbacks(pluginPath),
-		Definitions:    ParseHookDefinitions(pluginPath),
-		LegacyWarnings: DetectLegacyCallbacks(pluginPath, component),
-	}, nil
+		Callbacks:      callbacks,
+		Definitions:    definitions,
+		LegacyWarnings: warnings,
+	}, errors.Join(errCallbacks, errDefinitions, errWarnings)
+}
+
+// parseExisting parses the PHP file at `path` with ParseFile. A file that does not exist gives
+// ok=false and no error; any other failure is returned as the error.
+func parseExisting(path string) (tree *gotreesitter.Tree, src []byte, ok bool, err error) {
+	if _, statErr := os.Lstat(path); errors.Is(statErr, fs.ErrNotExist) {
+		return nil, nil, false, nil
+	}
+	tree, src, err = ParseFile(path)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return tree, src, true, nil
 }
 
 // --- Callbacks (db/hooks.php's $callbacks array) ------------------------------------------------
@@ -44,14 +65,21 @@ func ExtractPluginHooks(pluginPath, component string) (phptypes.HooksExtraction,
 // array-of-arrays shape as events/tasks. hookname falls back to the legacy "hook" key; requires
 // either to be non-empty (after fallback) or callback to be non-empty, matching the regex backend.
 func ParseHookCallbacks(pluginPath string) []phptypes.HookCallback {
-	tree, src, err := ParseFile(filepath.Join(pluginPath, "db", "hooks.php"))
-	if err != nil {
-		return nil
+	callbacks, _ := parseHookCallbacks(pluginPath)
+	return callbacks
+}
+
+// parseHookCallbacks is ParseHookCallbacks, also returning the error when db/hooks.php exists but
+// cannot be read or parsed.
+func parseHookCallbacks(pluginPath string) ([]phptypes.HookCallback, error) {
+	tree, src, ok, err := parseExisting(filepath.Join(pluginPath, "db", "hooks.php"))
+	if !ok {
+		return nil, err
 	}
 	defer tree.Release()
 	arr := FindAssignment(tree.RootNode(), MatchVariable(src, "callbacks"))
 	if arr == nil {
-		return nil
+		return nil, nil
 	}
 
 	var callbacks []phptypes.HookCallback
@@ -66,7 +94,7 @@ func ParseHookCallbacks(pluginPath string) []phptypes.HookCallback {
 		}
 		callbacks = append(callbacks, cb)
 	}
-	return callbacks
+	return callbacks, nil
 }
 
 // parseHookCallback reads one $callbacks entry's keyed fields. DefaultEnabled defaults to true,
@@ -107,11 +135,20 @@ func parseHookCallback(inner *gotreesitter.Node, src []byte) phptypes.HookCallba
 // ParseHookDefinitions globs pluginPath/classes/hook/*.php and parses each as a hook definition
 // class. A file without a resolvable namespace+class FQN is skipped, matching the regex backend.
 func ParseHookDefinitions(pluginPath string) []phptypes.HookDefinition {
+	defs, _ := parseHookDefinitions(pluginPath)
+	return defs
+}
+
+// parseHookDefinitions is ParseHookDefinitions, also returning the joined errors of the files that
+// could not be read or parsed (the others are still scanned).
+func parseHookDefinitions(pluginPath string) ([]phptypes.HookDefinition, error) {
 	matches, _ := filepath.Glob(filepath.Join(pluginPath, "classes", "hook", "*.php"))
 	var defs []phptypes.HookDefinition
+	var errs []error
 	for _, path := range matches {
-		tree, src, err := ParseFile(path)
-		if err != nil {
+		tree, src, ok, err := parseExisting(path)
+		if !ok {
+			errs = append(errs, err)
 			continue
 		}
 		// Released at the end of each iteration (not deferred to function return) so that scanning
@@ -123,7 +160,7 @@ func ParseHookDefinitions(pluginPath string) []phptypes.HookDefinition {
 			defs = append(defs, def)
 		}
 	}
-	return defs
+	return defs, errors.Join(errs...)
 }
 
 // parseHookDefinitionFile builds a hook definition from a parsed classes/hook file. The boolean
@@ -294,15 +331,17 @@ func findKeyedStringAnywhere(root *gotreesitter.Node, key string, src []byte) st
 // {name}_{legacy suffix}, for every suffix in legacyhooks.Map and every name in
 // moodletype.ComponentNames(component) (a module is also known by its short name).
 func DetectLegacyCallbacks(pluginPath, component string) []phptypes.LegacyCallbackWarning {
-	return DetectLegacyCallbacksInFile(filepath.Join(pluginPath, "lib.php"), component)
+	warnings, _ := DetectLegacyCallbacksInFile(filepath.Join(pluginPath, "lib.php"), component)
+	return warnings
 }
 
 // DetectLegacyCallbacksInFile is DetectLegacyCallbacks over the PHP file at `filePath` instead of
-// the plugin's lib.php. It returns nil when the file cannot be parsed.
-func DetectLegacyCallbacksInFile(filePath, component string) []phptypes.LegacyCallbackWarning {
-	tree, src, err := ParseFile(filePath)
-	if err != nil {
-		return nil
+// the plugin's lib.php. A missing file gives no warnings and no error; the error reports a file
+// that exists but cannot be read or parsed.
+func DetectLegacyCallbacksInFile(filePath, component string) ([]phptypes.LegacyCallbackWarning, error) {
+	tree, src, ok, err := parseExisting(filePath)
+	if !ok {
+		return nil, err
 	}
 	defer tree.Release()
 	declared := topLevelFunctionNames(tree.RootNode(), src)
@@ -310,7 +349,7 @@ func DetectLegacyCallbacksInFile(filePath, component string) []phptypes.LegacyCa
 	return legacyhooks.Warnings(moodletype.ComponentNames(component), func(fn string) bool {
 		_, ok := declared[fn]
 		return ok
-	})
+	}), nil
 }
 
 // topLevelFunctionNames returns the names of the global functions the file declares: those

@@ -47,14 +47,18 @@ func serverIcons() []mcp.Icon {
 // NewServer builds a new build82 MCP server with every tool, global and plugin resource, and
 // prompt registered. It supports resource subscriptions: a client may subscribe to any resource
 // the server serves (see resources.KnownURI) and is then sent notifications/resources/updated
-// when a tool or the watcher regenerates its file. Each call returns an independent server
-// instance.
+// when a tool or the watcher regenerates its file. It does not advertise the logging capability
+// (deprecated by MCP, and never used: the server sends no log notifications). Each call returns an
+// independent server instance.
 func NewServer() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "build82",
 		Version: version.Current,
 		Icons:   serverIcons(),
 	}, &mcp.ServerOptions{
+		// A non-nil value replaces the SDK's default {"logging":{}}; tools, prompts and resources
+		// are still inferred from what is registered below.
+		Capabilities:       &mcp.ServerCapabilities{},
 		SubscribeHandler:   subscribe,
 		UnsubscribeHandler: unsubscribe,
 	})

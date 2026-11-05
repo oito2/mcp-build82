@@ -207,7 +207,7 @@ O `build82` expõe 15 tools:
 
 ## Watcher
 
-O componente baseado em `fsnotify` iniciado pelo `watch_plugins`. Ele observa os arquivos-fonte de cada plugin dev (`version.php`, `lib.php`, `db/*.php`, `db/install.xml`, ...), espera 500 ms após a última alteração (debounce), invalida as marcas de cache do plugin e regenera seu contexto. Vive apenas em memória e precisa ser iniciado novamente após reiniciar o servidor.
+O componente baseado em `fsnotify` iniciado pelo `watch_plugins`. Ele observa todos os arquivos-fonte de cada plugin dev (todos os arquivos, exceto os de `vendor/`, `node_modules/`, `.git/` e `.build82/`), espera 500 ms após a última alteração (debounce), invalida as marcas de cache do plugin e regenera seu contexto. Vive apenas em memória e precisa ser iniciado novamente após reiniciar o servidor.
 
 → Veja: [Sistema de Cache](../architecture/cache-system.md)
 

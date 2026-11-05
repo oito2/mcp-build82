@@ -114,23 +114,7 @@ Without a mark (step 4) only mtimes are compared, so a change to the set of sour
 
 **For plugin files:** every regular file of the plugin directory, skipping symbolic links and the `vendor/`, `node_modules/`, `.git/` and `.build82/` directories at any depth. The plugin outputs read classes, AMD modules and every PHP file, so each one depends on the whole plugin.
 
-The file watcher monitors a fixed list instead (`cache.PluginSourceFileNames`):
-
-```
-version.php
-lib.php
-locallib.php
-settings.php
-db/install.xml
-db/access.php
-db/events.php
-db/tasks.php
-db/services.php
-db/upgrade.php
-db/hooks.php
-db/subplugins.json
-db/subplugins.php
-```
+The file watcher (`watch_plugins`) watches the same set: every directory of each dev plugin except those skipped above (`generators.IsSkippedPluginDir`), so a change to any source file regenerates the plugin.
 
 A source file that doesn't exist is simply ignored in the comparison — it never causes an error.
 

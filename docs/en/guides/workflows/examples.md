@@ -51,7 +51,7 @@ local_audit_log_entries table: userid, eventname, ip, and timecreated.
 **What the server does at each step:**
 - Step 1: injects Moodle context + standards for the detected version — AI generates correct files
 - Step 2: `generate_plugin_context` — creates 12 `PLUGIN_*.md` files under `local/audit_log/.build82/`
-- Step 3: `watch_plugins action="start"` — updates context automatically when `db/*.php`/`version.php` are saved
+- Step 3: `watch_plugins action="start"` — updates context automatically when any plugin file is saved
 - Step 4: `get_plugin_info` — AI reads `PLUGIN_DB_TABLES.md` and generates the observer with real table and field names
 - Step 5: `review_plugin` prompt — AI analyzes with focus on capability checks, output escaping, and SQL injection
 

@@ -207,7 +207,7 @@ Executable function exposed by the MCP server that the AI assistant can explicit
 
 ## Watcher
 
-The `fsnotify`-based component started by `watch_plugins`. It watches the source files of every dev plugin (`version.php`, `lib.php`, `db/*.php`, `db/install.xml`, ...), waits 500 ms after the last change (debounce), invalidates the plugin's cache marks and regenerates its context. It lives only in memory and must be started again after a server restart.
+The `fsnotify`-based component started by `watch_plugins`. It watches every source file of each dev plugin (all files except those in `vendor/`, `node_modules/`, `.git/` and `.build82/`), waits 500 ms after the last change (debounce), invalidates the plugin's cache marks and regenerates its context. It lives only in memory and must be started again after a server restart.
 
 → See: [Cache System](../architecture/cache-system.md)
 

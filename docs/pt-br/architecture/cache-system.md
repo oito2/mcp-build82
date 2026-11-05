@@ -114,23 +114,7 @@ Sem marca (passo 4) só os mtimes são comparados, então uma mudança no conjun
 
 **Para arquivos de plugin:** todo arquivo regular do diretório do plugin, ignorando links simbólicos e os diretórios `vendor/`, `node_modules/`, `.git/` e `.build82/` em qualquer profundidade. As saídas do plugin leem classes, módulos AMD e todo arquivo PHP, então cada uma depende do plugin inteiro.
 
-O file watcher monitora uma lista fixa (`cache.PluginSourceFileNames`):
-
-```
-version.php
-lib.php
-locallib.php
-settings.php
-db/install.xml
-db/access.php
-db/events.php
-db/tasks.php
-db/services.php
-db/upgrade.php
-db/hooks.php
-db/subplugins.json
-db/subplugins.php
-```
+O file watcher (`watch_plugins`) observa o mesmo conjunto: todo diretório de cada plugin dev, exceto os ignorados acima (`generators.IsSkippedPluginDir`), então uma mudança em qualquer arquivo-fonte regenera o plugin.
 
 Um arquivo-fonte que não existe é simplesmente ignorado na comparação — nunca causa um erro.
 

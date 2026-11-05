@@ -32,7 +32,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/oito2/mcp-build82/internal/prompt"
 	"github.com/oito2/mcp-build82/internal/version"
@@ -538,19 +537,49 @@ func TestClearBackup_InUseBackupTellsToRestartClients(t *testing.T) {
 	}
 }
 
+// promptSignal is an io.Writer that closes `shown` the first time the written output contains
+// `marker`, so a test can act once a prompt is on screen instead of after a fixed delay.
+type promptSignal struct {
+	marker string
+	shown  chan struct{}
+	mu     sync.Mutex
+	seen   strings.Builder
+	once   sync.Once
+}
+
+// Write records `p` and closes shown once the output so far contains the marker.
+func (s *promptSignal) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seen.Write(p)
+	if strings.Contains(s.seen.String(), s.marker) {
+		s.once.Do(func() { close(s.shown) })
+	}
+	return len(p), nil
+}
+
 // TestRun_InterruptedPromptChangesNothing verifies that cancelling the context while the
-// confirmation prompt waits returns prompt.ErrInterrupted before anything is downloaded.
+// confirmation prompt waits returns prompt.ErrInterrupted before anything is downloaded. The
+// context is cancelled once the prompt is shown, so a slow release lookup before it cannot make
+// the cancellation land elsewhere.
 func TestRun_InterruptedPromptChangesNothing(t *testing.T) {
 	f := newReleaseFixture(t, "v1.1.0")
 	d := f.start()
 	r, w := io.Pipe()
 	defer w.Close()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &promptSignal{marker: "Replace the running binary", shown: make(chan struct{})}
+	finished := make(chan struct{})
+	defer close(finished)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
+		select {
+		case <-out.shown:
+			cancel()
+		case <-finished:
+		}
 	}()
-	_, err := run(ctx, RunOptions{Stdin: r, Stdout: io.Discard, Stderr: io.Discard}, d)
+	_, err := run(ctx, RunOptions{Stdin: r, Stdout: out, Stderr: io.Discard}, d)
 	if !errors.Is(err, prompt.ErrInterrupted) {
 		t.Fatalf("expected prompt.ErrInterrupted, got %v", err)
 	}

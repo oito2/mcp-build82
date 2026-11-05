@@ -7,6 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-05
+
+### Changed
+
+- `watch_plugins` watches every file of each development plugin, at any depth (except in
+  `vendor/`, `node_modules/`, `.git/` and `.build82/`), including directories created while it
+  runs. Before, it only watched `version.php`, `lib.php`, `locallib.php`, `settings.php` and the
+  `db/` files, so editing a class, template or AMD module did not refresh the plugin's context,
+  although the context is built from all of them. build82's own outputs do not trigger a
+  regeneration.
+- With the tree-sitter backend, a hook source it cannot parse (a file over its 2 MiB cap, or a
+  parse that times out) makes that plugin's hook extraction fall back to the regex backend, with a
+  warning on stderr. Before, the plugin's hooks and legacy callbacks were silently reported as
+  empty.
+- `doctor` reads each PHP file of a development plugin once for its deprecated-API, capability
+  and lang-string checks, instead of once per check.
+- gotreesitter 0.56.0 for the optional tree-sitter backend; its results are unchanged on the
+  real Moodle installations used for the parity tests.
+- Releases are signed with cosign v3.1.4.
+
+### Removed
+
+- The watcher's MCP log notification (`build82/watcher`), and the `logging` capability the server
+  advertised. MCP logging is deprecated by the protocol; a client is told about a regeneration by
+  the `notifications/resources/updated` of the resources it subscribed to.
+
+### Development
+
+- `TestRun_InterruptedPromptChangesNothing` cancels once the confirmation prompt is shown instead
+  of after a fixed delay, which a slow CI runner could hit during the release lookup.
+
 ## [1.2.0] - 2026-11-05
 
 ### Security
@@ -442,7 +473,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release artifacts: 5 binaries, the `build82.mcpb` Claude Desktop extension, `checksums.txt`, and
   the MCP Registry entry `io.github.oito2/mcp-build82`.
 
-[Unreleased]: https://github.com/oito2/mcp-build82/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/oito2/mcp-build82/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/oito2/mcp-build82/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/oito2/mcp-build82/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/oito2/mcp-build82/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/oito2/mcp-build82/compare/v1.0.0...v1.0.1

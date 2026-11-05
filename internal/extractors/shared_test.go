@@ -126,3 +126,45 @@ func TestScanFileForOwnGetStringCalls_ManyCallsInLargeFile(t *testing.T) {
 		t.Errorf("scanning took %s, over the %s bound", elapsed, limit)
 	}
 }
+
+// TestLoadPhpFiles_ScansShareOneReadPerFile verifies that the deprecated-API, capability and
+// lang-string scans run over files loaded with LoadPhpFiles read each file once in total, and
+// find the same calls as over unloaded files.
+func TestLoadPhpFiles_ScansShareOneReadPerFile(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "lib.php"), "<?php\nold_fn();\nhas_capability('local/demo:view', $ctx);\nget_string('k', 'local_demo');\n")
+	mustMkdirAll(t, filepath.Join(dir, "classes"))
+	mustWriteFile(t, filepath.Join(dir, "classes", "x.php"), "<?php\nget_string('other', 'local_demo');\n")
+
+	reads := map[string]int{}
+	orig := readSource
+	readSource = func(path string) ([]byte, error) {
+		reads[path]++
+		return orig(path)
+	}
+	t.Cleanup(func() { readSource = orig })
+
+	deprecated := map[string]struct{}{"old_fn": {}}
+	scan := func(files []PhpFile) (int, int, int) {
+		return len(FindDeprecatedApiUsageIn(files, deprecated)),
+			len(FindOwnCapabilityChecksIn(files, "local/demo")),
+			len(FindOwnGetStringCallsIn(files, "local_demo"))
+	}
+	listed := ListPhpFiles(dir)
+	files := LoadPhpFiles(listed)
+	d, c, g := scan(files)
+	if d != 1 || c != 1 || g != 2 {
+		t.Errorf("calls found = %d deprecated, %d capability, %d get_string; want 1, 1, 2", d, c, g)
+	}
+	for path, n := range reads {
+		if n != 1 {
+			t.Errorf("%s read %d times, want 1", path, n)
+		}
+	}
+	if len(reads) != 2 {
+		t.Errorf("read %d files, want 2", len(reads))
+	}
+	if d2, c2, g2 := scan(listed); d2 != d || c2 != c || g2 != g {
+		t.Errorf("unloaded files give %d, %d, %d calls; want %d, %d, %d", d2, c2, g2, d, c, g)
+	}
+}

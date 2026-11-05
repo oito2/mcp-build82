@@ -16,6 +16,8 @@
 package extractors
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -227,12 +229,23 @@ func detectLegacyCallbacks(pluginPath, component string) []LegacyCallbackWarning
 // functions declared in the PHP file at `filePath`, by the same rules as the warnings of
 // ExtractPluginHooks for lib.php, with the backend BUILD82_EXTRACTOR_BACKEND selects. It is used
 // for files Moodle never loads to call callbacks, such as locallib.php, whose callbacks are reported
-// apart. It returns nil when the file cannot be read.
+// apart. When the tree-sitter backend cannot parse the file, the regex backend's result is used
+// and a warning is written to stderr. It returns nil when the file cannot be read.
 func DetectLegacyCallbacksInFile(filePath, component string) []LegacyCallbackWarning {
 	if useTreesitter() {
-		return tsbackend.DetectLegacyCallbacksInFile(filePath, component)
+		warnings, err := tsbackend.DetectLegacyCallbacksInFile(filePath, component)
+		if err == nil {
+			return warnings
+		}
+		warnTreesitterFallback(filePath, err)
 	}
 	return detectLegacyCallbacksInFile(filePath, component)
+}
+
+// warnTreesitterFallback writes to stderr that the tree-sitter backend failed on the sources at
+// `where` with `err`, and that the regex backend's result is used instead.
+func warnTreesitterFallback(where string, err error) {
+	fmt.Fprintf(os.Stderr, "[build82] warning: tree-sitter could not read the hook sources of %s (%v); using the regex backend for them\n", where, err)
 }
 
 // detectLegacyCallbacksInFile is the regex backend of DetectLegacyCallbacksInFile.
@@ -262,11 +275,17 @@ func PluginUsesHookApi(e HooksExtraction) bool {
 }
 
 // ExtractPluginHooks extracts the registered callbacks, hook definitions and legacy-callback
-// warnings of the plugin at `pluginPath` with frankenstyle name `component`. The error is only
-// non-nil when the tree-sitter backend fails; the regex backend never returns one.
+// warnings of the plugin at `pluginPath` with frankenstyle name `component`. With the tree-sitter
+// backend, a source file it cannot read or parse (over its size cap, or a parse timeout) makes it
+// fall back to the regex backend for the whole hook extraction of the plugin, with a warning on
+// stderr, so the hooks are never silently empty. The returned error is always nil.
 func ExtractPluginHooks(pluginPath, component string) (HooksExtraction, error) {
 	if useTreesitter() {
-		return tsbackend.ExtractPluginHooks(pluginPath, component)
+		hooks, err := tsbackend.ExtractPluginHooks(pluginPath, component)
+		if err == nil {
+			return hooks, nil
+		}
+		warnTreesitterFallback(pluginPath, err)
 	}
 	return HooksExtraction{
 		Callbacks:      parseHookCallbacks(pluginPath),

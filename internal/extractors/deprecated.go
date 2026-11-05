@@ -64,7 +64,9 @@ func FindDeprecatedApiUsageIn(files []PhpFile, deprecated map[string]struct{}) [
 
 	var calls []DeprecatedCall
 	for _, f := range files {
-		calls = append(calls, scanFileForDeprecatedCalls(f.Path, f.Rel, pattern)...)
+		if s, ok := f.text(); ok {
+			calls = append(calls, scanForDeprecatedCalls(s, f.Rel, pattern)...)
+		}
 	}
 	return calls
 }
@@ -107,7 +109,11 @@ func scanFileForDeprecatedCalls(path, relFile string, pattern *regexp.Regexp) []
 	if err != nil {
 		return nil
 	}
-	s := string(content)
+	return scanForDeprecatedCalls(string(content), relFile, pattern)
+}
+
+// scanForDeprecatedCalls is scanFileForDeprecatedCalls over the file content `s`.
+func scanForDeprecatedCalls(s, relFile string, pattern *regexp.Regexp) []DeprecatedCall {
 
 	// The pattern runs over the whole file rather than line by line so a call whose name and
 	// opening parenthesis are on different lines still matches; the line number comes from the

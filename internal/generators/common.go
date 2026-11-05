@@ -65,9 +65,21 @@ func walkMoodleTree(root string, visit func(path, relSlash string)) {
 	})
 }
 
-// pluginSourceFiles returns every regular file of the plugin at `pluginPath` that its generated
-// files can be derived from: all files below it except symbolic links and the contents of vendor/,
-// node_modules/, .git/ and ContextDir directories (build82's own outputs) at any depth.
+// IsSkippedPluginDir reports whether a directory called `name` inside a plugin is left out of the
+// plugin's sources: vendor/, node_modules/, .git/ and ContextDir (build82's own outputs). The
+// generators' staleness check and the watcher both apply it at any depth below the plugin root.
+func IsSkippedPluginDir(name string) bool {
+	return skipWalkDirNames[name] || name == ContextDir
+}
+
+// PluginSourceFiles returns every regular file of the plugin at `pluginPath` that its generated
+// files can be derived from: all files below it except symbolic links and the contents of the
+// directories IsSkippedPluginDir leaves out, at any depth.
+func PluginSourceFiles(pluginPath string) []string {
+	return pluginSourceFiles(pluginPath)
+}
+
+// pluginSourceFiles is PluginSourceFiles.
 func pluginSourceFiles(pluginPath string) []string {
 	var files []string
 	_ = filepath.WalkDir(pluginPath, func(path string, d os.DirEntry, err error) error {
@@ -75,7 +87,7 @@ func pluginSourceFiles(pluginPath string) []string {
 			return nil
 		}
 		if d.IsDir() {
-			if path != pluginPath && (skipWalkDirNames[d.Name()] || d.Name() == ContextDir) {
+			if path != pluginPath && IsSkippedPluginDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

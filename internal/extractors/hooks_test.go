@@ -501,3 +501,30 @@ $callbacks = [
 		}
 	}
 }
+
+// TestExtractPluginHooks_TreesitterFailureFallsBackToRegex verifies that, with the tree-sitter
+// backend, a lib.php it cannot parse (over its 2 MiB cap but within the regex backend's limit)
+// still yields its legacy-callback warning, from the regex backend, and that the same fallback
+// applies to DetectLegacyCallbacksInFile.
+func TestExtractPluginHooks_TreesitterFailureFallsBackToRegex(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString("<?php\nfunction local_demo_before_footer() {}\n")
+	for b.Len() <= 2<<20 {
+		b.WriteString("// padding padding padding padding padding padding padding padding\n")
+	}
+	lib := filepath.Join(dir, "lib.php")
+	mustWriteFile(t, lib, b.String())
+	t.Setenv("BUILD82_EXTRACTOR_BACKEND", "treesitter")
+
+	hooks, err := ExtractPluginHooks(dir, "local_demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks.LegacyWarnings) != 1 || hooks.LegacyWarnings[0].LegacyFunction != "local_demo_before_footer" {
+		t.Errorf("hooks.LegacyWarnings = %+v, want local_demo_before_footer from the regex fallback", hooks.LegacyWarnings)
+	}
+	if got := DetectLegacyCallbacksInFile(lib, "local_demo"); len(got) != 1 {
+		t.Errorf("DetectLegacyCallbacksInFile = %+v, want one warning from the regex fallback", got)
+	}
+}

@@ -33,6 +33,12 @@ const MaxReadableFileSize = 8 << 20 // 8 MiB
 // link or waiting on a FIFO (see fsutil.ReadRegular). It returns an error if the file cannot be
 // opened or read, is not a regular file, or is larger than MaxReadableFileSize.
 func readFileCapped(path string) ([]byte, error) {
+	return readSource(path)
+}
+
+// readSource reads a source file for readFileCapped and PhpFile.text: fsutil.ReadRegular with
+// MaxReadableFileSize. It is a variable so tests can count the reads.
+var readSource = func(path string) ([]byte, error) {
 	return fsutil.ReadRegular(path, MaxReadableFileSize)
 }
 
@@ -78,6 +84,36 @@ func walkPhpFiles(rootPath string, visit func(absPath, relSlash string)) {
 // walked root, slash-separated.
 type PhpFile struct {
 	Path, Rel string
+
+	loaded   bool   // LoadPhpFiles read the file; content and readable hold the outcome
+	readable bool   // the file could be read within MaxReadableFileSize
+	content  string // the file's content when loaded and readable
+}
+
+// LoadPhpFiles reads each of `files` once and returns them with their content, so several scans
+// over the same files (the doctor's deprecated-API, capability and lang-string checks) share one
+// read per file. A file that cannot be read is kept and skipped by every scan, as an unread one is.
+func LoadPhpFiles(files []PhpFile) []PhpFile {
+	loaded := make([]PhpFile, len(files))
+	for i, f := range files {
+		content, err := readFileCapped(f.Path)
+		f.loaded, f.readable, f.content = true, err == nil, string(content)
+		loaded[i] = f
+	}
+	return loaded
+}
+
+// text returns the content of `f`: the one LoadPhpFiles read, or else the file read now. The
+// boolean is false when the file cannot be read.
+func (f PhpFile) text() (string, bool) {
+	if f.loaded {
+		return f.content, f.readable
+	}
+	content, err := readFileCapped(f.Path)
+	if err != nil {
+		return "", false
+	}
+	return string(content), true
 }
 
 // ListPhpFiles returns the *.php files under `rootPath` as walkPhpFiles finds them (symbolic links

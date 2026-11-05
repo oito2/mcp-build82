@@ -41,7 +41,7 @@ Troque `local_myplugin`, `local_relatorios` e nomes parecidos pelos seus própri
 - **Parâmetros esperados:** os plugins já devem estar marcados com `.indevelopment` (veja [Marcar um plugin como em desenvolvimento](#marcar-um-plugin-como-em-desenvolvimento)).
 - **Exemplo:**
   > Comece a acompanhar meus plugins em desenvolvimento para que o contexto deles fique atualizado enquanto eu edito. Depois me diga se o watcher ainda está rodando e pare-o quando eu pedir.
-- **Saída esperada:** o agente chama `watch_plugins` com a ação de iniciar, consultar status ou parar. Enquanto roda, mudanças nos plugins em desenvolvimento regeneram o contexto automaticamente, e todas as sessões conectadas são notificadas quando uma regeneração termina. Se nenhum plugin estiver marcado como `.indevelopment` (ou nenhum tiver arquivos monitoráveis), o watcher não é iniciado e você é avisado; marque um plugin antes e peça de novo.
+- **Saída esperada:** o agente chama `watch_plugins` com a ação de iniciar, consultar status ou parar. Enquanto roda, uma mudança em qualquer arquivo de um plugin em desenvolvimento regenera o contexto automaticamente, e as sessões que assinaram os resources do plugin são notificadas quando uma regeneração termina. Se nenhum plugin estiver marcado como `.indevelopment` (ou nenhum tiver arquivos-fonte), o watcher não é iniciado e você é avisado; marque um plugin antes e peça de novo.
 
 ### Marcar um plugin como em desenvolvimento
 

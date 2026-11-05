@@ -68,7 +68,9 @@ func FindOwnGetStringCallsIn(files []PhpFile, component string) []GetStringCall 
 	names := moodletype.ComponentNames(component)
 	var calls []GetStringCall
 	for _, f := range files {
-		calls = append(calls, scanFileForOwnGetStringCalls(f.Path, f.Rel, names)...)
+		if s, ok := f.text(); ok {
+			calls = append(calls, scanForOwnGetStringCalls(s, f.Rel, names)...)
+		}
 	}
 	return calls
 }
@@ -80,7 +82,11 @@ func scanFileForOwnGetStringCalls(path, relFile string, names []string) []GetStr
 	if err != nil {
 		return nil
 	}
-	s := string(content)
+	return scanForOwnGetStringCalls(string(content), relFile, names)
+}
+
+// scanForOwnGetStringCalls is scanFileForOwnGetStringCalls over the file content `s`.
+func scanForOwnGetStringCalls(s, relFile string, names []string) []GetStringCall {
 
 	// The pattern runs over the whole file rather than line by line so arguments on different
 	// lines still match; the line number comes from the match's byte offset.

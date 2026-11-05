@@ -44,7 +44,7 @@ func TestPluginPanicLine_UsesMoodleRelativePath(t *testing.T) {
 
 // TestWatchStart_CallbackSeesChangesDuringStart verifies that the watch_plugins notification
 // callback is registered before the watcher starts: a change made and regenerated while Start is
-// still in progress must reach the connected session as a log notification.
+// still in progress must reach the subscribed session as a resource-updated notification.
 func TestWatchStart_CallbackSeesChangesDuringStart(t *testing.T) {
 	root := copyForceWatchFixture(t)
 	setupForceWatchEnv(t, root)
@@ -59,13 +59,20 @@ func TestWatchStart_CallbackSeesChangesDuringStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.0"}, nil)
+	acceptSubscription := func(context.Context, *mcp.SubscribeRequest) error { return nil }
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.0"}, &mcp.ServerOptions{
+		SubscribeHandler:   acceptSubscription,
+		UnsubscribeHandler: func(context.Context, *mcp.UnsubscribeRequest) error { return nil },
+	})
+	// The resource the session subscribes to, so the server advertises resources as the real one does.
+	contextURI := pluginResourceURIs("local_demo")[0]
+	server.AddResource(&mcp.Resource{URI: contextURI, Name: "context"}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{}, nil
+	})
 	received := make(chan string, 8)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.0"}, &mcp.ClientOptions{
-		LoggingMessageHandler: func(_ context.Context, r *mcp.LoggingMessageRequest) { //nolint:staticcheck // receives the watcher's log notifications
-			if msg, ok := r.Params.Data.(string); ok {
-				received <- msg
-			}
+		ResourceUpdatedHandler: func(_ context.Context, r *mcp.ResourceUpdatedNotificationRequest) {
+			received <- r.Params.URI
 		},
 	})
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -75,8 +82,8 @@ func TestWatchStart_CallbackSeesChangesDuringStart(t *testing.T) {
 		t.Fatalf("client connect: %v", err)
 	}
 	t.Cleanup(func() { session.Close() })
-	if err := session.SetLoggingLevel(ctx, &mcp.SetLoggingLevelParams{Level: "info"}); err != nil { //nolint:staticcheck // enables the watcher's log notifications
-		t.Fatalf("set logging level: %v", err)
+	if err := session.Subscribe(ctx, &mcp.SubscribeParams{URI: contextURI}); err != nil {
+		t.Fatalf("subscribe: %v", err)
 	}
 
 	// Start the watcher, then change version.php and wait for that regeneration to finish before
@@ -119,11 +126,11 @@ func TestWatchStart_CallbackSeesChangesDuringStart(t *testing.T) {
 	}
 
 	select {
-	case msg := <-received:
-		if !strings.Contains(msg, "local_demo") {
-			t.Errorf("unexpected log message: %q", msg)
+	case uri := <-received:
+		if uri != contextURI {
+			t.Errorf("unexpected resource update %q", uri)
 		}
 	case <-time.After(5 * time.Second):
-		t.Error("the change made during Start produced no log notification")
+		t.Error("the change made during Start produced no resource-updated notification")
 	}
 }

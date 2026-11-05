@@ -71,7 +71,7 @@ as exclusões padrão para erros não checados de `Close`/`fmt.Fprint*`) e preci
 
 **Piso de cobertura:** no Linux, a execução com o backend regex do job `test` mede a cobertura total de instruções com
 `go test -race -coverprofile=cover.out -coverpkg=./... ./...` e falha quando ela fica abaixo do
-`COVERAGE_FLOOR` do `checks.yml` (89,0% na v1.2.0, medido 89,2% sem os testes com Moodle real). O piso só pode subir: aumente-o
+`COVERAGE_FLOOR` do `checks.yml` (89,0% desde a v1.2.0; medido 89,1% na v1.3.0 sem os testes com Moodle real). O piso só pode subir: aumente-o
 quando uma release melhorar a cobertura.
 
 **Schemas das tools:** os schemas de entrada e de saída e as anotações de cada tool MCP ficam como
@@ -105,7 +105,7 @@ semanalmente as actions fixadas por SHA e os módulos Go). Revise-as antes de ca
 | actionlint | v1.7.12 | `ACTIONLINT_VERSION` no `checks.yml` |
 | mcp-publisher | v1.8.1 (+ SHA-256 do tarball) | [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml) |
 | `@anthropic-ai/mcpb` | 2.1.2 | `MCPB_VERSION` em [`.github/actions/validate-release`](../../.github/actions/validate-release/action.yml) |
-| cosign | v3.1.3 | `cosign-release` no `release.yml` |
+| cosign | v3.1.4 | `cosign-release` no `release.yml` |
 
 ## Organização do projeto
 

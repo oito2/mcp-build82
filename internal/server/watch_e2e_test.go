@@ -19,44 +19,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/oito2/mcp-build82/internal/resources"
 )
 
-// connectLoggingClient connects a new client session to `s` with the "info" logging level and
-// returns it with a channel that receives the string Data of every logging notification.
-func connectLoggingClient(t *testing.T, ctx context.Context, s *mcp.Server) (*mcp.ClientSession, <-chan string) {
-	t.Helper()
-	received := make(chan string, 8)
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.0"}, &mcp.ClientOptions{
-		LoggingMessageHandler: func(_ context.Context, r *mcp.LoggingMessageRequest) { //nolint:staticcheck // receives the watcher's log notifications
-			if msg, ok := r.Params.Data.(string); ok {
-				received <- msg
-			}
-		},
-	})
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	go func() { _, _ = s.Connect(ctx, serverTransport, nil) }()
-
-	session, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	t.Cleanup(func() { session.Close() })
-
-	if err := session.SetLoggingLevel(ctx, &mcp.SetLoggingLevelParams{Level: "info"}); err != nil { //nolint:staticcheck // enables the watcher's log notifications
-		t.Fatalf("set logging level: %v", err)
-	}
-	return session, received
-}
-
-// TestWatchPlugins_NotifiesAllConnectedSessions verifies that a watcher change notification
-// reaches every session connected to the server, not only the one that started the watcher. Two
-// sessions connect, one starts the watcher, a real file change is made, and both must be notified.
+// TestWatchPlugins_NotifiesAllConnectedSessions verifies that a watcher regeneration is announced
+// with notifications/resources/updated to every session subscribed to the plugin's resources, not
+// only the one that started the watcher. Two sessions subscribe, one starts the watcher, a real
+// file change is made, and both must be notified.
 func TestWatchPlugins_NotifiesAllConnectedSessions(t *testing.T) {
 	withIsolatedHome(t)
 	root := copyFixtureMoodleTree(t)
@@ -67,8 +39,11 @@ func TestWatchPlugins_NotifiesAllConnectedSessions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	sessionA, msgsA := connectLoggingClient(t, ctx, s)
-	_, msgsB := connectLoggingClient(t, ctx, s) // never calls action=start itself
+	contextURI := resources.PluginURIs("local_demo")[0]
+	sessionA, updatesA := connectSubscriber(t, ctx, s)
+	sessionB, updatesB := connectSubscriber(t, ctx, s) // never calls action=start itself
+	subscribeAll(t, sessionA, contextURI)
+	subscribeAll(t, sessionB, contextURI)
 
 	startResult := callTool(t, sessionA, "watch_plugins", map[string]any{"action": "start"})
 	if startResult.IsError {
@@ -87,13 +62,13 @@ func TestWatchPlugins_NotifiesAllConnectedSessions(t *testing.T) {
 	}
 
 	for name, ch := range map[string]<-chan string{
-		"session A (started the watcher)": msgsA,
-		"session B (never called start)":  msgsB,
+		"session A (started the watcher)": updatesA,
+		"session B (never called start)":  updatesB,
 	} {
 		select {
-		case msg := <-ch:
-			if !strings.Contains(msg, "local_demo") {
-				t.Errorf("%s: unexpected log message: %q", name, msg)
+		case uri := <-ch:
+			if uri != contextURI {
+				t.Errorf("%s: unexpected resource update %q", name, uri)
 			}
 		case <-time.After(10 * time.Second):
 			t.Errorf("%s: timed out waiting for a watcher change notification", name)

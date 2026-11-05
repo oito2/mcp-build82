@@ -59,20 +59,16 @@ func FindOwnCapabilityChecksIn(files []PhpFile, ownPrefix string) []CapabilityCa
 
 	var calls []CapabilityCall
 	for _, f := range files {
-		calls = append(calls, scanFileForOwnCapabilityChecks(f.Path, f.Rel, prefix)...)
+		if s, ok := f.text(); ok {
+			calls = append(calls, scanForOwnCapabilityChecks(s, f.Rel, prefix)...)
+		}
 	}
 	return calls
 }
 
-// scanFileForOwnCapabilityChecks returns the capability calls in the file at `path` whose name
-// starts with `prefix`, recording `relFile` as their file. It returns nil when the file cannot be
-// read.
-func scanFileForOwnCapabilityChecks(path, relFile, prefix string) []CapabilityCall {
-	content, err := readFileCapped(path)
-	if err != nil {
-		return nil
-	}
-	s := string(content)
+// scanForOwnCapabilityChecks returns the capability calls in the file content `s` whose name starts
+// with `prefix`, recording `relFile` as their file.
+func scanForOwnCapabilityChecks(s, relFile, prefix string) []CapabilityCall {
 
 	// The pattern runs over the whole file rather than line by line so a literal on a different
 	// line than `has_capability(` still matches; the line number comes from the match's byte offset.

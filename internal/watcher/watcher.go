@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,16 +50,16 @@ type WatchEvent struct {
 // WatchCallback is invoked with the details of each completed regeneration.
 type WatchCallback func(WatchEvent)
 
-// MoodleWatcher watches the source files of every plugin carrying an .indevelopment marker and
-// regenerates that plugin's context when one changes, debounced per plugin directory. It is safe
-// for concurrent use.
+// MoodleWatcher watches every source file of each plugin carrying an .indevelopment marker (all
+// files below the plugin, as generators.PluginSourceFiles lists them) and regenerates that plugin's
+// context when one changes, debounced per plugin directory. It is safe for concurrent use.
 type MoodleWatcher struct {
 	moodlePath, moodleVersion string
 	debounce                  time.Duration // quiet period before a regeneration; set at construction
 
 	mu           sync.Mutex
 	fsWatcher    *fsnotify.Watcher
-	watchedPaths map[string]string // absolute file path -> owning plugin dir
+	watchedDirs  map[string]string // watched directory -> owning plugin dir
 	timers       map[string]*time.Timer
 	regenerating map[string]bool
 	pending      map[string]string // plugin dir -> last changed file that arrived during an in-flight regeneration
@@ -112,14 +114,15 @@ func findDevPluginDirs(moodlePath string) []string {
 	return dirs
 }
 
-// Start finds the plugins marked .indevelopment under the Moodle path and begins watching their
-// source files (cache.PluginSourceFileNames, at most the first maxWatchedPlugins plugins in path
-// order). The parent directories of those files are registered with fsnotify and events are
-// filtered to the tracked files, so editors that save through a temporary file and a rename keep
-// being observed. It returns the number of files being watched. Finding no markers, or no watchable
-// files, is a normal state and returns 0 without an error; failures to create the watcher or to
-// watch an individual file are logged. The watcher counts as running only when the result is
-// greater than zero.
+// Start finds the plugins marked .indevelopment under the Moodle path and begins watching all of
+// their source files (at most the first maxWatchedPlugins plugins in path order). Every directory
+// of a plugin is registered with fsnotify, except the ones generators.IsSkippedPluginDir leaves
+// out (vendor/, node_modules/, .git/, .build82/) at any depth, and a directory created later is
+// added when its creation is seen, so a file in any of them — including one saved through a
+// temporary file and a rename — triggers a regeneration. It returns the number of source files
+// found when it started (generators.PluginSourceFiles). Finding no markers, or no source files, is a
+// normal state and returns 0 without an error; failures to create the watcher or to watch a
+// directory are logged. The watcher counts as running only when the result is greater than zero.
 //
 // Start does nothing when the watcher is already running and returns the count of the active
 // run, so a second call never leaks a second fsnotify watcher.
@@ -157,26 +160,15 @@ func (w *MoodleWatcher) Start() int {
 		return 0
 	}
 
-	watchedPaths := map[string]string{}
-	watchedDirs := map[string]bool{}
+	watchedDirs := map[string]string{}
 	count := 0
 	for _, pluginDir := range limited {
-		for _, f := range cache.PluginSourceFileNames {
-			path := filepath.Join(pluginDir, f)
-			if _, statErr := os.Stat(path); statErr != nil {
-				continue
-			}
-			dir := filepath.Dir(path)
-			if !watchedDirs[dir] {
-				if addErr := fsWatcher.Add(dir); addErr != nil {
-					w.logf("failed to watch %s: %v", dir, addErr)
-					continue
-				}
-				watchedDirs[dir] = true
-			}
-			watchedPaths[path] = pluginDir
-			count++
+		files := len(generators.PluginSourceFiles(pluginDir))
+		if files == 0 {
+			continue
 		}
+		w.addTree(fsWatcher, watchedDirs, pluginDir, pluginDir)
+		count += files
 	}
 
 	w.mu.Lock()
@@ -191,12 +183,12 @@ func (w *MoodleWatcher) Start() int {
 	if count == 0 {
 		w.mu.Unlock()
 		_ = fsWatcher.Close()
-		w.logf("dev plugins found but nothing watchable (none of the watched files are present)")
+		w.logf("dev plugins found but nothing watchable (no source files)")
 		return 0
 	}
 
 	w.fsWatcher = fsWatcher
-	w.watchedPaths = watchedPaths
+	w.watchedDirs = watchedDirs
 	w.timers = map[string]*time.Timer{}
 	w.regenerating = map[string]bool{}
 	w.pending = map[string]string{}
@@ -204,7 +196,7 @@ func (w *MoodleWatcher) Start() int {
 	w.watchedCount = count
 	w.mu.Unlock()
 
-	w.logf("watching %d file(s) across %d plugin(s)", count, len(limited))
+	w.logf("watching %d file(s) in %d director(ies) across %d plugin(s)", count, len(watchedDirs), len(limited))
 	go w.consumeEvents(fsWatcher)
 	return count
 }
@@ -228,20 +220,73 @@ func (w *MoodleWatcher) consumeEvents(fsWatcher *fsnotify.Watcher) {
 	}
 }
 
-// onFileChange handles one filesystem event. Events for files that are not being watched, and
-// events other than write, create, rename or remove, are ignored. Otherwise it restarts the
-// plugin's debounce timer, so regeneratePlugin runs only after the plugin's files have been quiet
-// for the debounce period. A removed file is handled like an edit, so context derived from it is
-// regenerated.
+// addTree registers with `fsWatcher` the directory `root` and every directory below it that
+// generators.IsSkippedPluginDir does not leave out, recording each in `dirs` as owned by the
+// plugin `pluginDir`. Symbolic links are not followed. Directories that cannot be read or watched
+// are logged and skipped.
+func (w *MoodleWatcher) addTree(fsWatcher *fsnotify.Watcher, dirs map[string]string, root, pluginDir string) {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		if path != pluginDir && generators.IsSkippedPluginDir(d.Name()) {
+			return filepath.SkipDir
+		}
+		if _, seen := dirs[path]; seen {
+			return nil
+		}
+		if addErr := fsWatcher.Add(path); addErr != nil {
+			w.logf("failed to watch %s: %v", path, addErr)
+			return filepath.SkipDir
+		}
+		dirs[path] = pluginDir
+		return nil
+	})
+}
+
+// isBuildOutput reports whether `path`, inside the plugin `pluginDir`, is build82's own output: a
+// skipped directory (.build82 being created, for instance) or a legacy context file at the plugin
+// root, which generation moves into .build82/. Events for them are not source changes, so they
+// must not trigger another regeneration.
+func isBuildOutput(path, pluginDir string) bool {
+	name := filepath.Base(path)
+	if generators.IsSkippedPluginDir(name) {
+		return true
+	}
+	if filepath.Dir(path) != pluginDir {
+		return false
+	}
+	return name == ".indevelopment" || slices.Contains(generators.PluginContextFiles, name)
+}
+
+// onFileChange handles one filesystem event. Events outside the watched directories, events for
+// build82's own outputs (isBuildOutput), and events other than write, create, rename or remove,
+// are ignored. A created directory is watched too, with its subdirectories; a removed or renamed
+// watched directory is forgotten. Otherwise it restarts the plugin's debounce timer, so
+// regeneratePlugin runs only after the plugin's files have been quiet for the debounce period. A
+// removed file is handled like an edit, so context derived from it is regenerated.
 func (w *MoodleWatcher) onFileChange(event fsnotify.Event) {
 	if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) && !event.Has(fsnotify.Rename) && !event.Has(fsnotify.Remove) {
 		return
 	}
+	path := filepath.Clean(event.Name)
 	w.mu.Lock()
-	pluginDir, ok := w.watchedPaths[filepath.Clean(event.Name)]
-	if !ok {
+	pluginDir, ok := w.watchedDirs[filepath.Dir(path)]
+	if !ok || w.fsWatcher == nil || isBuildOutput(path, pluginDir) {
 		w.mu.Unlock()
 		return
+	}
+	switch {
+	case event.Has(fsnotify.Create):
+		if info, err := os.Lstat(path); err == nil && info.IsDir() {
+			w.addTree(w.fsWatcher, w.watchedDirs, path, pluginDir)
+		}
+	case event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename):
+		for dir := range w.watchedDirs {
+			if dir == path || strings.HasPrefix(dir, path+string(filepath.Separator)) {
+				delete(w.watchedDirs, dir)
+			}
+		}
 	}
 	if timer, exists := w.timers[pluginDir]; exists {
 		timer.Stop()
@@ -351,7 +396,7 @@ func (w *MoodleWatcher) Stop() {
 	for _, t := range w.timers {
 		t.Stop()
 	}
-	w.watchedPaths = nil
+	w.watchedDirs = nil
 	w.timers = nil
 	w.regenerating = nil
 	w.pending = nil

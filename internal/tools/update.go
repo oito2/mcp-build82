@@ -252,8 +252,8 @@ type WatchInput struct {
 
 // makeHandleWatch returns the watch_plugins handler bound to `server`. The handler starts, stops
 // or reports the status of the single process-wide watcher. When the watcher regenerates a
-// plugin's context, a log notification is sent to every session connected at that moment, not only
-// the one that started it. Starting returns an informational result when no watchable files exist;
+// plugin's context, notifications/resources/updated is sent for the plugin's resources and the
+// plugin indexes to every session subscribed to them, not only the one that started it. Starting returns an informational result when no watchable files exist;
 // a missing or invalid configuration yields an error result. The error return is always nil.
 func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequest, WatchInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, in WatchInput) (*mcp.CallToolResult, any, error) {
@@ -294,19 +294,9 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 			}
 			w := watcher.NewMoodleWatcher(cfg.MoodlePath, cfg.MoodleVersion)
 			w.OnChange(func(ev watcher.WatchEvent) {
-				// The callback fires asynchronously, possibly long after this tool call returned and
-				// its request context was cancelled, so it uses a fresh background context.
+				// The callback fires asynchronously, possibly long after this tool call returned, and
+				// notifyResourcesUpdated uses its own background context.
 				notifyResourcesUpdated(server, pluginResourceURIs(ev.Component))
-				// Transitional: the log message also reaches clients that do not subscribe to
-				// resources. MCP logging is deprecated but still part of the protocol.
-				logCtx := context.Background()
-				for session := range server.Sessions() {
-					_ = session.Log(logCtx, &mcp.LoggingMessageParams{ //nolint:staticcheck // best-effort; ignore error (e.g. transport closed)
-						Level:  "info",
-						Logger: "build82/watcher",
-						Data:   fmt.Sprintf("[watcher] %s — context regenerated (%s)", ev.Component, ev.File),
-					})
-				}
 			})
 			count := startWatcher(w)
 			if count == 0 {
@@ -315,7 +305,7 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 				w.Stop()
 				return textResult(false,
 					"ℹ️ Watcher not started — no watchable files found.\n\n"+
-						"No .indevelopment plugin with watchable source files (version.php, db/*.php, ...) exists. "+
+						"No .indevelopment plugin with source files exists. "+
 						"Run `generate_plugin_context` on a plugin (or `plugin_batch` with mark_as_dev: true) to mark it, "+
 						"then start the watcher again."), nil, nil
 			}
@@ -323,7 +313,8 @@ func makeHandleWatch(server *mcp.Server) func(context.Context, *mcp.CallToolRequ
 
 			return textResult(false, fmt.Sprintf(
 				"✅ Watcher started — monitoring %d files across dev plugins.\n\n"+
-					"Context will be regenerated automatically when db/*.php or version.php change.\n"+
+					"Context will be regenerated automatically when any file of a dev plugin changes "+
+					"(vendor/, node_modules/, .git/ and .build82/ excepted).\n"+
 					"Use `watch_plugins action='stop'` to stop.", count)), nil, nil
 		}
 	}

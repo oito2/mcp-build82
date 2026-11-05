@@ -387,15 +387,6 @@ func (c *MtimeCache) saveRootLocked(root string) error {
 	return nil
 }
 
-// PluginSourceFileNames lists the plugin-relative file names that the watcher package monitors
-// for live regeneration.
-var PluginSourceFileNames = []string{
-	"version.php", "lib.php", "locallib.php", "settings.php",
-	"db/install.xml", "db/access.php", "db/events.php",
-	"db/tasks.php", "db/services.php", "db/upgrade.php", "db/hooks.php",
-	"db/subplugins.json", "db/subplugins.php",
-}
-
 // GetMoodleSourceFiles returns the version.php, lib/moodlelib.php and lib/accesslib.php paths
 // under the Moodle root `moodlePath`, which are the staleness signal for the site-wide generators.
 func GetMoodleSourceFiles(moodlePath string) []string {

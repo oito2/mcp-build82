@@ -525,3 +525,83 @@ func TestStart_IgnoresMarkersEveryOtherToolIgnores(t *testing.T) {
 	}
 	w.Stop()
 }
+
+// TestWatch_AnyPluginFileTriggersRegeneration verifies that a change to a plugin file outside the
+// fixed list of db/*.php, version.php and lib.php files (here a class) regenerates the plugin,
+// since its generated context depends on every plugin file.
+func TestWatch_AnyPluginFileTriggersRegeneration(t *testing.T) {
+	freshCache(t)
+	moodlePath := t.TempDir()
+	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
+	renderer := filepath.Join(pluginDir, "classes", "output", "renderer.php")
+	mustMkdirAll(t, filepath.Dir(renderer))
+	mustWriteFile(t, renderer, "<?php\nnamespace local_demo\\output;\nclass renderer {}\n")
+
+	w := NewMoodleWatcher(moodlePath, "4.3")
+	w.debounce = 200 * time.Millisecond
+	defer w.Stop()
+	if count := w.Start(); count < 2 {
+		t.Fatalf("expected version.php and the class to be watched, got %d file(s)", count)
+	}
+	events := make(chan WatchEvent, 10)
+	w.OnChange(func(e WatchEvent) { events <- e })
+
+	mustWriteFile(t, renderer, "<?php\nnamespace local_demo\\output;\nclass renderer { public function x() {} }\n")
+	evt := waitForCallback(t, events, 30*time.Second)
+	if evt == nil || filepath.Clean(evt.File) != renderer {
+		t.Fatalf("expected a regeneration triggered by %s, got %+v", renderer, evt)
+	}
+}
+
+// TestWatch_DirectoryCreatedAfterStartIsWatched verifies that a directory created inside a plugin
+// while the watcher runs is watched too: a file then written in it triggers the regeneration.
+func TestWatch_DirectoryCreatedAfterStartIsWatched(t *testing.T) {
+	freshCache(t)
+	moodlePath := t.TempDir()
+	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
+
+	w := NewMoodleWatcher(moodlePath, "4.3")
+	// Long enough that the directory creation and the file write below fall in one quiet period,
+	// so the single regeneration names the last changed path.
+	w.debounce = time.Second
+	defer w.Stop()
+	if count := w.Start(); count == 0 {
+		t.Fatal("expected at least one watched file")
+	}
+	events := make(chan WatchEvent, 10)
+	w.OnChange(func(e WatchEvent) { events <- e })
+
+	taskDir := filepath.Join(pluginDir, "classes", "task")
+	mustMkdirAll(t, taskDir)
+	time.Sleep(200 * time.Millisecond) // lets the watcher see the new directories and add them
+	task := filepath.Join(taskDir, "cleanup.php")
+	mustWriteFile(t, task, "<?php\nnamespace local_demo\\task;\nclass cleanup {}\n")
+
+	evt := waitForCallback(t, events, 30*time.Second)
+	if evt == nil || filepath.Clean(evt.File) != task {
+		t.Fatalf("expected a regeneration triggered by %s, got %+v", task, evt)
+	}
+}
+
+// TestWatch_OwnOutputsDoNotRetrigger verifies that writing build82's own outputs — the .build82
+// directory and a legacy context file at the plugin root — does not trigger a regeneration.
+func TestWatch_OwnOutputsDoNotRetrigger(t *testing.T) {
+	freshCache(t)
+	moodlePath := t.TempDir()
+	pluginDir := markPluginDev(t, moodlePath, filepath.Join("local", "demo"), "local_demo")
+
+	w := NewMoodleWatcher(moodlePath, "4.3")
+	w.debounce = 200 * time.Millisecond
+	defer w.Stop()
+	if count := w.Start(); count == 0 {
+		t.Fatal("expected at least one watched file")
+	}
+	events := make(chan WatchEvent, 10)
+	w.OnChange(func(e WatchEvent) { events <- e })
+
+	mustWriteFile(t, filepath.Join(pluginDir, genutil.ContextDir, "PLUGIN_CONTEXT.md"), "# out\n")
+	mustWriteFile(t, filepath.Join(pluginDir, "PLUGIN_CONTEXT.md"), "# legacy\n")
+	if evt := waitForCallback(t, events, w.debounce+time.Second); evt != nil {
+		t.Errorf("expected no regeneration for build82's own outputs, got %+v", evt)
+	}
+}

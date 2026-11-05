@@ -472,7 +472,7 @@ type devPlugin struct {
 	detected bool // extractors.DetectPlugin succeeded; info is the zero value otherwise
 	caps     *extractors.CapabilitiesExtraction
 	schema   *extractors.DbSchema
-	phpFiles []extractors.PhpFile // the plugin's *.php files, listed once for every source scan
+	phpFiles []extractors.PhpFile // the plugin's *.php files, listed and read once for every source scan
 }
 
 // component returns the plugin's component, or its directory relative to the Moodle root when it
@@ -488,8 +488,8 @@ func (p devPlugin) component() string {
 var detectPlugin = extractors.DetectPlugin
 
 // loadDevPlugins detects each plugin directory of `dirs` (inside the Moodle root `moodlePath`),
-// extracts its capabilities and database schema and lists its *.php files, keeping the order of
-// `dirs`.
+// extracts its capabilities and database schema, and lists and reads its *.php files once
+// (extractors.LoadPhpFiles), keeping the order of `dirs`.
 func loadDevPlugins(moodlePath string, dirs []string) []devPlugin {
 	plugins := make([]devPlugin, len(dirs))
 	for i, dir := range dirs {
@@ -501,7 +501,7 @@ func loadDevPlugins(moodlePath string, dirs []string) []devPlugin {
 			detected: err == nil,
 			caps:     extractors.ExtractPluginCapabilities(dir),
 			schema:   extractors.ExtractPluginSchema(dir),
-			phpFiles: extractors.ListPhpFiles(dir),
+			phpFiles: extractors.LoadPhpFiles(extractors.ListPhpFiles(dir)),
 		}
 	}
 	return plugins

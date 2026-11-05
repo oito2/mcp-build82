@@ -70,7 +70,7 @@ standard exclusions for unchecked `Close`/`fmt.Fprint*` errors) and must report 
 
 **Coverage floor:** on Linux, the `test` job's regex-backend run measures the total statement coverage with
 `go test -race -coverprofile=cover.out -coverpkg=./... ./...` and fails when it is below
-`COVERAGE_FLOOR` in `checks.yml` (89.0% at v1.2.0, measured 89.2% without the real-Moodle tests). The floor may only go up: raise it
+`COVERAGE_FLOOR` in `checks.yml` (89.0% since v1.2.0; measured 89.1% at v1.3.0 without the real-Moodle tests). The floor may only go up: raise it
 when a release improves the coverage.
 
 **Tool schemas:** the input and output schemas and annotations of every MCP tool are kept as golden
@@ -102,7 +102,7 @@ SHA-pinned actions and the Go modules weekly). Review them before each release:
 | actionlint | v1.7.12 | `ACTIONLINT_VERSION` in `checks.yml` |
 | mcp-publisher | v1.8.1 (+ tarball SHA-256) | [`.github/actions/install-mcp-publisher`](.github/actions/install-mcp-publisher/action.yml) |
 | `@anthropic-ai/mcpb` | 2.1.2 | `MCPB_VERSION` in [`.github/actions/validate-release`](.github/actions/validate-release/action.yml) |
-| cosign | v3.1.3 | `cosign-release` in `release.yml` |
+| cosign | v3.1.4 | `cosign-release` in `release.yml` |
 
 ## Project layout
 

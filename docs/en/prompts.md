@@ -41,7 +41,7 @@ Replace `local_myplugin`, `local_reports`, and similar names with your own plugi
 - **Expected parameters:** the plugins must already be marked `.indevelopment` (see [Mark a plugin as under development](#mark-a-plugin-as-under-development)).
 - **Example:**
   > Start watching my dev plugins so their context stays up to date while I edit. Later, tell me if the watcher is still running, and stop it when I say so.
-- **Expected output:** the agent calls `watch_plugins` with the start, status, or stop action. While it runs, changes to dev plugins regenerate their context automatically, and every connected session is notified when a regeneration finishes. If no plugin is marked `.indevelopment` (or none has watchable files), the watcher is not started and you are told so; mark a plugin first and ask again.
+- **Expected output:** the agent calls `watch_plugins` with the start, status, or stop action. While it runs, a change to any file of a dev plugin regenerates its context automatically, and sessions subscribed to the plugin's resources are notified when a regeneration finishes. If no plugin is marked `.indevelopment` (or none has source files), the watcher is not started and you are told so; mark a plugin first and ask again.
 
 ### Mark a plugin as under development
 

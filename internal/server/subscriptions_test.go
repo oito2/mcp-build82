@@ -88,6 +88,23 @@ func TestSubscriptions_AdvertisedAndValidated(t *testing.T) {
 		"moodle://plugin/local_notyet", "moodle://plugin/local_notyet/flow")
 }
 
+// TestCapabilities_NoLogging verifies that the server advertises tools, prompts and resources but
+// not the deprecated logging capability, since it sends no log notifications.
+func TestCapabilities_NoLogging(t *testing.T) {
+	withIsolatedHome(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, _ := connectSubscriber(t, ctx, NewServer())
+
+	caps := session.InitializeResult().Capabilities
+	if logging := caps.Logging; logging != nil { //nolint:staticcheck // checks that the deprecated capability is absent
+		t.Errorf("logging capability advertised: %+v", logging)
+	}
+	if caps.Tools == nil || caps.Prompts == nil || caps.Resources == nil {
+		t.Errorf("expected tools, prompts and resources, got %+v", caps)
+	}
+}
+
 // TestSubscribe_RefusesUnknownURIs verifies the subscription handler: every URI the server serves
 // is accepted, including a plugin whose files are not generated yet, and anything else is refused.
 // (A client on the newer protocol subscribes through subscriptions/listen, which does not return
