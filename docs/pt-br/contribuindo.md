@@ -103,7 +103,7 @@ semanalmente as actions fixadas por SHA e os módulos Go). Revise-as antes de ca
 | golangci-lint | v2.15.0 | `GOLANGCI_LINT_VERSION` no `checks.yml` |
 | govulncheck | v1.9.0 | `GOVULNCHECK_VERSION` no `checks.yml` |
 | actionlint | v1.7.12 | `ACTIONLINT_VERSION` no `checks.yml` |
-| mcp-publisher | v1.8.1 (+ SHA-256 do tarball) | [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml) |
+| mcp-publisher | v1.8.4 (+ SHA-256 do tarball) | [`.github/actions/install-mcp-publisher`](../../.github/actions/install-mcp-publisher/action.yml) |
 | `@anthropic-ai/mcpb` | 2.1.2 | `MCPB_VERSION` em [`.github/actions/validate-release`](../../.github/actions/validate-release/action.yml) |
 | cosign | v3.1.4 | `cosign-release` no `release.yml` |
 

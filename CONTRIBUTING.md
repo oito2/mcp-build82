@@ -100,7 +100,7 @@ SHA-pinned actions and the Go modules weekly). Review them before each release:
 | golangci-lint | v2.15.0 | `GOLANGCI_LINT_VERSION` in `checks.yml` |
 | govulncheck | v1.9.0 | `GOVULNCHECK_VERSION` in `checks.yml` |
 | actionlint | v1.7.12 | `ACTIONLINT_VERSION` in `checks.yml` |
-| mcp-publisher | v1.8.1 (+ tarball SHA-256) | [`.github/actions/install-mcp-publisher`](.github/actions/install-mcp-publisher/action.yml) |
+| mcp-publisher | v1.8.4 (+ tarball SHA-256) | [`.github/actions/install-mcp-publisher`](.github/actions/install-mcp-publisher/action.yml) |
 | `@anthropic-ai/mcpb` | 2.1.2 | `MCPB_VERSION` in [`.github/actions/validate-release`](.github/actions/validate-release/action.yml) |
 | cosign | v3.1.4 | `cosign-release` in `release.yml` |
 
