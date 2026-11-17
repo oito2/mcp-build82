@@ -142,17 +142,28 @@ func TestGenerateCtags_SkipsGracefullyWithoutCtags(t *testing.T) {
 	}
 }
 
-// TestGenerateCtags_PassesDoubleDashBeforeMoodlePath verifies ctags is invoked with "--"
-// immediately before the Moodle path. It uses a fake "ctags" binary that records its arguments,
-// since the real one may not be installed.
-func TestGenerateCtags_PassesDoubleDashBeforeMoodlePath(t *testing.T) {
+// TestGenerateCtags_PassesAbsoluteMoodlePathWithoutDoubleDash verifies ctags receives the Moodle
+// tree as its last argument, resolved to an absolute path (so a relative path starting with "-"
+// cannot be read as a flag), and receives no "--" argument, which Universal Ctags 5.9 rejects. It
+// uses a fake "ctags" binary that records its arguments and fails on "--", since the real one may
+// not be installed.
+func TestGenerateCtags_PassesAbsoluteMoodlePathWithoutDoubleDash(t *testing.T) {
 	binDir := t.TempDir()
 	argvFile := filepath.Join(binDir, "argv.txt")
 	buildFakeCtags(t, binDir, argvFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	moodlePath := t.TempDir()
-	result := GenerateCtags(moodlePath)
+	parent := t.TempDir()
+	if err := os.Mkdir(filepath.Join(parent, "-moodle"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(parent)
+	absPath, err := filepath.Abs("-moodle")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := GenerateCtags("-moodle")
 	if !result.Success {
 		t.Fatalf("expected success, got: %+v", result)
 	}
@@ -162,8 +173,11 @@ func TestGenerateCtags_PassesDoubleDashBeforeMoodlePath(t *testing.T) {
 		t.Fatalf("fake ctags did not record its arguments: %v", err)
 	}
 	args := strings.Split(strings.TrimSpace(string(recorded)), "\n")
-	if len(args) < 2 || args[len(args)-1] != moodlePath || args[len(args)-2] != "--" {
-		t.Fatalf(`expected "--" immediately before moodlePath in ctags' arguments, got: %v`, args)
+	if slices.Contains(args, "--") {
+		t.Errorf(`ctags must not receive a "--" argument, got: %v`, args)
+	}
+	if len(args) == 0 || args[len(args)-1] != absPath {
+		t.Errorf("expected the absolute Moodle path %q as the last ctags argument, got: %v", absPath, args)
 	}
 }
 
@@ -215,7 +229,9 @@ func main() {
 }
 
 // buildFakeCtags compiles a small "ctags" executable into `dir` that identifies itself as Universal
-// Ctags for --version and otherwise writes its arguments, one per line, to `argvFile`. A real subprocess exercises the actual argument passing of exec.Command.
+// Ctags for --version and otherwise writes its arguments, one per line, to `argvFile`. Like
+// Universal Ctags 5.9, it exits 1 with "Unknown option: --" when given a "--" argument. A real
+// subprocess exercises the actual argument passing of exec.Command.
 func buildFakeCtags(t *testing.T, dir, argvFile string) {
 	t.Helper()
 	srcDir := t.TempDir()
@@ -239,8 +255,14 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-	defer f.Close()
 	f.WriteString(strings.Join(os.Args[1:], "\n"))
+	f.Close()
+	for _, a := range os.Args[1:] {
+		if a == "--" {
+			os.Stderr.WriteString("ctags: Unknown option: --\n")
+			os.Exit(1)
+		}
+	}
 }
 `, argvFile)
 	srcFile := filepath.Join(srcDir, "main.go")

@@ -7,6 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The `tags` file is generated again with Universal Ctags 5.9 (the version packaged by Ubuntu
+  22.04/24.04 and Debian 12), which rejected the `--` argument build82 passed before the Moodle
+  path, so every run failed with `exit status 1`. The Moodle path is now passed as an absolute path,
+  without `--`.
+
 ## [1.3.0] - 2026-11-05
 
 ### Changed

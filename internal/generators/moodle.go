@@ -680,12 +680,16 @@ func GenerateCtags(moodlePath string) GeneratorResult {
 	tmpName := tmp.Name()
 	_ = tmp.Close()
 	defer os.Remove(tmpName) // no-op once the rename below succeeds
-	// "--" stops a `moodlePath` starting with "-" from being parsed as a ctags flag; no shell is
-	// involved, so this only guards the argument boundary.
+	// The tree is passed as an absolute path, which never starts with "-", so ctags cannot parse
+	// it as a flag. Universal Ctags 5.9 rejects a "--" argument, so none is passed.
+	absPath, err := filepath.Abs(moodlePath)
+	if err != nil {
+		return GeneratorResult{File: output, Error: err.Error()}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), ctagsTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ctags", "-R", "--links=no", "--tag-relative=yes", "--languages=PHP",
-		"--exclude=vendor", "--exclude=node_modules", "--exclude="+ContextDir, "-f", tmpName, "--", moodlePath)
+		"--exclude=vendor", "--exclude=node_modules", "--exclude="+ContextDir, "-f", tmpName, absPath)
 	cmd.WaitDelay = time.Second
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
