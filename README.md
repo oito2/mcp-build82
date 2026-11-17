@@ -1,7 +1,11 @@
 # build82
 
 <p align="center">
-  <img src="docs/img/github-header.png" alt="build82 by OITO2 Labs — The MCP for Moodle Developers" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/github-header-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/img/github-header-light.svg">
+    <img src="docs/img/github-header.png" alt="build82 by OITO2 Labs — The MCP for Moodle developers: structural context for AI" width="100%">
+  </picture>
 </p>
 
 [![CI](https://github.com/oito2/mcp-build82/actions/workflows/ci.yml/badge.svg)](https://github.com/oito2/mcp-build82/actions/workflows/ci.yml)

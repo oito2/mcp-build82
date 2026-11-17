@@ -141,12 +141,12 @@ func TestServer_ReportsIconInServerInfo(t *testing.T) {
 	}
 
 	// The embedded icon must be byte-identical to the published icon asset.
-	asset, err := os.ReadFile(filepath.Join("..", "..", "docs", "img", "icons", "icon-build82-cropped-64.png"))
+	asset, err := os.ReadFile(filepath.Join("..", "..", "docs", "img", "icons", "icon-build82-64.png"))
 	if err != nil {
 		t.Fatalf("reading icon asset: %v", err)
 	}
 	if !bytes.Equal(raw, asset) {
-		t.Error("internal/server/icon.png differs from docs/img/icons/icon-build82-cropped-64.png")
+		t.Error("internal/server/icon.png differs from docs/img/icons/icon-build82-64.png")
 	}
 }
 

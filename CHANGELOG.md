@@ -7,6 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- New visual identity: new server icon (reported in `serverInfo`, used by the `.mcpb` bundle and
+  the MCP Registry entry) and new README header, shown in a light or dark version that follows the
+  GitHub theme. The icon embedded in the server is now the full 64×64 icon instead of the cropped
+  one.
+
 ### Fixed
 
 - The `tags` file is generated again with Universal Ctags 5.9 (the version packaged by Ubuntu
