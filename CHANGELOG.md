@@ -7,12 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-24
+
 ### Changed
 
 - New visual identity: new server icon (reported in `serverInfo`, used by the `.mcpb` bundle and
   the MCP Registry entry) and new README header, shown in a light or dark version that follows the
   GitHub theme. The icon embedded in the server is now the full 64×64 icon instead of the cropped
   one.
+- gotreesitter 0.57.0 for the optional tree-sitter backend; its results are unchanged on the
+  real Moodle installations used for the parity tests.
 
 ### Fixed
 
@@ -487,7 +491,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release artifacts: 5 binaries, the `build82.mcpb` Claude Desktop extension, `checksums.txt`, and
   the MCP Registry entry `io.github.oito2/mcp-build82`.
 
-[Unreleased]: https://github.com/oito2/mcp-build82/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/oito2/mcp-build82/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/oito2/mcp-build82/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/oito2/mcp-build82/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/oito2/mcp-build82/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/oito2/mcp-build82/compare/v1.0.1...v1.1.0
