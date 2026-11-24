@@ -185,6 +185,10 @@ Abra uma [issue no GitHub](https://github.com/oito2/mcp-build82/issues) com:
 - Para funcionalidades: o problema que você está tentando resolver, não só a solução que você tem
   em mente — veja [Antes de começar](#antes-de-começar).
 
+Reporte vulnerabilidades de segurança de forma privada, nunca numa issue pública: use **Report a
+vulnerability** na [aba Security](https://github.com/oito2/mcp-build82/security/advisories/new) do
+repositório.
+
 ## Gerando uma release
 
 As releases são compiladas com um pequeno programa Go dentro do próprio repositório em vez de uma

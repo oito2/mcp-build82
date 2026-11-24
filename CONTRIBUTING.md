@@ -177,6 +177,9 @@ Open a [GitHub issue](https://github.com/oito2/mcp-build82/issues) with:
 - For features: the problem you're trying to solve, not just the solution you have in mind — see
   [Before you start](#before-you-start).
 
+Report security vulnerabilities privately, never in a public issue: use **Report a vulnerability**
+in the repository's [Security tab](https://github.com/oito2/mcp-build82/security/advisories/new).
+
 ## Cutting a release
 
 Releases are built with a small in-repo Go program rather than a third-party release tool, to
