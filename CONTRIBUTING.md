@@ -165,7 +165,8 @@ asked to add the other.
 - A maintainer will review, request changes if needed, and merge once CI is green and the
   discussion is resolved.
 - [Dependabot](.github/dependabot.yml) opens weekly pull requests that update the GitHub Actions
-  used by the workflows; they go through the same CI checks.
+  used by the workflows and the Go modules; it only proposes a version 14 days after its release
+  (security updates are not delayed), and they go through the same CI checks.
 
 ## Reporting bugs and requesting features
 
