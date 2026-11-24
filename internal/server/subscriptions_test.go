@@ -56,16 +56,31 @@ func subscribeAll(t *testing.T, session *mcp.ClientSession, uris ...string) {
 	}
 }
 
-// collectUpdates returns the set of URIs received on `ch` until no notification arrives for
-// `quiet`.
-func collectUpdates(ch <-chan string, quiet time.Duration) map[string]bool {
+// barrierURI is a resource URI the server accepts for subscription but never announces by
+// itself; collectUpdates sends it as the end marker of a batch of notifications.
+const barrierURI = "moodle://plugin/local_barrier"
+
+// collectUpdates announces barrierURI through `s`, then returns the set of URIs received on `ch`
+// before it, failing the test when it does not arrive in time. The session behind `ch` must be
+// subscribed to barrierURI. The client handles notifications one at a time in the order they
+// were sent, so every notification sent before the call (including those still queued after the
+// tool call that triggered them returned) is collected, and none of them is left for a later call.
+func collectUpdates(t *testing.T, s *mcp.Server, ch <-chan string) map[string]bool {
+	t.Helper()
+	if err := s.ResourceUpdated(context.Background(), &mcp.ResourceUpdatedNotificationParams{URI: barrierURI}); err != nil {
+		t.Fatalf("announce %s: %v", barrierURI, err)
+	}
 	got := map[string]bool{}
+	timeout := time.After(10 * time.Second)
 	for {
 		select {
 		case uri := <-ch:
+			if uri == barrierURI {
+				return got
+			}
 			got[uri] = true
-		case <-time.After(quiet):
-			return got
+		case <-timeout:
+			t.Fatalf("no %s notification within 10s; got %v", barrierURI, got)
 		}
 	}
 }
@@ -132,13 +147,14 @@ func TestSubscriptions_ToolsNotifySubscribedResources(t *testing.T) {
 	root := copyFixtureMoodleTree(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	session, updates := connectSubscriber(t, ctx, NewServer())
+	s := NewServer()
+	session, updates := connectSubscriber(t, ctx, s)
 
-	subscribeAll(t, session, "moodle://context", "moodle://plugin-index")
+	subscribeAll(t, session, barrierURI, "moodle://context", "moodle://plugin-index")
 	if res := callTool(t, session, "init_moodle_context", map[string]any{"moodle_path": root}); res.IsError {
 		t.Fatalf("init: %s", toolText(t, res))
 	}
-	if got := collectUpdates(updates, 300*time.Millisecond); !got["moodle://context"] || !got["moodle://plugin-index"] || len(got) != 2 {
+	if got := collectUpdates(t, s, updates); !got["moodle://context"] || !got["moodle://plugin-index"] || len(got) != 2 {
 		t.Errorf("init: expected exactly the 2 subscribed global resources, got %v", got)
 	}
 
@@ -146,7 +162,7 @@ func TestSubscriptions_ToolsNotifySubscribedResources(t *testing.T) {
 	if res := callTool(t, session, "generate_plugin_context", map[string]any{"plugin_path": "local_demo"}); res.IsError {
 		t.Fatalf("generate: %s", toolText(t, res))
 	}
-	got := collectUpdates(updates, 300*time.Millisecond)
+	got := collectUpdates(t, s, updates)
 	for _, uri := range []string{"moodle://plugin/local_demo", "moodle://plugin/local_demo/context", "moodle://index"} {
 		if !got[uri] {
 			t.Errorf("generate: expected an update for %s, got %v", uri, got)
@@ -160,14 +176,14 @@ func TestSubscriptions_ToolsNotifySubscribedResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	callTool(t, session, "generate_plugin_context", map[string]any{"plugin_path": "local_demo"})
-	if got := collectUpdates(updates, 300*time.Millisecond); got["moodle://plugin/local_demo/context"] || !got["moodle://plugin/local_demo"] {
+	if got := collectUpdates(t, s, updates); got["moodle://plugin/local_demo/context"] || !got["moodle://plugin/local_demo"] {
 		t.Errorf("after unsubscribe: expected only the still-subscribed resources, got %v", got)
 	}
 
 	if res := callTool(t, session, "generate_plugin_context", map[string]any{"plugin_path": "local_nosuchplugin"}); !res.IsError {
 		t.Fatal("expected an error for an unknown plugin")
 	}
-	if got := collectUpdates(updates, 300*time.Millisecond); len(got) != 0 {
+	if got := collectUpdates(t, s, updates); len(got) != 0 {
 		t.Errorf("a failed call must announce nothing, got %v", got)
 	}
 }
