@@ -25,6 +25,7 @@ coverage.html
 
 # Local tooling: personal agent settings, AI agent rules and AI exclusion lists
 /.claude/
+/.codex/
 /.luminavault.json
 /AGENTS.md
 /CLAUDE.md

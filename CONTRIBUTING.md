@@ -258,9 +258,12 @@ Release assets are named `build82_<os>_<arch>` (`.exe` on Windows), plus `build8
      signing certificate names the workflow file the job runs in.
    - `publish-registry`: publishes the `server.json` of the same workflow artifact (see below).
 
-   Two repository settings complete the gate and are not in the workflows: protection rules for the
-   `release` environment (required reviewers, deployments from `v*` tags only), and a tag ruleset
-   restricting who may create `v*` tags.
+   Repository settings complete the gate and are not in the workflows: protection rules for the
+   `release` environment (required reviewers that administrators cannot bypass, deployments from
+   `v*` tags only); a tag ruleset under which only administrators create, move or delete `v*`
+   tags; and immutable releases, which lock a published release's assets and its tag. A run that
+   fails before `sign-publish` publishes anything is fixed by moving the tag to a new commit; once
+   the release is published, a bad release is fixed with a new patch version.
 6. Check the release: `gh release view vX.Y.Z`, the MCP Registry search below, then download the
    assets and run `sha256sum -c --ignore-missing checksums.txt`,
    `gh attestation verify build82_linux_amd64 --repo oito2/mcp-build82` and

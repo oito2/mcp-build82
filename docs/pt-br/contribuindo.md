@@ -270,9 +270,12 @@ Os assets da release se chamam `build82_<os>_<arch>` (`.exe` no Windows), mais o
      de assinatura nomeia o arquivo de workflow em que o job roda.
    - `publish-registry`: publica o `server.json` do mesmo artefato do workflow (veja abaixo).
 
-   Duas configurações do repositório completam a barreira e não estão nos workflows: regras de
-   proteção do environment `release` (revisores obrigatórios, deploys apenas de tags `v*`) e um
-   ruleset de tags restringindo quem pode criar tags `v*`.
+   Configurações do repositório completam a barreira e não estão nos workflows: regras de proteção
+   do environment `release` (revisores obrigatórios que administradores não podem ignorar, deploys
+   apenas de tags `v*`); um ruleset de tags em que só administradores criam, movem ou apagam tags
+   `v*`; e releases imutáveis, que travam os assets e a tag de uma release publicada. Uma execução
+   que falha antes de o `sign-publish` publicar algo é corrigida movendo a tag para um novo commit;
+   depois que a release é publicada, uma release com problema é corrigida com uma nova versão patch.
 6. Confira a release: `gh release view vX.Y.Z`, a busca no MCP Registry abaixo e, com os assets
    baixados, `sha256sum -c --ignore-missing checksums.txt`,
    `gh attestation verify build82_linux_amd64 --repo oito2/mcp-build82` e
